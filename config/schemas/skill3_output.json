@@ -1,0 +1,72 @@
+{
+  "title": "Skill3Output",
+  "description": "Skill-3 交易计划输出",
+  "type": "object",
+  "properties": {
+    "state_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "本次输出的状态 ID"
+    },
+    "trade_plans": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "pattern": "^[A-Z]{2,10}USDT$"
+          },
+          "direction": {
+            "type": "string",
+            "enum": ["long", "short"],
+            "description": "交易方向"
+          },
+          "entry_price_upper": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "入场价格区间上限"
+          },
+          "entry_price_lower": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "入场价格区间下限"
+          },
+          "position_size_pct": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 20,
+            "description": "头寸规模百分比"
+          },
+          "stop_loss_price": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "止损价格"
+          },
+          "take_profit_price": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "止盈价格"
+          },
+          "max_hold_hours": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "持仓时间上限（小时）"
+          }
+        },
+        "required": [
+          "symbol", "direction", "entry_price_upper", "entry_price_lower",
+          "position_size_pct", "stop_loss_price", "take_profit_price", "max_hold_hours"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "pipeline_status": {
+      "type": "string",
+      "enum": ["has_trades", "no_opportunity"],
+      "description": "本轮是否有交易机会"
+    }
+  },
+  "required": ["state_id", "trade_plans", "pipeline_status"],
+  "additionalProperties": false
+}

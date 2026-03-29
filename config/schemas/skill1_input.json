@@ -1,0 +1,21 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Skill1Input",
+  "description": "Skill-1 信息收集触发输入",
+  "type": "object",
+  "properties": {
+    "trigger_time": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Pipeline 触发时间（ISO 8601）"
+    },
+    "search_keywords": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1,
+      "description": "搜索关键词列表"
+    }
+  },
+  "required": ["trigger_time", "search_keywords"],
+  "additionalProperties": false
+}

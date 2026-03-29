@@ -1,0 +1,53 @@
+{
+  "title": "Skill1Output",
+  "description": "Skill-1 output",
+  "type": "object",
+  "properties": {
+    "state_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "candidates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "pattern": "^[A-Z]{2,10}USDT$"
+          },
+          "heat_score": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "source_url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "collected_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "symbol",
+          "heat_score",
+          "source_url",
+          "collected_at"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "pipeline_run_id": {
+      "type": "string",
+      "format": "uuid"
+    }
+  },
+  "required": [
+    "state_id",
+    "candidates",
+    "pipeline_run_id"
+  ],
+  "additionalProperties": false
+}

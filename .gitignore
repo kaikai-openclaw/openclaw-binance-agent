@@ -20,3 +20,15 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Hypothesis test cache
+.hypothesis/
+
+# Virtual environment
+.venv/
+
+# SQLite databases (runtime generated)
+data/*.db
+
+# pytest cache
+.pytest_cache/

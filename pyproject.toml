@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "openclaw-binance-agent"
+version = "0.1.0"
+description = "基于 OpenClaw 框架的加密货币自动化交易 Agent"
+requires-python = ">=3.11"
+dependencies = [
+    "jsonschema[format]>=4.20.0",
+    "requests>=2.31.0",
+    "websocket-client>=1.7.0",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "hypothesis>=6.92.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

@@ -1,0 +1,225 @@
+"""
+Risk_Controller 风控拦截层模块
+
+作为独立拦截层运行，所有交易指令在到达 Binance_Fapi_Client 之前
+必须通过其校验。硬编码四大风控常量，不可配置。
+
+功能：
+- validate_order(): 单笔保证金、单币持仓、止损冷却期校验
+- check_daily_loss(): 日亏损 ≥ 5% 检测
+- execute_degradation(): 取消挂单、停止实盘、告警、切换 Paper Mode
+- is_paper_mode(): 查询当前模式
+- record_stop_loss(): 记录止损事件，启动冷却期
+"""
+
+import logging
+from datetime import datetime, timedelta
+
+from src.models.types import (
+    AccountState,
+    OrderRequest,
+    ValidationResult,
+)
+
+log = logging.getLogger(__name__)
+
+
+class RiskController:
+    """
+    风控拦截层。
+
+    所有交易指令在到达 Binance_Fapi_Client 之前必须通过此层校验。
+    四大风控常量为硬编码，不可通过配置修改。
+    """
+
+    # 硬编码常量（不可配置）
+    MAX_SINGLE_MARGIN_RATIO = 0.20    # 单笔保证金 <= 总资金 20%
+    MAX_SINGLE_COIN_RATIO = 0.30      # 单币累计持仓 <= 总资金 30%
+    DAILY_LOSS_THRESHOLD = 0.05       # 日亏损阈值 5%
+    STOP_LOSS_COOLDOWN_HOURS = 24     # 止损后同方向冷却期（小时）
+
+    def __init__(self) -> None:
+        # 模拟盘模式标志
+        self._paper_mode: bool = False
+        # 止损冷却记录：列表，每项为 (symbol, direction, timestamp)
+        self._stop_loss_records: list[tuple[str, str, datetime]] = []
+
+    def validate_order(
+        self, order: OrderRequest, account: AccountState
+    ) -> ValidationResult:
+        """
+        对单笔订单执行全部风控断言校验。
+
+        校验项：
+        1. 单笔保证金 <= 总资金 × 20%
+        2. 单币累计持仓 <= 总资金 × 30%
+        3. 止损冷却期内禁止同方向开仓
+
+        任一断言失败即拒绝订单。
+        """
+        total_balance = account.total_balance
+
+        # 断言 1：单笔保证金 <= 总资金 20%
+        single_margin = order.quantity * order.price / order.leverage
+        margin_limit = total_balance * self.MAX_SINGLE_MARGIN_RATIO
+        if single_margin > margin_limit:
+            reason = (
+                f"单笔保证金 {single_margin:.2f} 超过限额 {margin_limit:.2f}"
+                f"（总资金 {total_balance:.2f} × {self.MAX_SINGLE_MARGIN_RATIO:.0%}）"
+            )
+            log.warning(f"风控拒绝: {reason}")
+            return ValidationResult(passed=False, reason=reason)
+
+        # 断言 2：单币累计持仓 <= 总资金 30%
+        existing_value = self._get_position_value(order.symbol, account)
+        new_order_value = order.quantity * order.price
+        new_total = existing_value + new_order_value
+        coin_limit = total_balance * self.MAX_SINGLE_COIN_RATIO
+        if new_total > coin_limit:
+            reason = (
+                f"单币累计持仓 {new_total:.2f} 超过限额 {coin_limit:.2f}"
+                f"（总资金 {total_balance:.2f} × {self.MAX_SINGLE_COIN_RATIO:.0%}）"
+            )
+            log.warning(f"风控拒绝: {reason}")
+            return ValidationResult(passed=False, reason=reason)
+
+        # 断言 3：止损冷却期检查
+        direction_str = (
+            order.direction.value
+            if hasattr(order.direction, "value")
+            else str(order.direction)
+        )
+        if self._is_in_cooldown(order.symbol, direction_str):
+            reason = (
+                f"{order.symbol} {direction_str} 处于止损冷却期"
+                f"（{self.STOP_LOSS_COOLDOWN_HOURS} 小时内禁止同方向开仓）"
+            )
+            log.warning(f"风控拒绝: {reason}")
+            return ValidationResult(passed=False, reason=reason)
+
+        return ValidationResult(passed=True)
+
+    def check_daily_loss(self, account: AccountState) -> bool:
+        """
+        检查当日累计已实现亏损是否触及 5% 阈值。
+
+        返回 True 表示需要降级（亏损已达阈值）。
+        """
+        if account.total_balance <= 0:
+            return False
+
+        daily_pnl = account.daily_realized_pnl
+        # 仅在亏损时检查（daily_pnl 为负数）
+        if daily_pnl >= 0:
+            return False
+
+        loss_ratio = abs(daily_pnl) / account.total_balance
+        return loss_ratio >= self.DAILY_LOSS_THRESHOLD
+
+    def execute_degradation(
+        self, account: AccountState, binance_client=None
+    ) -> None:
+        """
+        执行降级流程：
+        1. 取消所有未成交挂单
+        2. 停止实盘下单
+        3. 发出告警通知
+        4. 切换至 Paper_Trading_Mode
+        """
+        loss_ratio = (
+            abs(account.daily_realized_pnl) / account.total_balance
+            if account.total_balance > 0
+            else 0
+        )
+
+        # 步骤 1：取消所有未成交挂单
+        if binance_client is not None:
+            try:
+                cancelled = binance_client.cancel_all_orders()
+                log.info(f"降级流程: 已取消 {cancelled} 笔挂单")
+            except Exception as e:
+                log.error(f"降级流程: 取消挂单失败 - {e}")
+
+        # 步骤 2：停止实盘下单（切换 paper mode 即可阻止实盘）
+        # 步骤 3：发出告警通知
+        log.critical(
+            f"风控降级触发: 日亏损达 {loss_ratio:.2%}，"
+            f"已触及 {self.DAILY_LOSS_THRESHOLD:.0%} 阈值，"
+            f"系统降级至模拟盘"
+        )
+
+        # 步骤 4：切换至 Paper_Trading_Mode
+        self._paper_mode = True
+
+        log.warning(
+            f"风控降级完成: 日亏损 {loss_ratio:.2%}，当前模式=Paper_Trading"
+        )
+
+    def is_paper_mode(self) -> bool:
+        """返回当前是否处于模拟盘模式。"""
+        return self._paper_mode
+
+    def record_stop_loss(self, symbol: str, direction: str) -> None:
+        """
+        记录某币种某方向的止损事件，启动 24 小时冷却期。
+
+        参数:
+            symbol: 币种交易对符号，如 "BTCUSDT"
+            direction: 交易方向，"long" 或 "short"
+        """
+        now = datetime.now()
+        self._stop_loss_records.append((symbol, direction, now))
+        log.info(
+            f"止损记录: {symbol} {direction} 于 {now.isoformat()}，"
+            f"冷却期 {self.STOP_LOSS_COOLDOWN_HOURS} 小时"
+        )
+
+    # ----------------------------------------------------------------
+    # 内部辅助方法
+    # ----------------------------------------------------------------
+
+    def _get_position_value(
+        self, symbol: str, account: AccountState
+    ) -> float:
+        """
+        获取指定币种的现有持仓价值。
+
+        从 account.positions 中查找匹配 symbol 的持仓，
+        累加其持仓价值（quantity × entry_price 或 quantity × current_price）。
+        支持 dict 和具有属性的对象两种格式。
+        """
+        total_value = 0.0
+        for pos in account.positions:
+            # 兼容 dict 和 dataclass/对象
+            if isinstance(pos, dict):
+                pos_symbol = pos.get("symbol", "")
+                quantity = pos.get("quantity", 0)
+                price = pos.get("entry_price", 0) or pos.get("current_price", 0)
+            else:
+                pos_symbol = getattr(pos, "symbol", "")
+                quantity = getattr(pos, "quantity", 0)
+                price = getattr(pos, "entry_price", 0) or getattr(
+                    pos, "current_price", 0
+                )
+
+            if pos_symbol == symbol:
+                total_value += abs(quantity) * price
+
+        return total_value
+
+    def _is_in_cooldown(self, symbol: str, direction: str) -> bool:
+        """
+        检查指定币种和方向是否处于止损冷却期内。
+
+        遍历止损记录，若存在同 symbol 同 direction 且
+        记录时间距今不超过 STOP_LOSS_COOLDOWN_HOURS 小时，则返回 True。
+        """
+        now = datetime.now()
+        cooldown_delta = timedelta(hours=self.STOP_LOSS_COOLDOWN_HOURS)
+
+        for rec_symbol, rec_direction, rec_time in self._stop_loss_records:
+            if rec_symbol == symbol and rec_direction == direction:
+                if now - rec_time < cooldown_delta:
+                    return True
+
+        return False

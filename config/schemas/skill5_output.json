@@ -1,0 +1,50 @@
+{
+  "title": "Skill5Output",
+  "description": "Skill-5 展示与进化输出",
+  "type": "object",
+  "properties": {
+    "state_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "account_summary": {
+      "type": "object",
+      "properties": {
+        "total_balance": { "type": "number", "minimum": 0 },
+        "available_margin": { "type": "number", "minimum": 0 },
+        "unrealized_pnl": { "type": "number" },
+        "daily_realized_pnl": { "type": "number" },
+        "is_paper_mode": { "type": "boolean" }
+      },
+      "required": ["total_balance", "available_margin", "unrealized_pnl", "daily_realized_pnl", "is_paper_mode"]
+    },
+    "positions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "symbol": { "type": "string" },
+          "direction": { "type": "string", "enum": ["long", "short"] },
+          "quantity": { "type": "number", "exclusiveMinimum": 0 },
+          "entry_price": { "type": "number", "exclusiveMinimum": 0 },
+          "current_price": { "type": "number", "exclusiveMinimum": 0 },
+          "pnl_ratio": { "type": "number", "description": "盈亏比例（百分比）" }
+        },
+        "required": ["symbol", "direction", "quantity", "entry_price", "current_price", "pnl_ratio"]
+      }
+    },
+    "evolution": {
+      "type": "object",
+      "properties": {
+        "win_rate": { "type": "number", "minimum": 0, "maximum": 100 },
+        "avg_pnl_ratio": { "type": "number" },
+        "trade_count": { "type": "integer", "minimum": 0 },
+        "adjustment_applied": { "type": "boolean" },
+        "adjustment_detail": { "type": "string" }
+      },
+      "required": ["win_rate", "avg_pnl_ratio", "trade_count", "adjustment_applied"]
+    }
+  },
+  "required": ["state_id", "account_summary", "positions", "evolution"],
+  "additionalProperties": false
+}

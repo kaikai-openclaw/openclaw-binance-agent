@@ -1,0 +1,67 @@
+{
+  "title": "Skill4Output",
+  "description": "Skill-4 交易执行结果输出",
+  "type": "object",
+  "properties": {
+    "state_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "本次输出的状态 ID"
+    },
+    "execution_results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "order_id": {
+            "type": "string",
+            "description": "Binance 订单 ID"
+          },
+          "symbol": {
+            "type": "string",
+            "pattern": "^[A-Z]{2,10}USDT$"
+          },
+          "direction": {
+            "type": "string",
+            "enum": ["long", "short"]
+          },
+          "executed_price": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "成交价格"
+          },
+          "executed_quantity": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "成交数量"
+          },
+          "fee": {
+            "type": "number",
+            "minimum": 0,
+            "description": "手续费"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["filled", "rejected_by_risk", "execution_failed", "paper_trade"],
+            "description": "订单状态"
+          },
+          "executed_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "成交时间戳"
+          }
+        },
+        "required": [
+          "order_id", "symbol", "direction", "status", "executed_at"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "is_paper_mode": {
+      "type": "boolean",
+      "description": "当前是否处于模拟盘模式"
+    }
+  },
+  "required": ["state_id", "execution_results", "is_paper_mode"],
+  "additionalProperties": false
+}

@@ -1,0 +1,15 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Skill2Input",
+  "description": "Skill-2 深度分析输入（状态 ID 引用）",
+  "type": "object",
+  "properties": {
+    "input_state_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Skill-1 输出的状态 ID"
+    }
+  },
+  "required": ["input_state_id"],
+  "additionalProperties": false
+}

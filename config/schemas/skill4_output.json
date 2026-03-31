@@ -19,7 +19,7 @@
           },
           "symbol": {
             "type": "string",
-            "pattern": "^[A-Z]{2,10}USDT$"
+            "pattern": "^[A-Z0-9]{1,20}USDT$"
           },
           "direction": {
             "type": "string",
@@ -49,6 +49,35 @@
             "type": "string",
             "format": "date-time",
             "description": "成交时间戳"
+          },
+          "reason": {
+            "type": "string",
+            "description": "状态说明（失败原因或平仓原因）"
+          },
+          "entry_price": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "入场价格"
+          },
+          "exit_price": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "平仓价格"
+          },
+          "pnl_amount": {
+            "type": "number",
+            "description": "盈亏金额"
+          },
+          "hold_duration_hours": {
+            "type": "number",
+            "minimum": 0,
+            "description": "持仓时长（小时）"
+          },
+          "position_size_pct": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 20,
+            "description": "头寸规模百分比"
           }
         },
         "required": [

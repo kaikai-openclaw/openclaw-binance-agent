@@ -7,6 +7,7 @@ Binance_Fapi_Client 合约客户端模块
 import hashlib
 import hmac
 import logging
+import os
 import threading
 import time
 from urllib.parse import urlencode
@@ -51,7 +52,7 @@ def calculate_backoff(attempt: int) -> int:
 # ============================================================
 
 class OrderResult:
-    """下单结果。"""
+    """下单结果（普通订单 + Algo 条件单通用）。"""
     def __init__(self, order_id: str, symbol: str, side: str, price: float,
                  quantity: float, status: str, raw: dict | None = None):
         self.order_id = order_id
@@ -125,6 +126,7 @@ class BinanceFapiClient:
         api_secret: str,
         base_url: str = "https://fapi.binance.com",
         rate_limiter: RateLimiter | None = None,
+        proxy: str | None = None,
     ) -> None:
         self.api_key = api_key
         self.api_secret = api_secret
@@ -134,6 +136,15 @@ class BinanceFapiClient:
         self._session.headers.update({
             "X-MBX-APIKEY": self.api_key,
         })
+        # 代理配置：支持 HTTP/SOCKS5 代理
+        # 优先使用传入参数，其次读取环境变量 HTTPS_PROXY
+        _proxy = proxy or os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
+        if _proxy:
+            self._session.proxies = {
+                "http": _proxy,
+                "https": _proxy,
+            }
+            log.info(f"Binance API 代理已配置: {_proxy}")
         # 网络故障标记：用于检测网络恢复后触发自动同步（线程安全）
         self._network_lock = threading.Lock()
         self._network_was_down: bool = False
@@ -298,6 +309,179 @@ class BinanceFapiClient:
             raw=data,
         )
 
+    def place_stop_market_order(self, symbol: str, side: str,
+                                quantity: float, stop_price: float,
+                                close_position: bool = False) -> OrderResult:
+        """
+        提交止损市价单（STOP_MARKET）。触及 stop_price 后以市价成交。
+
+        注意：自 2025-12-09 起，条件单已迁移至 Algo Service，
+        使用 POST /fapi/v1/algoOrder 端点。
+
+        参数:
+            symbol: 交易对符号（如 "BTCUSDT"）
+            side: 买卖方向（"BUY" 或 "SELL"）
+            quantity: 下单数量（close_position=True 时忽略）
+            stop_price: 触发价格
+            close_position: 是否全部平仓（True 时忽略 quantity）
+        """
+        params: dict = {
+            "algoType": "CONDITIONAL",
+            "symbol": symbol,
+            "side": side,
+            "type": "STOP_MARKET",
+            "triggerPrice": str(stop_price),
+        }
+        if close_position:
+            params["closePosition"] = "true"
+        else:
+            params["quantity"] = str(quantity)
+        data = self._request_with_retry("POST", "/fapi/v1/algoOrder", params)
+        return OrderResult(
+            order_id=str(data.get("algoId", "")),
+            symbol=data.get("symbol", symbol),
+            side=data.get("side", side),
+            price=float(data.get("triggerPrice", stop_price)),
+            quantity=float(data.get("quantity", quantity)),
+            status=data.get("algoStatus", ""),
+            raw=data,
+        )
+
+    def place_take_profit_market_order(self, symbol: str, side: str,
+                                       quantity: float, stop_price: float,
+                                       close_position: bool = False) -> OrderResult:
+        """
+        提交止盈市价单（TAKE_PROFIT_MARKET）。触及 stop_price 后以市价成交。
+
+        注意：自 2025-12-09 起，条件单已迁移至 Algo Service，
+        使用 POST /fapi/v1/algoOrder 端点。
+
+        参数:
+            symbol: 交易对符号
+            side: 买卖方向
+            quantity: 下单数量（close_position=True 时忽略）
+            stop_price: 触发价格
+            close_position: 是否全部平仓
+        """
+        params: dict = {
+            "algoType": "CONDITIONAL",
+            "symbol": symbol,
+            "side": side,
+            "type": "TAKE_PROFIT_MARKET",
+            "triggerPrice": str(stop_price),
+        }
+        if close_position:
+            params["closePosition"] = "true"
+        else:
+            params["quantity"] = str(quantity)
+        data = self._request_with_retry("POST", "/fapi/v1/algoOrder", params)
+        return OrderResult(
+            order_id=str(data.get("algoId", "")),
+            symbol=data.get("symbol", symbol),
+            side=data.get("side", side),
+            price=float(data.get("triggerPrice", stop_price)),
+            quantity=float(data.get("quantity", quantity)),
+            status=data.get("algoStatus", ""),
+            raw=data,
+        )
+
+    def place_stop_limit_order(self, symbol: str, side: str,
+                               quantity: float, price: float,
+                               stop_price: float) -> OrderResult:
+        """
+        提交止损限价单（STOP）。触及 stop_price 后以 price 挂限价单。
+
+        注意：自 2025-12-09 起，条件单已迁移至 Algo Service，
+        使用 POST /fapi/v1/algoOrder 端点。
+
+        参数:
+            symbol: 交易对符号
+            side: 买卖方向
+            quantity: 下单数量
+            price: 限价价格（触发后的挂单价）
+            stop_price: 触发价格
+        """
+        params = {
+            "algoType": "CONDITIONAL",
+            "symbol": symbol,
+            "side": side,
+            "type": "STOP",
+            "timeInForce": "GTC",
+            "price": str(price),
+            "quantity": str(quantity),
+            "triggerPrice": str(stop_price),
+        }
+        data = self._request_with_retry("POST", "/fapi/v1/algoOrder", params)
+        return OrderResult(
+            order_id=str(data.get("algoId", "")),
+            symbol=data.get("symbol", symbol),
+            side=data.get("side", side),
+            price=float(data.get("price", price)),
+            quantity=float(data.get("quantity", quantity)),
+            status=data.get("algoStatus", ""),
+            raw=data,
+        )
+
+    def place_take_profit_limit_order(self, symbol: str, side: str,
+                                      quantity: float, price: float,
+                                      stop_price: float) -> OrderResult:
+        """
+        提交止盈限价单（TAKE_PROFIT）。触及 stop_price 后以 price 挂限价单。
+
+        注意：自 2025-12-09 起，条件单已迁移至 Algo Service，
+        使用 POST /fapi/v1/algoOrder 端点。
+
+        参数:
+            symbol: 交易对符号
+            side: 买卖方向
+            quantity: 下单数量
+            price: 限价价格
+            stop_price: 触发价格
+        """
+        params = {
+            "algoType": "CONDITIONAL",
+            "symbol": symbol,
+            "side": side,
+            "type": "TAKE_PROFIT",
+            "timeInForce": "GTC",
+            "price": str(price),
+            "quantity": str(quantity),
+            "triggerPrice": str(stop_price),
+        }
+        data = self._request_with_retry("POST", "/fapi/v1/algoOrder", params)
+        return OrderResult(
+            order_id=str(data.get("algoId", "")),
+            symbol=data.get("symbol", symbol),
+            side=data.get("side", side),
+            price=float(data.get("price", price)),
+            quantity=float(data.get("quantity", quantity)),
+            status=data.get("algoStatus", ""),
+            raw=data,
+        )
+
+    def place_oco_stop_take_profit(self, symbol: str, side: str,
+                                   quantity: float, stop_price: float,
+                                   take_profit_price: float) -> list[OrderResult]:
+        """
+        一次性挂止损 + 止盈两张市价条件单（模拟 OCO）。
+
+        注意：Binance 合约不支持原生 OCO，这里分别下两张 STOP_MARKET 和
+        TAKE_PROFIT_MARKET 单。其中一张触发成交后，需要手动取消另一张。
+
+        参数:
+            symbol: 交易对符号
+            side: 平仓方向（做多持仓用 "SELL"，做空持仓用 "BUY"）
+            quantity: 下单数量
+            stop_price: 止损触发价
+            take_profit_price: 止盈触发价
+
+        返回:
+            [止损单 OrderResult, 止盈单 OrderResult]
+        """
+        sl = self.place_stop_market_order(symbol, side, quantity, stop_price)
+        tp = self.place_take_profit_market_order(symbol, side, quantity, take_profit_price)
+        return [sl, tp]
+
     def get_positions(self) -> list[PositionInfo]:
         """获取当前所有未平仓持仓。"""
         data = self._request_with_retry("GET", "/fapi/v2/positionRisk")
@@ -339,21 +523,37 @@ class BinanceFapiClient:
             # Binance 返回 {"code": 200, "msg": "The operation of cancel all open order is done."}
             return 1 if data.get("code") == 200 else 0
 
-        # 无指定 symbol 时，先获取持仓列表，逐个取消
-        positions = self.get_positions()
+        # 无指定 symbol 时，按 openOrders 覆盖所有有挂单币种
         cancelled = 0
-        symbols_seen = set()
-        for pos in positions:
-            if pos.symbol not in symbols_seen:
-                symbols_seen.add(pos.symbol)
-                try:
-                    result = self._request_with_retry(
-                        "DELETE", "/fapi/v1/allOpenOrders", {"symbol": pos.symbol}
-                    )
-                    if result.get("code") == 200:
-                        cancelled += 1
-                except Exception as e:
-                    log.warning(f"取消 {pos.symbol} 挂单失败: {e}")
+        symbols_to_cancel: set[str] = set()
+
+        try:
+            open_orders = self.get_open_orders()
+            symbols_to_cancel.update(
+                str(order.get("symbol", ""))
+                for order in open_orders
+                if order.get("symbol")
+            )
+        except Exception as e:
+            log.warning(f"获取 open orders 失败，回退持仓币种取消: {e}")
+
+        # 回退逻辑：若 openOrders 为空或失败，至少覆盖当前持仓币种
+        if not symbols_to_cancel:
+            try:
+                positions = self.get_positions()
+                symbols_to_cancel.update(pos.symbol for pos in positions if pos.symbol)
+            except Exception as e:
+                log.warning(f"获取持仓列表失败: {e}")
+
+        for sym in symbols_to_cancel:
+            try:
+                result = self._request_with_retry(
+                    "DELETE", "/fapi/v1/allOpenOrders", {"symbol": sym}
+                )
+                if result.get("code") == 200:
+                    cancelled += 1
+            except Exception as e:
+                log.warning(f"取消 {sym} 挂单失败: {e}")
         return cancelled
 
     def get_position_risk(self, symbol: str) -> PositionRisk:
@@ -381,7 +581,7 @@ class BinanceFapiClient:
 
     def get_open_orders(self, symbol: str | None = None) -> list[dict]:
         """
-        获取未完成订单列表。
+        获取未完成订单列表（普通订单）。
 
         参数:
             symbol: 交易对符号。若为 None，则获取所有未完成订单。
@@ -394,6 +594,53 @@ class BinanceFapiClient:
             params["symbol"] = symbol
         data = self._request_with_retry("GET", "/fapi/v1/openOrders", params)
         return data if isinstance(data, list) else []
+
+    def get_open_algo_orders(self, symbol: str | None = None) -> list[dict]:
+        """
+        获取未完成 Algo 条件单列表。
+
+        参数:
+            symbol: 交易对符号。若为 None，则获取所有 Algo 挂单。
+
+        返回:
+            Algo 挂单列表（原始 dict）
+        """
+        params = {}
+        if symbol:
+            params["symbol"] = symbol
+        data = self._request_with_retry("GET", "/fapi/v1/openAlgoOrders", params)
+        if isinstance(data, dict):
+            return data.get("orders", [])
+        return data if isinstance(data, list) else []
+
+    def cancel_algo_order(self, symbol: str, algo_id: int) -> dict:
+        """
+        取消指定 Algo 条件单。
+
+        参数:
+            symbol: 交易对符号
+            algo_id: Algo 订单 ID
+
+        返回:
+            Binance 原始响应
+        """
+        params = {"symbol": symbol, "algoId": algo_id}
+        return self._request_with_retry("DELETE", "/fapi/v1/algoOrder", params)
+
+    def cancel_all_algo_orders(self, symbol: str) -> int:
+        """
+        取消指定币种的所有 Algo 条件单。
+
+        参数:
+            symbol: 交易对符号
+
+        返回:
+            取消的订单数量
+        """
+        data = self._request_with_retry(
+            "DELETE", "/fapi/v1/algoOpenOrders", {"symbol": symbol}
+        )
+        return 1 if data.get("code") == 200 or data.get("msg") else 0
 
     def sync_after_reconnect(self) -> dict:
         """

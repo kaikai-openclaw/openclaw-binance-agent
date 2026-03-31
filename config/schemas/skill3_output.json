@@ -15,7 +15,7 @@
         "properties": {
           "symbol": {
             "type": "string",
-            "pattern": "^[A-Z]{2,10}USDT$"
+            "pattern": "^[A-Z0-9]{1,20}USDT$"
           },
           "direction": {
             "type": "string",

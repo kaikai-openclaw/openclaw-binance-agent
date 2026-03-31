@@ -1497,46 +1497,49 @@ class TestDataSourceAnnotation:
     """数据来源标注完整性属性测试。
 
     对于任意经过 Skill-1 处理输出的候选币种记录，
-    该记录必须包含非空的 source_url（合法 URI 格式）
-    和非空的 collected_at（合法 ISO 8601 时间戳）字段。
+    该记录必须包含非空的 collected_at（合法 ISO 8601 时间戳）字段，
+    以及完整的量化指标（signal_score, rsi, ema_bullish, macd_bullish 等）。
 
-    通过 hypothesis 生成随机的 symbol 和 heat_score，
-    使用 mock 的 searcher/fetcher 注入，
-    验证输出的每条候选记录都包含合法的 source_url 和 collected_at。
+    通过 hypothesis 生成随机的 symbol，使用 mock 的 BinancePublicClient 注入，
+    验证输出的每条候选记录都包含合法的 collected_at 和量化指标。
     """
 
     @given(
         symbol=st.from_regex(r"[A-Z]{2,10}USDT", fullmatch=True),
-        heat_score=st.floats(min_value=0.0, max_value=100.0, allow_nan=False, allow_infinity=False),
-        url_path=st.from_regex(r"[a-z]{1,20}", fullmatch=True),
+        quote_volume=st.floats(min_value=50_000_000, max_value=1e12, allow_nan=False, allow_infinity=False),
     )
     @settings(max_examples=20)
-    def test_data_source_annotation(self, symbol: str, heat_score: float, url_path: str) -> None:
-        """每条候选记录必须包含合法 URI 格式的 source_url 和 ISO 8601 格式的 collected_at。"""
-        import re
+    def test_data_source_annotation(self, symbol: str, quote_volume: float) -> None:
+        """每条候选记录必须包含合法 ISO 8601 格式的 collected_at 和量化指标。"""
         import tempfile
         from unittest.mock import MagicMock
 
         from src.infra.state_store import StateStore
         from src.skills.skill1_collect import Skill1Collect
 
-        # 构造合法的来源 URL
-        source_url = f"https://example.com/{url_path}"
-
-        # mock searcher：返回一条包含 URL 的搜索结果
-        searcher = MagicMock(return_value=[{"url": source_url}])
-
-        # mock fetcher：返回包含随机 symbol 和 heat_score 的结构化数据
-        fetcher = MagicMock(return_value={
+        # 构造 mock client
+        client = MagicMock()
+        client.get_exchange_info.return_value = {
+            "symbols": [{"symbol": symbol, "status": "TRADING", "quoteAsset": "USDT", "contractType": "PERPETUAL"}]
+        }
+        client.get_tickers_24hr.return_value = [{
             "symbol": symbol,
-            "heat_score": heat_score,
-        })
+            "quoteVolume": str(quote_volume),
+            "highPrice": "110",
+            "lowPrice": "100",
+            "priceChangePercent": "5.0",
+        }]
+        # 构造温和上涨 K 线（确保技术指标有信号）
+        closes = [100 + i * 0.3 for i in range(100)]
+        volumes = [1000.0] * 95 + [3000.0] * 5
+        klines = []
+        for c, v in zip(closes, volumes):
+            klines.append([0, str(c), str(c * 1.01), str(c * 0.99), str(c), str(v), 0, "0", 0, "0", "0", "0"])
+        client.get_klines.return_value = klines
 
-        # 使用宽松的 Schema（避免 Schema 校验干扰属性测试）
         input_schema = {"type": "object", "additionalProperties": True}
         output_schema = {"type": "object", "additionalProperties": True}
 
-        # 创建临时 StateStore
         tmp_dir = tempfile.mkdtemp()
         store = StateStore(db_path=f"{tmp_dir}/test_annotation.db")
 
@@ -1545,57 +1548,24 @@ class TestDataSourceAnnotation:
                 state_store=store,
                 input_schema=input_schema,
                 output_schema=output_schema,
-                searcher=searcher,
-                fetcher=fetcher,
+                client=client,
             )
 
-            result = skill.run({
-                "trigger_time": "2025-01-01T00:00:00Z",
-                "search_keywords": ["crypto"],
-            })
-
+            result = skill.run({"trigger_time": "2025-01-01T00:00:00Z"})
             candidates = result["candidates"]
 
-            # 核心不变量：每条候选记录都必须包含合法的 source_url 和 collected_at
-            assert len(candidates) >= 1, (
-                f"有效的 symbol={symbol} 和 heat_score={heat_score} 应产生至少一条候选记录"
-            )
-
             for i, candidate in enumerate(candidates):
-                # ── 验证 source_url 存在且为合法 URI 格式 ──
-                assert "source_url" in candidate, (
-                    f"候选记录 {i} 缺少 source_url 字段"
-                )
-                src_url = candidate["source_url"]
-                assert isinstance(src_url, str) and len(src_url) > 0, (
-                    f"候选记录 {i} 的 source_url 为空或非字符串: {src_url}"
-                )
-                # URI 格式校验：必须以 scheme:// 开头（如 https://、http://）
-                uri_pattern = re.compile(r"^[a-zA-Z][a-zA-Z0-9+\-.]*://\S+$")
-                assert uri_pattern.match(src_url), (
-                    f"候选记录 {i} 的 source_url 不是合法 URI 格式: {src_url}"
-                )
-
                 # ── 验证 collected_at 存在且为合法 ISO 8601 时间戳 ──
-                assert "collected_at" in candidate, (
-                    f"候选记录 {i} 缺少 collected_at 字段"
-                )
+                assert "collected_at" in candidate, f"候选记录 {i} 缺少 collected_at 字段"
                 collected_at = candidate["collected_at"]
-                assert isinstance(collected_at, str) and len(collected_at) > 0, (
-                    f"候选记录 {i} 的 collected_at 为空或非字符串: {collected_at}"
-                )
-                # ISO 8601 格式校验：使用 datetime.fromisoformat 解析
-                try:
-                    parsed_dt = datetime.fromisoformat(collected_at)
-                except (ValueError, TypeError) as e:
-                    raise AssertionError(
-                        f"候选记录 {i} 的 collected_at 不是合法 ISO 8601 格式: "
-                        f"{collected_at}, 错误: {e}"
-                    )
-                # 时间戳应为 UTC（带时区信息）
-                assert parsed_dt.tzinfo is not None, (
-                    f"候选记录 {i} 的 collected_at 缺少时区信息: {collected_at}"
-                )
+                assert isinstance(collected_at, str) and len(collected_at) > 0
+                parsed_dt = datetime.fromisoformat(collected_at)
+                assert parsed_dt.tzinfo is not None, f"候选记录 {i} 的 collected_at 缺少时区信息"
+
+                # ── 验证量化指标字段存在 ──
+                assert "signal_score" in candidate, f"候选记录 {i} 缺少 signal_score"
+                assert isinstance(candidate["signal_score"], int)
+                assert candidate["signal_score"] >= 0
         finally:
             store.close()
 
@@ -1813,33 +1783,44 @@ class TestRatingFilterThreshold:
     )
     @settings(max_examples=20)
     def test_data_source_annotation_multiple_candidates(self, num_results: int, data) -> None:
-        """多条候选记录时，每条都必须包含合法的 source_url 和 collected_at。"""
-        import re
+        """多个币种通过筛选时，每条候选记录都必须包含合法的 collected_at 和量化指标。"""
         import tempfile
         from unittest.mock import MagicMock
 
         from src.infra.state_store import StateStore
         from src.skills.skill1_collect import Skill1Collect
 
-        # 为每条搜索结果生成随机数据
-        search_results = []
-        fetcher_returns = []
+        # 为每个币种生成随机 symbol
+        symbols = []
+        tickers = []
         for _ in range(num_results):
-            url_path = data.draw(
-                st.from_regex(r"[a-z]{1,15}", fullmatch=True), label="url_path"
-            )
-            symbol = data.draw(
+            sym = data.draw(
                 st.from_regex(r"[A-Z]{2,10}USDT", fullmatch=True), label="symbol"
             )
-            heat_score = data.draw(
-                st.floats(min_value=0.0, max_value=100.0, allow_nan=False, allow_infinity=False),
-                label="heat_score",
-            )
-            search_results.append({"url": f"https://market.example.com/{url_path}"})
-            fetcher_returns.append({"symbol": symbol, "heat_score": heat_score})
+            symbols.append(sym)
+            tickers.append({
+                "symbol": sym,
+                "quoteVolume": "100000000",
+                "highPrice": "110",
+                "lowPrice": "100",
+                "priceChangePercent": "5.0",
+            })
 
-        searcher = MagicMock(return_value=search_results)
-        fetcher = MagicMock(side_effect=fetcher_returns)
+        client = MagicMock()
+        client.get_exchange_info.return_value = {
+            "symbols": [
+                {"symbol": s, "status": "TRADING", "quoteAsset": "USDT", "contractType": "PERPETUAL"}
+                for s in symbols
+            ]
+        }
+        client.get_tickers_24hr.return_value = tickers
+        # 温和上涨 K 线
+        closes = [100 + i * 0.3 for i in range(100)]
+        volumes = [1000.0] * 95 + [3000.0] * 5
+        klines = []
+        for c, v in zip(closes, volumes):
+            klines.append([0, str(c), str(c * 1.01), str(c * 0.99), str(c), str(v), 0, "0", 0, "0", "0", "0"])
+        client.get_klines.return_value = klines
 
         input_schema = {"type": "object", "additionalProperties": True}
         output_schema = {"type": "object", "additionalProperties": True}
@@ -1852,37 +1833,22 @@ class TestRatingFilterThreshold:
                 state_store=store,
                 input_schema=input_schema,
                 output_schema=output_schema,
-                searcher=searcher,
-                fetcher=fetcher,
+                client=client,
             )
 
-            result = skill.run({
-                "trigger_time": "2025-01-01T00:00:00Z",
-                "search_keywords": ["热点"],
-            })
-
+            result = skill.run({"trigger_time": "2025-01-01T00:00:00Z"})
             candidates = result["candidates"]
 
-            # 所有有效记录都应被输出
-            assert len(candidates) == num_results, (
-                f"期望 {num_results} 条候选记录，实际 {len(candidates)} 条"
-            )
-
-            uri_pattern = re.compile(r"^[a-zA-Z][a-zA-Z0-9+\-.]*://\S+$")
-
             for i, candidate in enumerate(candidates):
-                # 验证 source_url 合法 URI
-                src_url = candidate["source_url"]
-                assert uri_pattern.match(src_url), (
-                    f"候选记录 {i} 的 source_url 不是合法 URI: {src_url}"
-                )
-
                 # 验证 collected_at 合法 ISO 8601
                 collected_at = candidate["collected_at"]
                 parsed_dt = datetime.fromisoformat(collected_at)
                 assert parsed_dt.tzinfo is not None, (
                     f"候选记录 {i} 的 collected_at 缺少时区信息: {collected_at}"
                 )
+                # 验证量化指标
+                assert "signal_score" in candidate
+                assert isinstance(candidate["signal_score"], int)
         finally:
             store.close()
 

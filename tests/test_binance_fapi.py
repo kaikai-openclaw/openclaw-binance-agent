@@ -362,6 +362,40 @@ class TestCancelAllOrders:
 
         assert count == 1
 
+    @patch("time.sleep", return_value=None)
+    def test_cancel_all_orders_without_symbol_uses_open_orders(self, mock_sleep):
+        """未指定 symbol 时，应按 open orders 的 symbol 全量取消。"""
+        rl = MagicMock(spec=RateLimiter)
+        client = BinanceFapiClient("key", "secret", rate_limiter=rl)
+
+        open_orders = [
+            {"orderId": 1, "symbol": "BTCUSDT", "status": "NEW"},
+            {"orderId": 2, "symbol": "ETHUSDT", "status": "NEW"},
+            {"orderId": 3, "symbol": "BTCUSDT", "status": "PARTIALLY_FILLED"},
+        ]
+
+        def _request_side_effect(*args, **kwargs):
+            method = kwargs.get("method")
+            path = kwargs.get("url", "")
+            if method == "GET" and path.endswith("/fapi/v1/openOrders"):
+                resp = MagicMock()
+                resp.status_code = 200
+                resp.json.return_value = open_orders
+                resp.raise_for_status = MagicMock()
+                return resp
+            if method == "DELETE" and path.endswith("/fapi/v1/allOpenOrders"):
+                resp = MagicMock()
+                resp.status_code = 200
+                resp.json.return_value = {"code": 200, "msg": "ok"}
+                resp.raise_for_status = MagicMock()
+                return resp
+            raise AssertionError("unexpected request")
+
+        with patch.object(client._session, "request", side_effect=_request_side_effect):
+            count = client.cancel_all_orders()
+
+        assert count == 2
+
 
 class TestGetPositionRisk:
     """get_position_risk 测试。"""

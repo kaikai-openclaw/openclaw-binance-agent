@@ -29,6 +29,14 @@ Thumbs.db
 
 # SQLite databases (runtime generated)
 data/*.db
+data/*.db-shm
+data/*.db-wal
 
 # pytest cache
 .pytest_cache/
+
+# OpenClaw
+.openclaw/
+
+# Eval results (runtime generated)
+eval_results/

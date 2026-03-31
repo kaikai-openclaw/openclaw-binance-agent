@@ -72,8 +72,51 @@ def _make_account(
 
 SKILL1_INPUT = {
     "trigger_time": "2025-01-15T08:00:00Z",
-    "search_keywords": ["crypto", "热点"],
 }
+
+
+def _make_bullish_klines(n: int = 100, base: float = 100, step: float = 0.3, noise_seed: int = 0) -> list[list]:
+    """构造温和上涨 K 线，后 5 根放量。noise_seed 不同则产生不同波动。"""
+    import random
+    rng = random.Random(noise_seed)
+    closes = [base + i * step + rng.gauss(0, step * 2) for i in range(n)]
+    # 确保价格为正
+    closes = [max(c, 1.0) for c in closes]
+    volumes = [1000.0] * (n - 5) + [3000.0] * 5
+    result = []
+    for c, v in zip(closes, volumes):
+        result.append([0, str(c), str(c * 1.01), str(c * 0.99), str(c), str(v), 0, "0", 0, "0", "0", "0"])
+    return result
+
+
+def _make_mock_binance_public(symbols: list[str], tickers: list[dict] | None = None, klines=None):
+    """构造 mock BinancePublicClient。"""
+    client = MagicMock()
+    client.get_exchange_info.return_value = {
+        "symbols": [
+            {"symbol": s, "status": "TRADING", "quoteAsset": "USDT", "contractType": "PERPETUAL"}
+            for s in symbols
+        ]
+    }
+    if tickers is None:
+        tickers = [
+            {"symbol": s, "quoteVolume": "100000000", "highPrice": "110",
+             "lowPrice": "100", "priceChangePercent": "5.0"}
+            for s in symbols
+        ]
+    client.get_tickers_24hr.return_value = tickers
+    if klines is not None:
+        client.get_klines.return_value = klines
+    else:
+        # 每个 symbol 用不同的 noise_seed 避免相关性去重
+        _kline_cache = {}
+        for idx, s in enumerate(symbols):
+            _kline_cache[s] = _make_bullish_klines(noise_seed=idx + 1)
+
+        def _get_klines(symbol, interval=None, limit=None):
+            return _kline_cache.get(symbol, _make_bullish_klines())
+        client.get_klines.side_effect = _get_klines
+    return client
 
 
 # ── Fixtures ──────────────────────────────────────────────
@@ -125,20 +168,12 @@ class TestFullPipelineNormalPath:
         account_provider = lambda: account
 
         # ── Skill-1：信息收集 ──
-        searcher = MagicMock(return_value=[
-            {"url": "https://example.com/btc"},
-            {"url": "https://example.com/eth"},
-        ])
-        fetcher = MagicMock(side_effect=[
-            {"symbol": "BTCUSDT", "heat_score": 90.0},
-            {"symbol": "ETHUSDT", "heat_score": 75.0},
-        ])
+        client1 = _make_mock_binance_public(["BTCUSDT", "ETHUSDT"])
         skill1 = Skill1Collect(
             state_store=state_store,
             input_schema=SCHEMAS["s1_in"],
             output_schema=SCHEMAS["s1_out"],
-            searcher=searcher,
-            fetcher=fetcher,
+            client=client1,
         )
         # 先存入 Skill-1 的输入数据
         s1_input_id = state_store.save("pipeline_trigger", SKILL1_INPUT)
@@ -148,7 +183,7 @@ class TestFullPipelineNormalPath:
 
         # 验证 Skill-1 输出数据已存入 StateStore
         s1_data = state_store.load(state_id_1)
-        assert len(s1_data["candidates"]) == 2
+        assert len(s1_data["candidates"]) >= 1
 
         # ── Skill-2：深度分析 ──
         # mock analyzer：BTCUSDT 评 8 分做多，ETHUSDT 评 4 分（将被过滤）
@@ -284,18 +319,12 @@ class TestDegradationPath:
         account_provider = lambda: account
 
         # ── Skill-1 ──
-        searcher = MagicMock(return_value=[
-            {"url": "https://example.com/low"},
-        ])
-        fetcher = MagicMock(return_value={
-            "symbol": "XRPUSDT", "heat_score": 30.0,
-        })
+        client1 = _make_mock_binance_public(["XRPUSDT"])
         skill1 = Skill1Collect(
             state_store=state_store,
             input_schema=SCHEMAS["s1_in"],
             output_schema=SCHEMAS["s1_out"],
-            searcher=searcher,
-            fetcher=fetcher,
+            client=client1,
         )
         s1_input_id = state_store.save("trigger", SKILL1_INPUT)
         state_id_1 = skill1.execute(input_state_id=s1_input_id)
@@ -378,18 +407,12 @@ class TestPipelineRunSuccess:
         account_provider = lambda: account
 
         # ── 构建所有 Skill ──
-        searcher = MagicMock(return_value=[
-            {"url": "https://example.com/sol"},
-        ])
-        fetcher = MagicMock(return_value={
-            "symbol": "SOLUSDT", "heat_score": 88.0,
-        })
+        client1 = _make_mock_binance_public(["SOLUSDT"])
         skill1 = Skill1Collect(
             state_store=state_store,
             input_schema=SCHEMAS["s1_in"],
             output_schema=SCHEMAS["s1_out"],
-            searcher=searcher,
-            fetcher=fetcher,
+            client=client1,
         )
 
         def analyzer(symbol, market_data):

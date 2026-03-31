@@ -13,7 +13,7 @@
         "properties": {
           "symbol": {
             "type": "string",
-            "pattern": "^[A-Z]{2,10}USDT$"
+            "pattern": "^[A-Z0-9]{1,20}USDT$"
           },
           "rating_score": {
             "type": "integer",
@@ -32,6 +32,10 @@
             "type": "number",
             "minimum": 0,
             "maximum": 100
+          },
+          "comment": {
+            "type": "string",
+            "description": "TradingAgents 分析摘要点评"
           }
         },
         "required": [
@@ -46,6 +50,26 @@
     "filtered_count": {
       "type": "integer",
       "minimum": 0
+    },
+    "failed_symbols": {
+      "type": "array",
+      "description": "分析失败的币种列表",
+      "items": {
+        "type": "object",
+        "properties": {
+          "symbol": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": ["symbol", "reason"]
+      }
+    },
+    "analysis_summary": {
+      "type": "string",
+      "description": "本轮分析汇总"
     }
   },
   "required": [

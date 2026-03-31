@@ -155,6 +155,8 @@ def mock_binance():
     client.place_market_order.return_value = _make_order_result(
         price=100.0, status="FILLED"
     )
+    client.get_open_orders.return_value = []
+    client.cancel_all_orders.return_value = 1
     return client
 
 
@@ -597,6 +599,25 @@ class TestOrderFailure:
 
         assert result["execution_results"][0]["status"] == "execution_failed"
 
+    def test_close_exception_should_be_execution_failed(
+        self, state_store, mock_binance, mock_risk_controller
+    ):
+        """开仓后平仓失败不应误标为 filled。"""
+        mock_binance.get_position_risk.return_value = _make_position_risk(
+            mark_price=110.0, position_amt=10.0
+        )
+        mock_binance.place_market_order.side_effect = Exception("平仓网络错误")
+
+        upstream = _make_upstream_data([_make_trade_plan()])
+        state_id = state_store.save("skill3_strategy", upstream)
+
+        skill = _make_skill(
+            state_store, mock_binance, mock_risk_controller
+        )
+        result = skill.run({"input_state_id": state_id})
+
+        assert result["execution_results"][0]["status"] == "execution_failed"
+
 
 # ══════════════════════════════════════════════════════════
 # 9. 空交易计划
@@ -671,10 +692,32 @@ class TestExternalClose:
     def test_position_already_closed(
         self, state_store, mock_binance, mock_risk_controller
     ):
-        """持仓数量为 0 时应识别为外部平仓。"""
+        """首轮即无持仓且无挂单时应识别为入场失败。"""
         mock_binance.get_position_risk.return_value = _make_position_risk(
             mark_price=100.0, position_amt=0.0
         )
+        mock_binance.get_open_orders.return_value = []
+
+        upstream = _make_upstream_data([_make_trade_plan()])
+        state_id = state_store.save("skill3_strategy", upstream)
+
+        skill = _make_skill(
+            state_store, mock_binance, mock_risk_controller
+        )
+        result = skill.run({"input_state_id": state_id})
+
+        assert result["execution_results"][0]["status"] == "execution_failed"
+        # 未成交超时/失效场景不会触发市价平仓
+        mock_binance.place_market_order.assert_not_called()
+
+    def test_position_closed_after_opened(
+        self, state_store, mock_binance, mock_risk_controller
+    ):
+        """先观测到持仓后变为 0，应识别为外部平仓并标记 filled。"""
+        mock_binance.get_position_risk.side_effect = [
+            _make_position_risk(mark_price=100.0, position_amt=10.0),
+            _make_position_risk(mark_price=101.0, position_amt=0.0),
+        ]
 
         upstream = _make_upstream_data([_make_trade_plan()])
         state_id = state_store.save("skill3_strategy", upstream)
@@ -685,5 +728,4 @@ class TestExternalClose:
         result = skill.run({"input_state_id": state_id})
 
         assert result["execution_results"][0]["status"] == "filled"
-        # 不应调用市价平仓（已被外部平仓）
         mock_binance.place_market_order.assert_not_called()

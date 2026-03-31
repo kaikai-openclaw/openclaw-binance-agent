@@ -240,6 +240,7 @@ class Skill4Execute(BaseSkill):
             take_profit_price=take_profit_price,
             max_hold_hours=max_hold_hours,
             quantity=quantity,
+            order_id=order_result.order_id,
         )
 
         executed_at = datetime.now(timezone.utc).isoformat()
@@ -247,12 +248,28 @@ class Skill4Execute(BaseSkill):
         return self._make_result(
             symbol=symbol,
             direction=direction_str,
-            status=OrderStatus.FILLED.value,
+            status=close_result.get("status", OrderStatus.EXECUTION_FAILED.value),
             executed_at=executed_at,
-            executed_price=close_result.get("close_price", order_result.price),
-            executed_quantity=order_result.quantity,
+            executed_price=close_result.get("close_price", 0.0),
+            executed_quantity=(
+                order_result.quantity
+                if close_result.get("status") == OrderStatus.FILLED.value
+                else 0.0
+            ),
             fee=close_result.get("fee", 0.0),
             order_id=order_result.order_id,
+            reason=close_result.get("reason", ""),
+            entry_price=entry_price,
+            exit_price=close_result.get("close_price", 0.0),
+            pnl_amount=self._calculate_pnl_amount(
+                direction=direction,
+                entry_price=entry_price,
+                exit_price=close_result.get("close_price", 0.0),
+                quantity=order_result.quantity,
+                status=close_result.get("status", ""),
+            ),
+            hold_duration_hours=close_result.get("hold_duration_hours", 0.0),
+            position_size_pct=position_size_pct,
         )
 
     def _monitor_position(
@@ -263,6 +280,7 @@ class Skill4Execute(BaseSkill):
         take_profit_price: float,
         max_hold_hours: float,
         quantity: float,
+        order_id: str,
     ) -> dict:
         """
         轮询监控持仓，检查止损/止盈/超时平仓条件。
@@ -281,13 +299,20 @@ class Skill4Execute(BaseSkill):
             quantity: 持仓数量
 
         返回:
-            {"close_price": float, "fee": float, "close_reason": str}
+            {
+                "status": str,
+                "close_price": float,
+                "fee": float,
+                "reason": str,
+                "hold_duration_hours": float,
+            }
         """
         start_time = time.monotonic()
         max_hold_seconds = max_hold_hours * 3600
         close_side = "SELL" if direction == TradeDirection.LONG else "BUY"
         consecutive_errors = 0
         max_consecutive_errors = 10  # 连续错误上限，防止无限循环
+        position_opened = False
 
         while True:
             # 轮询间隔
@@ -310,28 +335,74 @@ class Skill4Execute(BaseSkill):
                         f"[{self.name}] {symbol} 连续 {max_consecutive_errors} 次"
                         f"获取持仓失败，强制平仓"
                     )
+                    if not position_opened:
+                        self._cancel_entry_order(symbol)
+                        return self._make_monitor_result(
+                            status=OrderStatus.EXECUTION_FAILED.value,
+                            close_price=0.0,
+                            fee=0.0,
+                            reason="entry_order_unconfirmed",
+                            start_time=start_time,
+                        )
                     return self._close_position(
-                        symbol, close_side, quantity, "monitor_error"
+                        symbol, close_side, quantity, "monitor_error", start_time
                     )
                 # 检查是否超时
                 elapsed = time.monotonic() - start_time
                 if elapsed >= max_hold_seconds:
+                    if not position_opened:
+                        self._cancel_entry_order(symbol)
+                        return self._make_monitor_result(
+                            status=OrderStatus.EXECUTION_FAILED.value,
+                            close_price=0.0,
+                            fee=0.0,
+                            reason="entry_not_filled_timeout",
+                            start_time=start_time,
+                        )
                     return self._close_position(
-                        symbol, close_side, quantity, "timeout"
+                        symbol, close_side, quantity, "timeout", start_time
                     )
                 continue
 
             current_price = pos_risk.mark_price
             position_amt = abs(pos_risk.position_amt)
+            if position_amt > 0:
+                position_opened = True
 
-            # 持仓已被清零（可能已被外部平仓）
+            # 持仓为 0：要区分“未成交”与“已开仓后被平”
             if position_amt == 0:
-                log.info(f"[{self.name}] {symbol} 持仓已清零")
-                return {
-                    "close_price": current_price,
-                    "fee": 0.0,
-                    "close_reason": "external_close",
-                }
+                if position_opened:
+                    log.info(f"[{self.name}] {symbol} 持仓已清零")
+                    return self._make_monitor_result(
+                        status=OrderStatus.FILLED.value,
+                        close_price=current_price,
+                        fee=0.0,
+                        reason="external_close",
+                        start_time=start_time,
+                    )
+
+                # 尚未观测到持仓，若入场单仍在挂单则继续等待
+                if self._is_order_open(symbol, order_id):
+                    elapsed = time.monotonic() - start_time
+                    if elapsed >= max_hold_seconds:
+                        self._cancel_entry_order(symbol)
+                        return self._make_monitor_result(
+                            status=OrderStatus.EXECUTION_FAILED.value,
+                            close_price=0.0,
+                            fee=0.0,
+                            reason="entry_not_filled_timeout",
+                            start_time=start_time,
+                        )
+                    continue
+
+                # 入场单已不在挂单且从未持仓，视为入场失败（被撤单/拒单/失效）
+                return self._make_monitor_result(
+                    status=OrderStatus.EXECUTION_FAILED.value,
+                    close_price=0.0,
+                    fee=0.0,
+                    reason="entry_order_not_open_no_position",
+                    start_time=start_time,
+                )
 
             # 需求 4.5：止损检查
             if self._should_stop_loss(direction, current_price, stop_loss_price):
@@ -344,7 +415,7 @@ class Skill4Execute(BaseSkill):
                     symbol, direction.value
                 )
                 return self._close_position(
-                    symbol, close_side, position_amt, "stop_loss"
+                    symbol, close_side, position_amt, "stop_loss", start_time
                 )
 
             # 需求 4.6：止盈检查
@@ -354,7 +425,7 @@ class Skill4Execute(BaseSkill):
                     f"当前价={current_price}, 止盈价={take_profit_price}"
                 )
                 return self._close_position(
-                    symbol, close_side, position_amt, "take_profit"
+                    symbol, close_side, position_amt, "take_profit", start_time
                 )
 
             # 需求 4.7：超时检查
@@ -364,8 +435,17 @@ class Skill4Execute(BaseSkill):
                     f"[{self.name}] {symbol} 持仓超时: "
                     f"已持有 {elapsed / 3600:.2f} 小时"
                 )
+                if not position_opened:
+                    self._cancel_entry_order(symbol)
+                    return self._make_monitor_result(
+                        status=OrderStatus.EXECUTION_FAILED.value,
+                        close_price=0.0,
+                        fee=0.0,
+                        reason="entry_not_filled_timeout",
+                        start_time=start_time,
+                    )
                 return self._close_position(
-                    symbol, close_side, position_amt, "timeout"
+                    symbol, close_side, position_amt, "timeout", start_time
                 )
 
             # 日亏损检查（需求 4.11）
@@ -377,9 +457,57 @@ class Skill4Execute(BaseSkill):
                 self._risk_controller.execute_degradation(
                     account, binance_client=self._binance_client
                 )
+                if not position_opened:
+                    self._cancel_entry_order(symbol)
+                    return self._make_monitor_result(
+                        status=OrderStatus.EXECUTION_FAILED.value,
+                        close_price=0.0,
+                        fee=0.0,
+                        reason="daily_loss_before_fill",
+                        start_time=start_time,
+                    )
                 return self._close_position(
-                    symbol, close_side, position_amt, "daily_loss_degradation"
+                    symbol,
+                    close_side,
+                    position_amt,
+                    "daily_loss_degradation",
+                    start_time,
                 )
+
+    def _make_monitor_result(
+        self,
+        status: str,
+        close_price: float,
+        fee: float,
+        reason: str,
+        start_time: float,
+    ) -> dict:
+        """统一构造监控结果并补充持仓时长。"""
+        elapsed_hours = max(0.0, (time.monotonic() - start_time) / 3600.0)
+        return {
+            "status": status,
+            "close_price": close_price,
+            "fee": fee,
+            "reason": reason,
+            "hold_duration_hours": elapsed_hours,
+        }
+
+    @staticmethod
+    def _calculate_pnl_amount(
+        direction: TradeDirection,
+        entry_price: float,
+        exit_price: float,
+        quantity: float,
+        status: str,
+    ) -> float:
+        """计算交易盈亏金额。"""
+        if status != OrderStatus.FILLED.value:
+            return 0.0
+        if entry_price <= 0 or exit_price <= 0 or quantity <= 0:
+            return 0.0
+        if direction == TradeDirection.LONG:
+            return (exit_price - entry_price) * quantity
+        return (entry_price - exit_price) * quantity
 
     def _should_stop_loss(
         self,
@@ -421,6 +549,7 @@ class Skill4Execute(BaseSkill):
         side: str,
         quantity: float,
         reason: str,
+        start_time: float,
     ) -> dict:
         """
         提交市价平仓订单。
@@ -432,7 +561,13 @@ class Skill4Execute(BaseSkill):
             reason: 平仓原因
 
         返回:
-            {"close_price": float, "fee": float, "close_reason": str}
+            {
+                "status": str,
+                "close_price": float,
+                "fee": float,
+                "reason": str,
+                "hold_duration_hours": float,
+            }
         """
         try:
             result = self._binance_client.place_market_order(
@@ -444,18 +579,43 @@ class Skill4Execute(BaseSkill):
                 f"[{self.name}] {symbol} 平仓成功: "
                 f"原因={reason}, 价格={result.price}"
             )
-            return {
-                "close_price": result.price,
-                "fee": 0.0,
-                "close_reason": reason,
-            }
+            return self._make_monitor_result(
+                status=OrderStatus.FILLED.value,
+                close_price=result.price,
+                fee=0.0,
+                reason=reason,
+                start_time=start_time,
+            )
         except Exception as exc:
             log.error(f"[{self.name}] {symbol} 平仓失败: {exc}")
-            return {
-                "close_price": 0.0,
-                "fee": 0.0,
-                "close_reason": f"{reason}_failed",
-            }
+            return self._make_monitor_result(
+                status=OrderStatus.EXECUTION_FAILED.value,
+                close_price=0.0,
+                fee=0.0,
+                reason=f"{reason}_failed",
+                start_time=start_time,
+            )
+
+    def _is_order_open(self, symbol: str, order_id: str) -> bool:
+        """查询入场限价单是否仍在挂单。"""
+        try:
+            orders = self._binance_client.get_open_orders(symbol)
+            order_id_str = str(order_id)
+            for order in orders:
+                if str(order.get("orderId", "")) == order_id_str:
+                    return True
+            return False
+        except Exception as exc:
+            # 无法确认挂单状态时保守等待，避免误判失败
+            log.warning(f"[{self.name}] {symbol} 查询挂单状态失败: {exc}")
+            return True
+
+    def _cancel_entry_order(self, symbol: str) -> None:
+        """在入场未成交超时场景主动撤销挂单。"""
+        try:
+            self._binance_client.cancel_all_orders(symbol=symbol)
+        except Exception as exc:
+            log.warning(f"[{self.name}] {symbol} 撤销入场挂单失败: {exc}")
 
     @staticmethod
     def _make_result(
@@ -468,6 +628,11 @@ class Skill4Execute(BaseSkill):
         fee: float = 0.0,
         order_id: str = "",
         reason: str = "",
+        entry_price: float = 0.0,
+        exit_price: float = 0.0,
+        pnl_amount: float = 0.0,
+        hold_duration_hours: float = 0.0,
+        position_size_pct: float = 0.0,
     ) -> dict:
         """
         构造单笔执行结果字典。
@@ -482,6 +647,11 @@ class Skill4Execute(BaseSkill):
             fee: 手续费
             order_id: 订单 ID
             reason: 附加原因说明
+            entry_price: 入场价格
+            exit_price: 平仓价格
+            pnl_amount: 盈亏金额
+            hold_duration_hours: 持仓时长（小时）
+            position_size_pct: 头寸规模百分比
 
         返回:
             符合 skill4_output.json 中 execution_results 项 Schema 的字典
@@ -500,4 +670,15 @@ class Skill4Execute(BaseSkill):
             result["executed_quantity"] = executed_quantity
         if fee >= 0:
             result["fee"] = fee
+        if reason:
+            result["reason"] = reason
+        if entry_price > 0:
+            result["entry_price"] = entry_price
+        if exit_price > 0:
+            result["exit_price"] = exit_price
+        result["pnl_amount"] = pnl_amount
+        if hold_duration_hours > 0:
+            result["hold_duration_hours"] = hold_duration_hours
+        if position_size_pct > 0:
+            result["position_size_pct"] = position_size_pct
         return result

@@ -57,21 +57,30 @@ class TestMissingRequiredFields:
     def test_skill1_input_missing_trigger_time(self):
         """skill1_input 缺少 trigger_time 应被拒绝。"""
         schema = _load_schema("skill1_input.json")
-        data = {"search_keywords": ["BTC", "ETH"]}
+        data = {"min_quote_volume": 50000000}
         err = _assert_invalid(data, schema)
         assert "trigger_time" in str(err.message)
 
-    def test_skill1_input_missing_search_keywords(self):
-        """skill1_input 缺少 search_keywords 应被拒绝。"""
+    def test_skill1_input_extra_field_rejected(self):
+        """skill1_input 传入未定义字段应被拒绝。"""
         schema = _load_schema("skill1_input.json")
-        data = {"trigger_time": VALID_DATETIME}
+        data = {"trigger_time": VALID_DATETIME, "unknown_field": 123}
         err = _assert_invalid(data, schema)
-        assert "search_keywords" in str(err.message)
+        assert "Additional properties" in str(err.message) or "additionalProperties" in str(err.schema_path)
 
     def test_skill1_output_missing_state_id(self):
         """skill1_output 缺少 state_id 应被拒绝。"""
         schema = _load_schema("skill1_output.json")
-        data = {"candidates": [], "pipeline_run_id": VALID_UUID}
+        data = {
+            "candidates": [],
+            "pipeline_run_id": VALID_UUID,
+            "filter_summary": {
+                "total_tickers": 0,
+                "after_base_filter": 0,
+                "after_signal_filter": 0,
+                "output_count": 0,
+            },
+        }
         _assert_invalid(data, schema)
 
     def test_skill2_input_missing_input_state_id(self):
@@ -97,18 +106,30 @@ class TestMissingRequiredFields:
         data = {"state_id": VALID_UUID, "execution_results": []}
         _assert_invalid(data, schema)
 
-    def test_skill1_output_candidate_missing_heat_score(self):
-        """skill1_output 候选项缺少 heat_score 应被拒绝。"""
+    def test_skill1_output_candidate_missing_signal_score(self):
+        """skill1_output 候选项缺少 signal_score 应被拒绝。"""
         schema = _load_schema("skill1_output.json")
         data = {
             "state_id": VALID_UUID,
             "candidates": [{
                 "symbol": "BTCUSDT",
-                # heat_score 缺失
-                "source_url": VALID_URI,
+                "quote_volume_24h": 100000000,
+                "price_change_pct": 5.0,
+                "amplitude_pct": 10.0,
+                "volume_surge_ratio": 2.0,
+                "rsi": 55.0,
+                "ema_bullish": True,
+                "macd_bullish": False,
+                # signal_score 缺失
                 "collected_at": VALID_DATETIME,
             }],
             "pipeline_run_id": VALID_UUID,
+            "filter_summary": {
+                "total_tickers": 100,
+                "after_base_filter": 10,
+                "after_signal_filter": 5,
+                "output_count": 1,
+            },
         }
         _assert_invalid(data, schema)
 
@@ -165,18 +186,30 @@ class TestTypeErrors:
         }
         _assert_invalid(data, schema)
 
-    def test_heat_score_string_instead_of_number(self):
-        """heat_score 传入字符串而非数字应被拒绝。"""
+    def test_signal_score_string_instead_of_integer(self):
+        """signal_score 传入字符串而非整数应被拒绝。"""
         schema = _load_schema("skill1_output.json")
         data = {
             "state_id": VALID_UUID,
             "candidates": [{
                 "symbol": "BTCUSDT",
-                "heat_score": "hot",  # 应为 number
-                "source_url": VALID_URI,
+                "quote_volume_24h": 100000000,
+                "price_change_pct": 5.0,
+                "amplitude_pct": 10.0,
+                "volume_surge_ratio": 2.0,
+                "rsi": 55.0,
+                "ema_bullish": True,
+                "macd_bullish": False,
+                "signal_score": "high",  # 应为 integer
                 "collected_at": VALID_DATETIME,
             }],
             "pipeline_run_id": VALID_UUID,
+            "filter_summary": {
+                "total_tickers": 100,
+                "after_base_filter": 10,
+                "after_signal_filter": 5,
+                "output_count": 1,
+            },
         }
         _assert_invalid(data, schema)
 
@@ -200,12 +233,12 @@ class TestTypeErrors:
         }
         _assert_invalid(data, schema)
 
-    def test_search_keywords_string_instead_of_array(self):
-        """search_keywords 传入字符串而非数组应被拒绝。"""
+    def test_min_quote_volume_string_instead_of_number(self):
+        """min_quote_volume 传入字符串而非数字应被拒绝。"""
         schema = _load_schema("skill1_input.json")
         data = {
             "trigger_time": VALID_DATETIME,
-            "search_keywords": "BTC",  # 应为 array
+            "min_quote_volume": "a lot",  # 应为 number
         }
         _assert_invalid(data, schema)
 
@@ -216,6 +249,12 @@ class TestTypeErrors:
             "state_id": VALID_UUID,
             "candidates": {"symbol": "BTCUSDT"},  # 应为 array
             "pipeline_run_id": VALID_UUID,
+            "filter_summary": {
+                "total_tickers": 0,
+                "after_base_filter": 0,
+                "after_signal_filter": 0,
+                "output_count": 0,
+            },
         }
         _assert_invalid(data, schema)
 
@@ -257,33 +296,57 @@ class TestValueOutOfRange:
         }
         _assert_invalid(data, schema)
 
-    def test_heat_score_below_minimum(self):
-        """heat_score 为 -1（低于最小值 0）应被拒绝。"""
+    def test_signal_score_below_minimum(self):
+        """signal_score 为 -1（低于最小值 0）应被拒绝。"""
         schema = _load_schema("skill1_output.json")
         data = {
             "state_id": VALID_UUID,
             "candidates": [{
                 "symbol": "BTCUSDT",
-                "heat_score": -1,  # 最小值为 0
-                "source_url": VALID_URI,
+                "quote_volume_24h": 100000000,
+                "price_change_pct": 5.0,
+                "amplitude_pct": 10.0,
+                "volume_surge_ratio": 2.0,
+                "rsi": 55.0,
+                "ema_bullish": True,
+                "macd_bullish": False,
+                "signal_score": -1,  # 最小值为 0
                 "collected_at": VALID_DATETIME,
             }],
             "pipeline_run_id": VALID_UUID,
+            "filter_summary": {
+                "total_tickers": 100,
+                "after_base_filter": 10,
+                "after_signal_filter": 5,
+                "output_count": 1,
+            },
         }
         _assert_invalid(data, schema)
 
-    def test_heat_score_above_maximum(self):
-        """heat_score 为 101（超过最大值 100）应被拒绝。"""
+    def test_signal_score_above_maximum(self):
+        """signal_score 为 101（超过最大值 100）应被拒绝。"""
         schema = _load_schema("skill1_output.json")
         data = {
             "state_id": VALID_UUID,
             "candidates": [{
                 "symbol": "BTCUSDT",
-                "heat_score": 101,  # 最大值为 100
-                "source_url": VALID_URI,
+                "quote_volume_24h": 100000000,
+                "price_change_pct": 5.0,
+                "amplitude_pct": 10.0,
+                "volume_surge_ratio": 2.0,
+                "rsi": 55.0,
+                "ema_bullish": True,
+                "macd_bullish": False,
+                "signal_score": 101,  # 最大值为 100
                 "collected_at": VALID_DATETIME,
             }],
             "pipeline_run_id": VALID_UUID,
+            "filter_summary": {
+                "total_tickers": 100,
+                "after_base_filter": 10,
+                "after_signal_filter": 5,
+                "output_count": 1,
+            },
         }
         _assert_invalid(data, schema)
 
@@ -403,12 +466,12 @@ class TestValueOutOfRange:
         }
         _assert_invalid(data, schema)
 
-    def test_search_keywords_empty_array(self):
-        """search_keywords 为空数组（minItems: 1）应被拒绝。"""
+    def test_min_quote_volume_negative(self):
+        """min_quote_volume 为负数（低于最小值 0）应被拒绝。"""
         schema = _load_schema("skill1_input.json")
         data = {
             "trigger_time": VALID_DATETIME,
-            "search_keywords": [],  # minItems: 1
+            "min_quote_volume": -1,  # minimum: 0
         }
         _assert_invalid(data, schema)
 
@@ -447,7 +510,6 @@ class TestFormatErrors:
         schema = _load_schema("skill1_input.json")
         data = {
             "trigger_time": "not-a-datetime",  # 非法 date-time
-            "search_keywords": ["BTC"],
         }
         err = _assert_invalid(data, schema)
         assert "date-time" in str(err.message) or "format" in str(err.schema_path)
@@ -457,7 +519,6 @@ class TestFormatErrors:
         schema = _load_schema("skill1_input.json")
         data = {
             "trigger_time": "2024-01-15",  # 缺少时间部分
-            "search_keywords": ["BTC"],
         }
         _assert_invalid(data, schema)
 
@@ -468,6 +529,12 @@ class TestFormatErrors:
             "state_id": "not-a-uuid",  # 非法 UUID
             "candidates": [],
             "pipeline_run_id": VALID_UUID,
+            "filter_summary": {
+                "total_tickers": 0,
+                "after_base_filter": 0,
+                "after_signal_filter": 0,
+                "output_count": 0,
+            },
         }
         _assert_invalid(data, schema)
 
@@ -478,6 +545,12 @@ class TestFormatErrors:
             "state_id": VALID_UUID,
             "candidates": [],
             "pipeline_run_id": "12345",  # 非法 UUID
+            "filter_summary": {
+                "total_tickers": 0,
+                "after_base_filter": 0,
+                "after_signal_filter": 0,
+                "output_count": 0,
+            },
         }
         _assert_invalid(data, schema)
 
@@ -488,26 +561,51 @@ class TestFormatErrors:
             "state_id": VALID_UUID,
             "candidates": [{
                 "symbol": "BTCUSDT",
-                "heat_score": 80,
-                "source_url": VALID_URI,
+                "quote_volume_24h": 100000000,
+                "price_change_pct": 5.0,
+                "amplitude_pct": 10.0,
+                "volume_surge_ratio": 2.0,
+                "rsi": 55.0,
+                "ema_bullish": True,
+                "macd_bullish": False,
+                "signal_score": 50,
                 "collected_at": "yesterday",  # 非法 date-time
             }],
             "pipeline_run_id": VALID_UUID,
+            "filter_summary": {
+                "total_tickers": 100,
+                "after_base_filter": 10,
+                "after_signal_filter": 5,
+                "output_count": 1,
+            },
         }
         _assert_invalid(data, schema)
 
-    def test_source_url_invalid_uri(self):
-        """候选项 source_url 非法 URI 格式应被拒绝。"""
+    def test_source_url_removed_from_output(self):
+        """skill1_output 不再包含 source_url 字段，传入应被拒绝。"""
         schema = _load_schema("skill1_output.json")
         data = {
             "state_id": VALID_UUID,
             "candidates": [{
                 "symbol": "BTCUSDT",
-                "heat_score": 80,
-                "source_url": "not a url",  # 非法 URI
+                "quote_volume_24h": 100000000,
+                "price_change_pct": 5.0,
+                "amplitude_pct": 10.0,
+                "volume_surge_ratio": 2.0,
+                "rsi": 55.0,
+                "ema_bullish": True,
+                "macd_bullish": False,
+                "signal_score": 50,
                 "collected_at": VALID_DATETIME,
+                "source_url": VALID_URI,  # 不再存在的字段
             }],
             "pipeline_run_id": VALID_UUID,
+            "filter_summary": {
+                "total_tickers": 100,
+                "after_base_filter": 10,
+                "after_signal_filter": 5,
+                "output_count": 1,
+            },
         }
         _assert_invalid(data, schema)
 
@@ -548,11 +646,23 @@ class TestPatternMismatch:
             "state_id": VALID_UUID,
             "candidates": [{
                 "symbol": "btcusdt",  # 小写
-                "heat_score": 80,
-                "source_url": VALID_URI,
+                "quote_volume_24h": 100000000,
+                "price_change_pct": 5.0,
+                "amplitude_pct": 10.0,
+                "volume_surge_ratio": 2.0,
+                "rsi": 55.0,
+                "ema_bullish": True,
+                "macd_bullish": False,
+                "signal_score": 50,
                 "collected_at": VALID_DATETIME,
             }],
             "pipeline_run_id": VALID_UUID,
+            "filter_summary": {
+                "total_tickers": 100,
+                "after_base_filter": 10,
+                "after_signal_filter": 5,
+                "output_count": 1,
+            },
         }
         _assert_invalid(data, schema)
 
@@ -572,12 +682,12 @@ class TestPatternMismatch:
         _assert_invalid(data, schema)
 
     def test_symbol_single_char_prefix(self):
-        """symbol 前缀仅 1 个字符（低于最少 2 个）应被拒绝。"""
+        """symbol 前缀为空（仅 USDT）应被拒绝。"""
         schema = _load_schema("skill3_output.json")
         data = {
             "state_id": VALID_UUID,
             "trade_plans": [{
-                "symbol": "XUSDT",  # 前缀仅 1 个字符
+                "symbol": "USDT",  # 前缀为空
                 "direction": "long",
                 "entry_price_upper": 100.0,
                 "entry_price_lower": 90.0,
@@ -591,13 +701,13 @@ class TestPatternMismatch:
         _assert_invalid(data, schema)
 
     def test_symbol_too_long_prefix(self):
-        """symbol 前缀超过 10 个字符应被拒绝。"""
+        """symbol 前缀超过 20 个字符应被拒绝。"""
         schema = _load_schema("skill4_output.json")
         data = {
             "state_id": VALID_UUID,
             "execution_results": [{
                 "order_id": "ORD001",
-                "symbol": "ABCDEFGHIJKUSDT",  # 前缀 11 个字符
+                "symbol": "ABCDEFGHIJKLMNOPQRSTUUSDT",  # 前缀 21 个字符
                 "direction": "short",
                 "status": "filled",
                 "executed_at": VALID_DATETIME,
@@ -606,18 +716,30 @@ class TestPatternMismatch:
         }
         _assert_invalid(data, schema)
 
-    def test_symbol_with_numbers(self):
-        """symbol 包含数字应被拒绝（pattern 仅允许大写字母）。"""
+    def test_symbol_with_special_chars_in_output(self):
+        """skill1_output symbol 包含特殊字符应被拒绝。"""
         schema = _load_schema("skill1_output.json")
         data = {
             "state_id": VALID_UUID,
             "candidates": [{
-                "symbol": "BTC123USDT",  # 包含数字
-                "heat_score": 50,
-                "source_url": VALID_URI,
+                "symbol": "BTC-USDT",  # 包含连字符
+                "quote_volume_24h": 100000000,
+                "price_change_pct": 5.0,
+                "amplitude_pct": 10.0,
+                "volume_surge_ratio": 2.0,
+                "rsi": 55.0,
+                "ema_bullish": True,
+                "macd_bullish": False,
+                "signal_score": 50,
                 "collected_at": VALID_DATETIME,
             }],
             "pipeline_run_id": VALID_UUID,
+            "filter_summary": {
+                "total_tickers": 100,
+                "after_base_filter": 10,
+                "after_signal_filter": 5,
+                "output_count": 1,
+            },
         }
         _assert_invalid(data, schema)
 
@@ -717,7 +839,6 @@ class TestAdditionalProperties:
         schema = _load_schema("skill1_input.json")
         data = {
             "trigger_time": VALID_DATETIME,
-            "search_keywords": ["BTC"],
             "extra_field": "not_allowed",  # 额外字段
         }
         _assert_invalid(data, schema)
@@ -729,11 +850,23 @@ class TestAdditionalProperties:
             "state_id": VALID_UUID,
             "candidates": [{
                 "symbol": "BTCUSDT",
-                "heat_score": 80,
-                "source_url": VALID_URI,
+                "quote_volume_24h": 100000000,
+                "price_change_pct": 5.0,
+                "amplitude_pct": 10.0,
+                "volume_surge_ratio": 2.0,
+                "rsi": 55.0,
+                "ema_bullish": True,
+                "macd_bullish": False,
+                "signal_score": 50,
                 "collected_at": VALID_DATETIME,
                 "extra": True,  # 额外字段
             }],
             "pipeline_run_id": VALID_UUID,
+            "filter_summary": {
+                "total_tickers": 100,
+                "after_base_filter": 10,
+                "after_signal_filter": 5,
+                "output_count": 1,
+            },
         }
         _assert_invalid(data, schema)

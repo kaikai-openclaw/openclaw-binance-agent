@@ -216,9 +216,18 @@ class Skill5Evolve(BaseSkill):
             direction_str = result.get("direction", "long")
             direction = TradeDirection(direction_str)
 
-            # 使用执行价格作为入场和平仓价格（简化处理）
-            exit_price = entry_price
-            pnl_amount = result.get("pnl_amount", 0.0)
+            # 优先使用 Skill-4 传递的入场/平仓价格，缺失时回退到 executed_price
+            entry_price = result.get("entry_price", entry_price)
+            exit_price = result.get("exit_price", entry_price)
+
+            # 优先使用上游计算的 pnl；缺失时按价格差重算
+            pnl_amount = result.get("pnl_amount")
+            if pnl_amount is None:
+                if direction == TradeDirection.LONG:
+                    pnl_amount = (exit_price - entry_price) * quantity
+                else:
+                    pnl_amount = (entry_price - exit_price) * quantity
+
             hold_duration = result.get("hold_duration_hours", 0.0)
             rating_score = result.get("rating_score", 6)
             position_size_pct = result.get("position_size_pct", 0.0)

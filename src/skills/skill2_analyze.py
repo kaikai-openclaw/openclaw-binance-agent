@@ -26,8 +26,8 @@ AnalyzerFn = Callable[[str, dict[str, Any]], dict[str, Any]]
 # 默认评级过滤阈值
 DEFAULT_RATING_THRESHOLD = 6
 
-# TradingAgents 分析超时（秒）
-ANALYSIS_TIMEOUT = 30
+# TradingAgents 分析超时（秒），30 分钟以满足多智能体深度辩论
+ANALYSIS_TIMEOUT = 1800
 
 
 class TradingAgentsModule:
@@ -148,6 +148,7 @@ class Skill2Analyze(BaseSkill):
 
         # 步骤 2：逐一分析每个候选币种
         all_ratings: list[dict[str, Any]] = []
+        failed_symbols: list[dict[str, str]] = []  # 记录失败的币种和原因
         for candidate in candidates:
             symbol = candidate.get("symbol", "")
             if not symbol:
@@ -169,11 +170,13 @@ class Skill2Analyze(BaseSkill):
             except TimeoutError:
                 # 需求 2.6：超时跳过，记录日志
                 log.warning(f"[{self.name}] {symbol} 分析超时，已跳过")
+                failed_symbols.append({"symbol": symbol, "reason": "分析超时"})
             except Exception as exc:
                 # 需求 2.7：错误跳过，记录日志，继续处理剩余币种
                 log.warning(
                     f"[{self.name}] {symbol} 分析失败: {exc}，已跳过"
                 )
+                failed_symbols.append({"symbol": symbol, "reason": str(exc)[:100]})
 
         # 步骤 3：过滤评级分低于阈值的币种
         filtered_ratings = [
@@ -194,6 +197,13 @@ class Skill2Analyze(BaseSkill):
             "state_id": str(uuid.uuid4()),
             "ratings": filtered_ratings,
             "filtered_count": filtered_count,
+            "failed_symbols": failed_symbols,
+            "analysis_summary": (
+                f"候选 {len(candidates)} 个，"
+                f"分析成功 {len(all_ratings)} 个，"
+                f"通过评级 {len(filtered_ratings)} 个，"
+                f"失败 {len(failed_symbols)} 个"
+            ),
         }
 
         return output
@@ -250,4 +260,5 @@ class Skill2Analyze(BaseSkill):
             "rating_score": rating_score,
             "signal": signal,
             "confidence": confidence,
+            "comment": result.get("comment", ""),
         }

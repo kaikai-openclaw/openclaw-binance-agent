@@ -235,13 +235,15 @@ BTCUSDT 做多止损触发
 
 ## 6. Pipeline 流程详解
 
-### 6.1 Skill-1：信息收集与候选筛选
+### 6.1 Skill-1：Binance 量化数据采集与候选筛选
 
-- 调用 websearch 检索加密货币市场热点
-- 调用 xurl 抓取结构化数据
-- 为每条数据标注 `source_url` 和 `collected_at`（防幻觉）
-- 失败后 60 秒重试，最多 3 次
-- 输出：候选币种列表（symbol + heat_score + 来源信息）
+- 调用 Binance 合约公开 API（无需 API Key）
+- Step 0: 获取可交易交易对（exchangeInfo）
+- Step 1: 大盘过滤（ticker/24hr 成交额、振幅、涨幅区间）
+- Step 2: 活跃度异动（K线量比，短期/长期成交量对比）
+- Step 3: 技术指标多因子评分（RSI + EMA 多头排列 + MACD）
+- 按综合评分排序，输出 top N 候选
+- 输出：候选币种列表（symbol + 量化指标 + signal_score）
 
 ### 6.2 Skill-2：深度分析与评级
 
@@ -404,7 +406,7 @@ SQLite 表 `reflection_logs`：
 
 | 组件 | 注入点 | 说明 |
 |------|--------|------|
-| 信息源 | Skill1Collect(searcher, fetcher) | 替换为 OpenClaw websearch/xurl |
+| 信息源 | Skill1Collect(client) | 注入 BinancePublicClient 实例 |
 | 分析引擎 | TradingAgentsModule(analyzer) | 替换为 TradingAgents 实际调用 |
 | 交易客户端 | Skill4Execute(binance_client) | 替换为真实 BinanceFapiClient |
 | 账户状态 | account_state_provider 回调 | 替换为实时 API 查询 |

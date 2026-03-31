@@ -2,7 +2,13 @@ import requests
 import json
 import os
 
-API_KEY = os.environ.get("GOOGLE_API_KEY", "REDACTED_GOOGLE_API_KEY")
+from dotenv import load_dotenv
+
+load_dotenv()
+
+API_KEY = os.environ.get("GOOGLE_API_KEY", "")
+if not API_KEY:
+    raise RuntimeError("GOOGLE_API_KEY 未设置，请在 .env 文件中配置")
 
 def get_hot_coins(top=3):
     r = requests.get("https://fapi.binance.com/fapi/v1/ticker/24hr", timeout=10)

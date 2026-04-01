@@ -15,7 +15,7 @@ import logging
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Callable
+from typing import Callable, List
 
 from src.infra.binance_fapi import BinanceFapiClient
 from src.infra.risk_controller import RiskController
@@ -109,7 +109,7 @@ class Skill4Execute(BaseSkill):
             f"input_state_id={input_state_id}"
         )
 
-        execution_results: list[dict] = []
+        execution_results: List[dict] = []
 
         # 步骤 2：日亏损检查（需求 4.11）
         account = self._account_state_provider()
@@ -313,6 +313,8 @@ class Skill4Execute(BaseSkill):
         consecutive_errors = 0
         max_consecutive_errors = 10  # 连续错误上限，防止无限循环
         position_opened = False
+        # 服务端条件单是否已挂载（入场成交后才挂）
+        server_sl_tp_placed = False
 
         while True:
             # 轮询间隔
@@ -344,6 +346,7 @@ class Skill4Execute(BaseSkill):
                             reason="entry_order_unconfirmed",
                             start_time=start_time,
                         )
+                    self._cancel_algo_orders_safe(symbol)
                     return self._close_position(
                         symbol, close_side, quantity, "monitor_error", start_time
                     )
@@ -352,6 +355,7 @@ class Skill4Execute(BaseSkill):
                 if elapsed >= max_hold_seconds:
                     if not position_opened:
                         self._cancel_entry_order(symbol)
+                        self._cancel_algo_orders_safe(symbol)
                         return self._make_monitor_result(
                             status=OrderStatus.EXECUTION_FAILED.value,
                             close_price=0.0,
@@ -359,6 +363,7 @@ class Skill4Execute(BaseSkill):
                             reason="entry_not_filled_timeout",
                             start_time=start_time,
                         )
+                    self._cancel_algo_orders_safe(symbol)
                     return self._close_position(
                         symbol, close_side, quantity, "timeout", start_time
                     )
@@ -366,12 +371,25 @@ class Skill4Execute(BaseSkill):
 
             current_price = pos_risk.mark_price
             position_amt = abs(pos_risk.position_amt)
-            if position_amt > 0:
+
+            # 入场成交检测：首次观测到持仓后挂服务端止损/止盈单
+            if position_amt > 0 and not position_opened:
+                position_opened = True
+                server_sl_tp_placed = self._place_server_sl_tp(
+                    symbol=symbol,
+                    close_side=close_side,
+                    quantity=position_amt,
+                    stop_loss_price=stop_loss_price,
+                    take_profit_price=take_profit_price,
+                )
+            elif position_amt > 0:
                 position_opened = True
 
             # 持仓为 0：要区分“未成交”与“已开仓后被平”
             if position_amt == 0:
                 if position_opened:
+                    # 持仓被清零（可能是服务端条件单触发），清理残留条件单
+                    self._cancel_algo_orders_safe(symbol)
                     log.info(f"[{self.name}] {symbol} 持仓已清零")
                     return self._make_monitor_result(
                         status=OrderStatus.FILLED.value,
@@ -386,6 +404,7 @@ class Skill4Execute(BaseSkill):
                     elapsed = time.monotonic() - start_time
                     if elapsed >= max_hold_seconds:
                         self._cancel_entry_order(symbol)
+                        self._cancel_algo_orders_safe(symbol)
                         return self._make_monitor_result(
                             status=OrderStatus.EXECUTION_FAILED.value,
                             close_price=0.0,
@@ -414,6 +433,7 @@ class Skill4Execute(BaseSkill):
                 self._risk_controller.record_stop_loss(
                     symbol, direction.value
                 )
+                self._cancel_algo_orders_safe(symbol)
                 return self._close_position(
                     symbol, close_side, position_amt, "stop_loss", start_time
                 )
@@ -424,6 +444,7 @@ class Skill4Execute(BaseSkill):
                     f"[{self.name}] {symbol} 触发止盈: "
                     f"当前价={current_price}, 止盈价={take_profit_price}"
                 )
+                self._cancel_algo_orders_safe(symbol)
                 return self._close_position(
                     symbol, close_side, position_amt, "take_profit", start_time
                 )
@@ -437,6 +458,7 @@ class Skill4Execute(BaseSkill):
                 )
                 if not position_opened:
                     self._cancel_entry_order(symbol)
+                    self._cancel_algo_orders_safe(symbol)
                     return self._make_monitor_result(
                         status=OrderStatus.EXECUTION_FAILED.value,
                         close_price=0.0,
@@ -444,6 +466,7 @@ class Skill4Execute(BaseSkill):
                         reason="entry_not_filled_timeout",
                         start_time=start_time,
                     )
+                self._cancel_algo_orders_safe(symbol)
                 return self._close_position(
                     symbol, close_side, position_amt, "timeout", start_time
                 )
@@ -459,6 +482,7 @@ class Skill4Execute(BaseSkill):
                 )
                 if not position_opened:
                     self._cancel_entry_order(symbol)
+                    self._cancel_algo_orders_safe(symbol)
                     return self._make_monitor_result(
                         status=OrderStatus.EXECUTION_FAILED.value,
                         close_price=0.0,
@@ -466,6 +490,7 @@ class Skill4Execute(BaseSkill):
                         reason="daily_loss_before_fill",
                         start_time=start_time,
                     )
+                self._cancel_algo_orders_safe(symbol)
                 return self._close_position(
                     symbol,
                     close_side,
@@ -609,6 +634,75 @@ class Skill4Execute(BaseSkill):
             # 无法确认挂单状态时保守等待，避免误判失败
             log.warning(f"[{self.name}] {symbol} 查询挂单状态失败: {exc}")
             return True
+
+    def _place_server_sl_tp(
+        self,
+        symbol: str,
+        close_side: str,
+        quantity: float,
+        stop_loss_price: float,
+        take_profit_price: float,
+    ) -> bool:
+        """
+        在 Binance 服务端挂止损 + 止盈条件单（双重保护）。
+
+        仅在入场成交后调用，使用实际持仓数量，避免数量不匹配。
+        任一条件单挂载失败不影响另一张，本地轮询作为兜底。
+
+        返回:
+            True 表示至少一张条件单挂载成功
+        """
+        success = False
+
+        # 挂止损单 (STOP_MARKET)
+        try:
+            sl_result = self._binance_client.place_stop_market_order(
+                symbol=symbol,
+                side=close_side,
+                quantity=quantity,
+                stop_price=stop_loss_price,
+            )
+            log.info(
+                f"[{self.name}] {symbol} 服务端止损单已挂载: "
+                f"triggerPrice={stop_loss_price}, qty={quantity}, "
+                f"algoId={sl_result.order_id}"
+            )
+            success = True
+        except Exception as exc:
+            log.warning(
+                f"[{self.name}] {symbol} 服务端止损单挂载失败: {exc}，"
+                f"将依赖本地轮询兜底"
+            )
+
+        # 挂止盈单 (TAKE_PROFIT_MARKET)
+        try:
+            tp_result = self._binance_client.place_take_profit_market_order(
+                symbol=symbol,
+                side=close_side,
+                quantity=quantity,
+                stop_price=take_profit_price,
+            )
+            log.info(
+                f"[{self.name}] {symbol} 服务端止盈单已挂载: "
+                f"triggerPrice={take_profit_price}, qty={quantity}, "
+                f"algoId={tp_result.order_id}"
+            )
+            success = True
+        except Exception as exc:
+            log.warning(
+                f"[{self.name}] {symbol} 服务端止盈单挂载失败: {exc}，"
+                f"将依赖本地轮询兜底"
+            )
+
+        return success
+
+    def _cancel_algo_orders_safe(self, symbol: str) -> None:
+        """安全清理指定币种的所有 Algo 条件单，防止残留。"""
+        try:
+            self._binance_client.cancel_all_algo_orders(symbol=symbol)
+            log.info(f"[{self.name}] {symbol} 已清理 Algo 条件单")
+        except Exception as exc:
+            log.warning(f"[{self.name}] {symbol} 清理 Algo 条件单失败: {exc}")
 
     def _cancel_entry_order(self, symbol: str) -> None:
         """在入场未成交超时场景主动撤销挂单。"""

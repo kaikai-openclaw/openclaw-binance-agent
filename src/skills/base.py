@@ -9,6 +9,7 @@ Skill 基类模块
 
 import logging
 import time
+from typing import Optional
 
 from jsonschema import Draft7Validator, FormatChecker, ValidationError
 
@@ -24,7 +25,7 @@ class SchemaValidationError(Exception):
     包含校验错误详情，用于区分输入校验失败和输出校验失败。
     """
 
-    def __init__(self, message: str, errors: list[str] | None = None) -> None:
+    def __init__(self, message: str, errors: Optional[list[str]] = None) -> None:
         super().__init__(message)
         self.errors = errors or []
 
@@ -65,7 +66,7 @@ class BaseSkill:
         # 子类应覆盖此属性
         self.name: str = self.__class__.__name__
 
-    def execute(self, input_state_id: str | None = None) -> str:
+    def execute(self, input_state_id: Optional[str] = None) -> str:
         """
         执行 Skill 的标准流程：
         1. 从 State_Store 加载输入数据（若有 input_state_id）

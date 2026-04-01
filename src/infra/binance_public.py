@@ -12,7 +12,7 @@ Binance 公开市场数据客户端
 
 import logging
 import time
-from typing import Any
+from typing import Any, Dict, List, Optional
 
 import requests
 
@@ -36,8 +36,8 @@ class BinancePublicClient:
     def __init__(
         self,
         base_url: str = "https://fapi.binance.com",
-        rate_limiter: RateLimiter | None = None,
-        proxy: str | None = None,
+        rate_limiter: Optional[RateLimiter] = None,
+        proxy: Optional[str] = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.rate_limiter = rate_limiter or RateLimiter()
@@ -47,10 +47,10 @@ class BinancePublicClient:
         if _proxy:
             self._session.proxies = {"http": _proxy, "https": _proxy}
 
-    def _get(self, path: str, params: dict | None = None) -> Any:
+    def _get(self, path: str, params: Optional[dict] = None) -> Any:
         """带限流和退避重试的 GET 请求。"""
         url = f"{self.base_url}{path}"
-        last_err: Exception | None = None
+        last_err: Optional[Exception] = None
 
         for attempt in range(_MAX_RETRIES):
             try:
@@ -72,17 +72,17 @@ class BinancePublicClient:
 
     # ── 公开端点 ──────────────────────────────────────────
 
-    def get_exchange_info(self) -> dict[str, Any]:
+    def get_exchange_info(self) -> Dict[str, Any]:
         """获取交易所信息，用于过滤可交易状态的交易对。"""
         return self._get("/fapi/v1/exchangeInfo")
 
-    def get_tickers_24hr(self) -> list[dict[str, Any]]:
+    def get_tickers_24hr(self) -> List[Dict[str, Any]]:
         """获取所有交易对的 24 小时行情。"""
         return self._get("/fapi/v1/ticker/24hr")
 
     def get_klines(
         self, symbol: str, interval: str = "4h", limit: int = 100
-    ) -> list[list]:
+    ) -> List[list]:
         """
         获取 K 线数据。
 

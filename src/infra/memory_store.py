@@ -10,6 +10,8 @@ import os
 import sqlite3
 from datetime import datetime, timezone
 
+from typing import List, Optional
+
 from src.models.types import (
     ReflectionLog,
     StrategyStats,
@@ -121,7 +123,7 @@ class MemoryStore:
         )
         self._conn.commit()
 
-    def get_recent_trades(self, limit: int = 50) -> list[TradeRecord]:
+    def get_recent_trades(self, limit: int = 50) -> List[TradeRecord]:
         """
         获取最近 N 笔交易记录，按平仓时间倒序。
 
@@ -153,7 +155,7 @@ class MemoryStore:
             for row in rows
         ]
 
-    def compute_stats(self, trades: list[TradeRecord]) -> StrategyStats:
+    def compute_stats(self, trades: List[TradeRecord]) -> StrategyStats:
         """
         计算策略胜率和平均盈亏比。
 
@@ -212,7 +214,7 @@ class MemoryStore:
         )
         self._conn.commit()
 
-    def get_latest_reflection(self) -> ReflectionLog | None:
+    def get_latest_reflection(self) -> Optional[ReflectionLog]:
         """
         获取最新的反思日志。
 

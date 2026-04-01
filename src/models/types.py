@@ -8,6 +8,7 @@
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
+from typing import List, Optional
 import logging
 
 log = logging.getLogger(__name__)
@@ -255,8 +256,8 @@ def calculate_pnl_ratio(
 
 
 def compute_evolution_adjustment(
-    trades: list[TradeRecord],
-) -> ReflectionLog | None:
+    trades: List[TradeRecord],
+) -> Optional[ReflectionLog]:
     """
     基于最近 50 笔交易计算策略调优建议。
 

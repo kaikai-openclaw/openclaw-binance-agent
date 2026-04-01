@@ -23,7 +23,7 @@ import logging
 import math
 import uuid
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from src.infra.state_store import StateStore
 from src.skills.base import BaseSkill
@@ -84,7 +84,7 @@ WEIGHT_LIQUIDITY = 15
 # 技术指标计算（纯函数，无副作用）
 # ══════════════════════════════════════════════════════════
 
-def calc_ema(closes: list[float], period: int) -> list[float]:
+def calc_ema(closes: List[float], period: int) -> List[float]:
     """计算 EMA 序列。返回与 closes 等长的列表，前 period-1 个为 NaN。"""
     if len(closes) < period:
         return [float("nan")] * len(closes)
@@ -102,7 +102,7 @@ def calc_ema(closes: list[float], period: int) -> list[float]:
     return ema
 
 
-def calc_rsi(closes: list[float], period: int = RSI_PERIOD) -> float | None:
+def calc_rsi(closes: List[float], period: int = RSI_PERIOD) -> Optional[float]:
     """计算最新 RSI 值。数据不足时返回 None。"""
     if len(closes) < period + 1:
         return None
@@ -130,11 +130,11 @@ def calc_rsi(closes: list[float], period: int = RSI_PERIOD) -> float | None:
 
 
 def calc_macd(
-    closes: list[float],
+    closes: List[float],
     fast: int = MACD_FAST,
     slow: int = MACD_SLOW,
     signal_period: int = MACD_SIGNAL,
-) -> dict[str, float | None]:
+) -> Dict[str, Optional[float]]:
     """
     计算最新 MACD 值。
 
@@ -146,7 +146,7 @@ def calc_macd(
     ema_slow = calc_ema(closes, slow)
 
     # MACD line = EMA_fast - EMA_slow
-    macd_line_series: list[float] = []
+    macd_line_series: List[float] = []
     for f, s in zip(ema_fast, ema_slow):
         if math.isnan(f) or math.isnan(s):
             macd_line_series.append(float("nan"))
@@ -173,7 +173,7 @@ def calc_macd(
     }
 
 
-def calc_volume_surge(volumes: list[float], short_w: int = VOLUME_SHORT_WINDOW, long_w: int = VOLUME_LONG_WINDOW) -> float | None:
+def calc_volume_surge(volumes: List[float], short_w: int = VOLUME_SHORT_WINDOW, long_w: int = VOLUME_LONG_WINDOW) -> Optional[float]:
     """计算量比：近 short_w 根均量 / 近 long_w 根均量。数据不足返回 None。"""
     if len(volumes) < long_w:
         return None
@@ -185,7 +185,7 @@ def calc_volume_surge(volumes: list[float], short_w: int = VOLUME_SHORT_WINDOW, 
     return short_avg / long_avg
 
 
-def calc_atr(highs: list[float], lows: list[float], closes: list[float], period: int = ATR_PERIOD) -> float | None:
+def calc_atr(highs: List[float], lows: List[float], closes: List[float], period: int = ATR_PERIOD) -> Optional[float]:
     """
     计算 ATR（Average True Range）。
 
@@ -214,7 +214,7 @@ def calc_atr(highs: list[float], lows: list[float], closes: list[float], period:
     return atr
 
 
-def calc_adx(highs: list[float], lows: list[float], closes: list[float], period: int = ADX_PERIOD) -> float | None:
+def calc_adx(highs: List[float], lows: List[float], closes: List[float], period: int = ADX_PERIOD) -> Optional[float]:
     """
     计算 ADX（Average Directional Index）。
 
@@ -286,14 +286,14 @@ def calc_adx(highs: list[float], lows: list[float], closes: list[float], period:
     return adx
 
 
-def calc_returns(closes: list[float]) -> list[float]:
+def calc_returns(closes: List[float]) -> List[float]:
     """计算收益率序列，用于相关性计算。"""
     if len(closes) < 2:
         return []
     return [(closes[i] / closes[i - 1]) - 1.0 for i in range(1, len(closes))]
 
 
-def calc_correlation(returns_a: list[float], returns_b: list[float]) -> float:
+def calc_correlation(returns_a: List[float], returns_b: List[float]) -> float:
     """计算两个收益率序列的 Pearson 相关系数。数据不足返回 0。"""
     n = min(len(returns_a), len(returns_b))
     if n < 10:
@@ -389,9 +389,9 @@ class Skill1Collect(BaseSkill):
             max_quote_volume = 1.0
 
         # ── Step 2 + 3: 逐币种计算量比和技术指标 ──
-        scored: list[dict] = []
+        scored: List[dict] = []
         # 保存收益率序列用于 Step 4 相关性去重
-        returns_map: dict[str, list[float]] = {}
+        returns_map: Dict[str, List[float]] = {}
 
         for item in pool:
             symbol = item["symbol"]
@@ -470,7 +470,7 @@ class Skill1Collect(BaseSkill):
 
     # ── 内部方法 ──────────────────────────────────────────
 
-    def _get_tradable_symbols(self) -> set[str]:
+    def _get_tradable_symbols(self) -> Set[str]:
         """获取当前可交易的 USDT 永续合约交易对集合。"""
         try:
             info = self._client.get_exchange_info()
@@ -487,7 +487,7 @@ class Skill1Collect(BaseSkill):
             log.warning("[skill1] 获取 exchangeInfo 失败: %s, 跳过交易状态过滤", exc)
             return set()
 
-    def _build_target_pool(self, target_symbols: list[str]) -> tuple[list[dict], int]:
+    def _build_target_pool(self, target_symbols: List[str]) -> Tuple[List[dict], int]:
         """
         指定币种模式：根据用户输入的币种列表构建 pool。
 
@@ -541,13 +541,13 @@ class Skill1Collect(BaseSkill):
 
     def _filter_tickers(
         self,
-        tickers: list[dict],
-        tradable: set[str],
+        tickers: List[dict],
+        tradable: Set[str],
         min_qv: float,
         min_amp: float,
         pc_min: float,
         pc_max: float,
-    ) -> list[dict]:
+    ) -> List[dict]:
         """
         Step 1: 大盘过滤。
 
@@ -606,9 +606,9 @@ class Skill1Collect(BaseSkill):
 
     def _calc_signal_score(
         self,
-        closes: list[float],
-        highs: list[float],
-        lows: list[float],
+        closes: List[float],
+        highs: List[float],
+        lows: List[float],
         quote_volume: float,
         max_quote_volume: float,
     ) -> dict:
@@ -684,7 +684,7 @@ class Skill1Collect(BaseSkill):
     # ── RSI 连续化评分 ────────────────────────────────────
 
     @staticmethod
-    def _score_rsi_long(rsi: float | None) -> float:
+    def _score_rsi_long(rsi: Optional[float]) -> float:
         """做多 RSI 评分（满分 WEIGHT_RSI=30）。RSI 越低（超卖）分越高。"""
         if rsi is None:
             return 0.0
@@ -698,7 +698,7 @@ class Skill1Collect(BaseSkill):
         return WEIGHT_RSI * (1.0 - (rsi - RSI_OVERSOLD) / (RSI_OVERBOUGHT - RSI_OVERSOLD))
 
     @staticmethod
-    def _score_rsi_short(rsi: float | None) -> float:
+    def _score_rsi_short(rsi: Optional[float]) -> float:
         """做空 RSI 评分（满分 WEIGHT_RSI=30）。RSI 越高（超买）分越高。"""
         if rsi is None:
             return 0.0
@@ -711,7 +711,7 @@ class Skill1Collect(BaseSkill):
     # ── EMA 评分 ──────────────────────────────────────────
 
     @staticmethod
-    def _score_ema_long(close: float, ema20: float | None, ema50: float | None) -> float:
+    def _score_ema_long(close: float, ema20: Optional[float], ema50: Optional[float]) -> float:
         """做多 EMA 评分（满分 WEIGHT_EMA=20）。"""
         if ema20 is None or ema50 is None:
             return 0.0
@@ -722,7 +722,7 @@ class Skill1Collect(BaseSkill):
         return 0.0
 
     @staticmethod
-    def _score_ema_short(close: float, ema20: float | None, ema50: float | None) -> float:
+    def _score_ema_short(close: float, ema20: Optional[float], ema50: Optional[float]) -> float:
         """做空 EMA 评分（满分 WEIGHT_EMA=20）。"""
         if ema20 is None or ema50 is None:
             return 0.0
@@ -735,7 +735,7 @@ class Skill1Collect(BaseSkill):
     # ── MACD 评分 ─────────────────────────────────────────
 
     @staticmethod
-    def _score_macd_long(ml: float | None, sl: float | None, hist: float | None) -> float:
+    def _score_macd_long(ml: Optional[float], sl: Optional[float], hist: Optional[float]) -> float:
         """做多 MACD 评分（满分 WEIGHT_MACD=20）。"""
         if ml is None or sl is None or hist is None:
             return 0.0
@@ -746,7 +746,7 @@ class Skill1Collect(BaseSkill):
         return 0.0
 
     @staticmethod
-    def _score_macd_short(ml: float | None, sl: float | None, hist: float | None) -> float:
+    def _score_macd_short(ml: Optional[float], sl: Optional[float], hist: Optional[float]) -> float:
         """做空 MACD 评分（满分 WEIGHT_MACD=20）。"""
         if ml is None or sl is None or hist is None:
             return 0.0
@@ -759,7 +759,7 @@ class Skill1Collect(BaseSkill):
     # ── ADX 评分 ──────────────────────────────────────────
 
     @staticmethod
-    def _score_adx(adx: float | None) -> float:
+    def _score_adx(adx: Optional[float]) -> float:
         """ADX 趋势强度评分（满分 WEIGHT_ADX=15）。ADX 越高分越高。"""
         if adx is None:
             return 0.0
@@ -786,18 +786,18 @@ class Skill1Collect(BaseSkill):
 
     @staticmethod
     def _deduplicate_by_correlation(
-        scored: list[dict],
-        returns_map: dict[str, list[float]],
+        scored: List[dict],
+        returns_map: Dict[str, List[float]],
         max_cands: int,
-    ) -> list[dict]:
+    ) -> List[dict]:
         """
         Step 4: 相关性去重。
 
         从已排序的候选列表中，逐个加入结果集。
         如果新候选与已选中的任一候选相关系数 > 阈值，则跳过。
         """
-        selected: list[dict] = []
-        selected_returns: list[list[float]] = []
+        selected: List[dict] = []
+        selected_returns: List[List[float]] = []
 
         for item in scored:
             if len(selected) >= max_cands:

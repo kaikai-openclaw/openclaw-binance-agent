@@ -11,7 +11,7 @@ RiskController 和 account_state_provider 通过构造函数注入，便于测�
 
 import logging
 import uuid
-from typing import Any, Callable
+from typing import Any, Callable, Dict, List, Optional
 
 from src.infra.risk_controller import RiskController
 from src.infra.state_store import StateStore
@@ -44,7 +44,7 @@ ENTRY_SPREAD_MIN = 0.01    # 最窄区间（置信度 100% 时）
 ENTRY_SPREAD_MAX = 0.05    # 最宽区间（置信度 0% 时）
 
 # 市场价格提供者类型：接收 symbol，返回当前市场价格
-MarketPriceProvider = Callable[[str], float | None]
+MarketPriceProvider = Callable[[str], Optional[float]]
 
 # 账户状态提供者类型：无参数调用，返回 AccountState
 AccountStateProvider = Callable[[], AccountState]
@@ -68,7 +68,7 @@ class Skill3Strategy(BaseSkill):
         output_schema: dict,
         risk_controller: RiskController,
         account_state_provider: AccountStateProvider,
-        market_price_provider: MarketPriceProvider | None = None,
+        market_price_provider: Optional[MarketPriceProvider] = None,
         risk_ratio: float = DEFAULT_RISK_RATIO,
         max_hold_hours: float = DEFAULT_MAX_HOLD_HOURS,
         leverage: int = DEFAULT_LEVERAGE,
@@ -139,7 +139,7 @@ class Skill3Strategy(BaseSkill):
         account = self._account_state_provider()
 
         # 步骤 4 & 5：为每个目标币种生成交易计划
-        trade_plans: list[dict[str, Any]] = []
+        trade_plans: List[Dict[str, Any]] = []
         for rating in ratings:
             plan = self._generate_trade_plan(rating, account)
             if plan is not None:
@@ -167,8 +167,8 @@ class Skill3Strategy(BaseSkill):
         return output
 
     def _generate_trade_plan(
-        self, rating: dict[str, Any], account: AccountState
-    ) -> dict[str, Any] | None:
+        self, rating: Dict[str, Any], account: AccountState
+    ) -> Optional[Dict[str, Any]]:
         """
         为单个目标币种生成交易计划。
 
@@ -358,7 +358,7 @@ class Skill3Strategy(BaseSkill):
         current_quantity: float,
         current_pct: float,
         account: AccountState,
-    ) -> dict[str, Any] | None:
+    ) -> Optional[Dict[str, Any]]:
         """
         尝试逐步裁剪头寸规模直到通过风控校验。
 

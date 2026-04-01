@@ -14,6 +14,7 @@ Risk_Controller 风控拦截层模块
 
 import logging
 from datetime import datetime, timedelta
+from typing import List, Tuple
 
 from src.models.types import (
     AccountState,
@@ -42,7 +43,7 @@ class RiskController:
         # 模拟盘模式标志
         self._paper_mode: bool = False
         # 止损冷却记录：列表，每项为 (symbol, direction, timestamp)
-        self._stop_loss_records: list[tuple[str, str, datetime]] = []
+        self._stop_loss_records: List[Tuple[str, str, datetime]] = []
 
     def validate_order(
         self, order: OrderRequest, account: AccountState

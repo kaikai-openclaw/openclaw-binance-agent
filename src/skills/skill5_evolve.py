@@ -13,7 +13,7 @@ MemoryStore 和 account_state_provider 通过构造函数注入，便于测试�
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Callable
+from typing import Callable, List
 
 from src.infra.memory_store import MemoryStore
 from src.infra.state_store import StateStore
@@ -149,7 +149,7 @@ class Skill5Evolve(BaseSkill):
 
     def _build_positions_display(
         self, account: AccountState
-    ) -> list[dict]:
+    ) -> List[dict]:
         """
         构建持仓展示数据，计算每笔持仓的盈亏比例。
 
@@ -190,7 +190,7 @@ class Skill5Evolve(BaseSkill):
         return positions_display
 
     def _record_closed_trades(
-        self, execution_results: list[dict]
+        self, execution_results: List[dict]
     ) -> None:
         """
         提取平仓交易数据存入 Memory_Store。
@@ -326,7 +326,7 @@ class Skill5Evolve(BaseSkill):
     @staticmethod
     def _generate_markdown(
         account: AccountState,
-        positions: list[dict],
+        positions: List[dict],
         evolution: dict,
     ) -> str:
         """

@@ -13,6 +13,8 @@ import uuid
 from datetime import datetime, timezone
 
 
+from typing import List, Optional, Tuple
+
 class StateNotFoundError(Exception):
     """当指定的 state_id 在 State_Store 中不存在时抛出。"""
     pass
@@ -116,7 +118,7 @@ class StateStore:
             raise StateNotFoundError(f"状态 ID 不存在: {state_id}")
         return json.loads(row[0])
 
-    def get_latest(self, skill_name: str) -> tuple[str, dict]:
+    def get_latest(self, skill_name: str) -> Tuple[str, dict]:
         """
         获取指定 Skill 最近一次成功输出的 (state_id, data)。
 

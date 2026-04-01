@@ -2177,11 +2177,12 @@ class TestClosePositionTrigger:
                 take_profit_price=take_profit_price,
                 max_hold_hours=0.0,  # 0 小时 = 立即超时
                 quantity=10.0,
+                order_id="test_entry_123",
             )
 
-            # 不变量：超时平仓的 close_reason 应为 'timeout'
-            assert result["close_reason"] == "timeout", (
-                f"持仓超时应返回 close_reason='timeout'，实际为 '{result['close_reason']}'"
+            # 不变量：超时平仓的 reason 应为 'timeout'
+            assert result["reason"] == "timeout", (
+                f"持仓超时应返回 reason='timeout'，实际为 '{result['reason']}'"
             )
         finally:
             store.close()

@@ -12,6 +12,8 @@ import threading
 import time
 from urllib.parse import urlencode
 
+from typing import Dict, List, Optional, Set
+
 import requests
 
 from src.infra.rate_limiter import RateLimiter
@@ -54,7 +56,7 @@ def calculate_backoff(attempt: int) -> int:
 class OrderResult:
     """下单结果（普通订单 + Algo 条件单通用）。"""
     def __init__(self, order_id: str, symbol: str, side: str, price: float,
-                 quantity: float, status: str, raw: dict | None = None):
+                 quantity: float, status: str, raw: Optional[dict] = None):
         self.order_id = order_id
         self.symbol = symbol
         self.side = side
@@ -67,7 +69,7 @@ class OrderResult:
 class PositionInfo:
     """持仓信息。"""
     def __init__(self, symbol: str, position_amt: float, entry_price: float,
-                 unrealized_pnl: float, leverage: int, raw: dict | None = None):
+                 unrealized_pnl: float, leverage: int, raw: Optional[dict] = None):
         self.symbol = symbol
         self.position_amt = position_amt
         self.entry_price = entry_price
@@ -79,7 +81,7 @@ class PositionInfo:
 class AccountInfo:
     """账户信息。"""
     def __init__(self, total_balance: float, available_balance: float,
-                 total_unrealized_pnl: float, raw: dict | None = None):
+                 total_unrealized_pnl: float, raw: Optional[dict] = None):
         self.total_balance = total_balance
         self.available_balance = available_balance
         self.total_unrealized_pnl = total_unrealized_pnl
@@ -91,7 +93,7 @@ class PositionRisk:
     def __init__(self, symbol: str, position_amt: float, entry_price: float,
                  mark_price: float, unrealized_pnl: float,
                  liquidation_price: float, leverage: int,
-                 raw: dict | None = None):
+                 raw: Optional[dict] = None):
         self.symbol = symbol
         self.position_amt = position_amt
         self.entry_price = entry_price
@@ -125,8 +127,8 @@ class BinanceFapiClient:
         api_key: str,
         api_secret: str,
         base_url: str = "https://fapi.binance.com",
-        rate_limiter: RateLimiter | None = None,
-        proxy: str | None = None,
+        rate_limiter: Optional[RateLimiter] = None,
+        proxy: Optional[str] = None,
     ) -> None:
         self.api_key = api_key
         self.api_secret = api_secret
@@ -165,7 +167,7 @@ class BinanceFapiClient:
         params["signature"] = signature
         return params
 
-    def _request_with_retry(self, method: str, path: str, params: dict | None = None) -> dict:
+    def _request_with_retry(self, method: str, path: str, params: Optional[dict] = None) -> dict:
         """
         带指数退避重试的 HTTP 请求。
 
@@ -461,7 +463,7 @@ class BinanceFapiClient:
 
     def place_oco_stop_take_profit(self, symbol: str, side: str,
                                    quantity: float, stop_price: float,
-                                   take_profit_price: float) -> list[OrderResult]:
+                                   take_profit_price: float) -> List[OrderResult]:
         """
         一次性挂止损 + 止盈两张市价条件单（模拟 OCO）。
 
@@ -482,7 +484,7 @@ class BinanceFapiClient:
         tp = self.place_take_profit_market_order(symbol, side, quantity, take_profit_price)
         return [sl, tp]
 
-    def get_positions(self) -> list[PositionInfo]:
+    def get_positions(self) -> List[PositionInfo]:
         """获取当前所有未平仓持仓。"""
         data = self._request_with_retry("GET", "/fapi/v2/positionRisk")
         positions = []
@@ -509,7 +511,7 @@ class BinanceFapiClient:
             raw=data,
         )
 
-    def cancel_all_orders(self, symbol: str | None = None) -> int:
+    def cancel_all_orders(self, symbol: Optional[str] = None) -> int:
         """
         取消指定币种或全部未成交订单，返回取消数量。
 
@@ -525,7 +527,7 @@ class BinanceFapiClient:
 
         # 无指定 symbol 时，按 openOrders 覆盖所有有挂单币种
         cancelled = 0
-        symbols_to_cancel: set[str] = set()
+        symbols_to_cancel: Set[str] = set()
 
         try:
             open_orders = self.get_open_orders()
@@ -579,7 +581,7 @@ class BinanceFapiClient:
             raw=item,
         )
 
-    def get_open_orders(self, symbol: str | None = None) -> list[dict]:
+    def get_open_orders(self, symbol: Optional[str] = None) -> List[dict]:
         """
         获取未完成订单列表（普通订单）。
 
@@ -595,7 +597,7 @@ class BinanceFapiClient:
         data = self._request_with_retry("GET", "/fapi/v1/openOrders", params)
         return data if isinstance(data, list) else []
 
-    def get_open_algo_orders(self, symbol: str | None = None) -> list[dict]:
+    def get_open_algo_orders(self, symbol: Optional[str] = None) -> List[dict]:
         """
         获取未完成 Algo 条件单列表。
 

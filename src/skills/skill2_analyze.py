@@ -12,7 +12,7 @@ TradingAgentsModule 通过构造函数注入 analyzer 回调，便于测试时 m
 import logging
 import uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
-from typing import Any, Callable
+from typing import Any, Callable, Dict, List, Optional
 
 from src.infra.state_store import StateStore
 from src.skills.base import BaseSkill
@@ -21,7 +21,7 @@ log = logging.getLogger(__name__)
 
 # 类型别名：analyzer 接收 (symbol, market_data)，返回分析结果字典
 # 返回值应包含 {"rating_score": int, "signal": str, "confidence": float}
-AnalyzerFn = Callable[[str, dict[str, Any]], dict[str, Any]]
+AnalyzerFn = Callable[[str, Dict[str, Any]], Dict[str, Any]]
 
 # 默认评级过滤阈值
 DEFAULT_RATING_THRESHOLD = 6
@@ -52,7 +52,7 @@ class TradingAgentsModule:
         self._analyzer = analyzer
         self._executor = ThreadPoolExecutor(max_workers=1)
 
-    def analyze(self, symbol: str, market_data: dict) -> dict[str, Any]:
+    def analyze(self, symbol: str, market_data: dict) -> Dict[str, Any]:
         """
         对单个币种执行深度分析，30 秒超时自动终止。
 
@@ -147,8 +147,8 @@ class Skill2Analyze(BaseSkill):
         )
 
         # 步骤 2：逐一分析每个候选币种
-        all_ratings: list[dict[str, Any]] = []
-        failed_symbols: list[dict[str, str]] = []  # 记录失败的币种和原因
+        all_ratings: List[Dict[str, Any]] = []
+        failed_symbols: List[Dict[str, str]] = []  # 记录失败的币种和原因
         for candidate in candidates:
             symbol = candidate.get("symbol", "")
             if not symbol:
@@ -209,8 +209,8 @@ class Skill2Analyze(BaseSkill):
         return output
 
     def _extract_rating(
-        self, symbol: str, result: dict[str, Any]
-    ) -> dict[str, Any] | None:
+        self, symbol: str, result: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
         """
         从分析结果中提取评级信息。
 

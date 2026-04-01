@@ -12,10 +12,12 @@ TradingAgents 适配器
 import json
 import logging
 import os
+import re
 import time
 import requests
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from datetime import datetime
-from typing import Any
+from typing import Any, Dict, Optional
 
 from dotenv import load_dotenv
 
@@ -29,9 +31,9 @@ log = logging.getLogger(__name__)
 
 # ── 快速分析器（单次 LLM 调用）─────────────────────────────────────────────
 
-def _fetch_binance_ticker(symbol: str) -> dict[str, Any]:
+def _fetch_binance_ticker(symbol: str) -> Dict[str, Any]:
     """从 Binance fapi 获取单个币种的 24h tick 数据。"""
-    r = requests.get("https://fapi.binance.com/fapi/v1/ticker/24hr", timeout=10)
+    r = requests.get("https://fapi.binance.com/fapi/v1/ticker/24hr", timeout=15)
     for d in r.json():
         if d["symbol"] == symbol:
             return {
@@ -47,7 +49,20 @@ def _fetch_binance_ticker(symbol: str) -> dict[str, Any]:
 
 
 def _call_fast_llm(prompt: str) -> str:
-    """单次 LLM API 调用，返回文本响应。优先 Gemini，其次 MiniMax。"""
+    """单次 LLM API 调用，返回文本响应。优先 MiniMax，其次 Gemini。"""
+    minimax_key = os.environ.get("MINIMAX_API_KEY", "").strip()
+    if minimax_key:
+        resp = requests.post(
+            "https://api.minimaxi.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {minimax_key}"},
+            json={"model": "MiniMax-M2.7-highspeed",
+                  "messages": [{"role": "user", "content": prompt}]},
+            timeout=60,
+        )
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"]
+
+    # Fallback to Gemini
     google_key = os.environ.get("GOOGLE_API_KEY", "").strip()
     if google_key:
         from google.genai import Client
@@ -58,19 +73,49 @@ def _call_fast_llm(prompt: str) -> str:
         )
         return response.text
 
-    # Fallback to MiniMax OpenAI-compatible API
-    minimax_key = os.environ.get("MINIMAX_API_KEY", "").strip()
-    if not minimax_key:
-        raise ValueError("No LLM API key found (GOOGLE_API_KEY or MINIMAX_API_KEY)")
-    resp = requests.post(
-        "https://api.minimaxi.com/v1/chat/completions",
-        headers={"Authorization": f"Bearer {minimax_key}"},
-        json={"model": "MiniMax-M2.7-highspeed",
-              "messages": [{"role": "user", "content": prompt}]},
-        timeout=60,
-    )
-    resp.raise_for_status()
-    return resp.json()["choices"][0]["message"]["content"]
+    raise ValueError("No LLM API key found (MINIMAX_API_KEY or GOOGLE_API_KEY)")
+
+
+def _extract_json(text: str) -> dict:
+    """
+    从 LLM 返回的文本中提取第一个 JSON 对象。
+
+    处理常见情况：
+    - 纯 JSON
+    - JSON 前后有解释文字
+    - markdown code fence 包裹
+    - 多行格式化 JSON
+    """
+    # 先去掉 markdown code fence
+    text = re.sub(r"```(?:json)?\s*", "", text)
+
+    # 匹配第一个 { ... } 块（支持嵌套）
+    depth = 0
+    start = -1
+    for i, ch in enumerate(text):
+        if ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0 and start >= 0:
+                return json.loads(text[start:i + 1])
+
+    raise ValueError(f"未找到有效 JSON 对象: {text[:200]}")
+
+
+def _clean_llm_text(text: str) -> str:
+    """清理 LLM 输出中的 thinking 标签和 markdown 噪音，只保留纯文本摘要。"""
+    # 去掉 <think>...</think> 块（含多行）
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    # 去掉残留的单独标签
+    text = re.sub(r"</?think>", "", text)
+    # 去掉 markdown code fence
+    text = re.sub(r"```(?:json)?\s*", "", text)
+    # 压缩连续空行
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
 
 def create_fast_analyzer() -> callable:
@@ -85,9 +130,27 @@ def create_fast_analyzer() -> callable:
         analyzer(symbol, market_data) -> dict
     """
 
-    def analyzer(symbol: str, market_data: dict) -> dict[str, Any]:
+    def analyzer(symbol: str, market_data: dict) -> Dict[str, Any]:
         t0 = time.time()
-        ticker = _fetch_binance_ticker(symbol)
+
+        # 尝试获取实时行情，失败时用上游 market_data 兜底
+        try:
+            ticker = _fetch_binance_ticker(symbol)
+        except Exception as e:
+            log.warning(f"[FastAnalyzer] {symbol} Binance 行情获取失败: {e}, 使用上游 market_data 兜底")
+            ticker = {
+                "symbol": symbol,
+                "last_price": market_data.get("last_price", 0),
+                "price_change_pct": market_data.get("price_change_pct", 0),
+                "volume": market_data.get("volume", 0),
+                "quote_volume": market_data.get("quote_volume_24h", market_data.get("quote_volume", 0)),
+                "high_24h": market_data.get("high_24h", 0),
+                "low_24h": market_data.get("low_24h", 0),
+            }
+            if not ticker["last_price"]:
+                return {"rating_score": 5, "signal": "hold", "confidence": 30.0,
+                        "comment": f"[快速模式] Binance 行情获取失败且无兜底数据: {e}"}
+
         log.info(f"[FastAnalyzer] {symbol} 行情获取成功: {ticker['last_price']}, "
                  f"24h {ticker['price_change_pct']:+.2f}%")
 
@@ -107,11 +170,8 @@ def create_fast_analyzer() -> callable:
 
         try:
             raw = _call_fast_llm(prompt)
-            # 提取 JSON
-            start = raw.find("{")
-            end = raw.rfind("}") + 1
-            result = json.loads(raw[start:end])
-            result["comment"] = f"[快速模式] {raw.strip()[:300]}"
+            result = _extract_json(raw)
+            result["comment"] = f"[快速模式] {_clean_llm_text(raw)[:300]}"
             log.info(f"[FastAnalyzer] {symbol} 分析完成，耗时 {time.time()-t0:.1f}s: {result}")
             return result
         except Exception as e:
@@ -129,7 +189,7 @@ def create_trading_agents_analyzer(
     llm_provider: str = "minimax",
     deep_think_llm: str = "MiniMax-M2.7-highspeed",
     quick_think_llm: str = "MiniMax-M2.7-highspeed",
-    backend_url: str | None = None,
+    backend_url: Optional[str] = None,
     max_debate_rounds: int = 1,
     fast_mode: bool = False,  # 默认使用完整 TradingAgents 多智能体分析
 ) -> callable:
@@ -183,23 +243,37 @@ def create_trading_agents_analyzer(
         f"model={deep_think_llm}, debate_rounds={max_debate_rounds}"
     )
 
-    def analyzer(symbol: str, market_data: dict) -> dict[str, Any]:
-        """调用 TradingAgents 分析单个币种。"""
+    # propagate() 超时保护（秒）：防止 LLM/数据源挂住导致进程被 kill
+    PROPAGATE_TIMEOUT = 900  # 15分钟
+
+    def analyzer(symbol: str, market_data: dict) -> Dict[str, Any]:
+        """调用 TradingAgents 分析单个币种，带超时保护。"""
         # BTCUSDT → BTC-USD（yfinance 加密货币格式）
         ticker = symbol.replace("USDT", "-USD")
         analysis_date = datetime.now().strftime("%Y-%m-%d")
 
-        log.info(f"TradingAgents 分析: {ticker} @ {analysis_date}")
-        try:
-            final_state, decision = ta.propagate(ticker, analysis_date)
-        except Exception as exc:
-            # yfinance 查不到数据等情况，fallback 到快速模式
-            log.warning(
-                f"TradingAgents 完整分析 {ticker} 失败: {exc}, "
-                f"fallback 到快速模式（Binance 数据 + LLM）"
-            )
-            fast = create_fast_analyzer()
-            return fast(symbol, market_data)
+        log.info(f"TradingAgents 分析: {ticker} @ {analysis_date} (超时={PROPAGATE_TIMEOUT}s)")
+
+        # 用线程池包裹 propagate()，超时自动 fallback
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(ta.propagate, ticker, analysis_date)
+            try:
+                final_state, decision = future.result(timeout=PROPAGATE_TIMEOUT)
+            except FuturesTimeoutError:
+                future.cancel()
+                log.warning(
+                    f"TradingAgents {ticker} 超时（>{PROPAGATE_TIMEOUT}s），"
+                    f"fallback 到快速模式"
+                )
+                fast = create_fast_analyzer()
+                return fast(symbol, market_data)
+            except Exception as exc:
+                log.warning(
+                    f"TradingAgents 完整分析 {ticker} 失败: {exc}, "
+                    f"fallback 到快速模式（Binance 数据 + LLM）"
+                )
+                fast = create_fast_analyzer()
+                return fast(symbol, market_data)
 
         log.info(f"TradingAgents 返回 decision type={type(decision)}, value={repr(decision)[:200]}")
         if final_state:
@@ -212,13 +286,13 @@ def create_trading_agents_analyzer(
             raise ValueError("TradingAgents 返回空决策")
         result = _parse_decision(decision)
         # 保留原始决策文本作为摘要点评
-        result["comment"] = decision.strip()[:500] if decision else "无分析结果"
+        result["comment"] = _clean_llm_text(decision)[:500] if decision else "无分析结果"
         return result
 
     return analyzer
 
 
-def _parse_decision(decision: str) -> dict[str, Any]:
+def _parse_decision(decision: str) -> Dict[str, Any]:
     """将 TradingAgents 文本决策解析为结构化评级（支持中英文输出）。"""
     d = decision.lower()
 

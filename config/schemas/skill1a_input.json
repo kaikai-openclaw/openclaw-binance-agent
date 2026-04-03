@@ -1,0 +1,68 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Skill1AInput",
+  "description": "Skill-1A A股量化数据采集触发输入",
+  "type": "object",
+  "properties": {
+    "trigger_time": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Pipeline 触发时间（ISO 8601）"
+    },
+    "min_amount": {
+      "type": "number",
+      "minimum": 0,
+      "default": 500000000,
+      "description": "最低成交额（元），默认 5 亿"
+    },
+    "min_amplitude_pct": {
+      "type": "number",
+      "minimum": 0,
+      "default": 3.0,
+      "description": "最低振幅百分比，默认 3%"
+    },
+    "price_change_range": {
+      "type": "object",
+      "properties": {
+        "min_pct": { "type": "number", "default": 1.5 },
+        "max_pct": { "type": "number", "default": 9.9 }
+      },
+      "additionalProperties": false,
+      "description": "绝对涨跌幅区间百分比"
+    },
+    "volume_surge_ratio": {
+      "type": "number",
+      "minimum": 1.0,
+      "default": 1.3,
+      "description": "短期量比阈值，默认 1.3 倍"
+    },
+    "min_signal_score": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100,
+      "default": 55,
+      "description": "技术信号最低得分"
+    },
+    "min_adx": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100,
+      "default": 18.0,
+      "description": "最低 ADX 趋势强度阈值"
+    },
+    "max_candidates": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 20,
+      "default": 10,
+      "description": "最终输出候选数量上限"
+    },
+    "target_symbols": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "指定分析的 A 股代码列表（如 ['600519', '000001']）"
+    }
+  },
+  "required": ["trigger_time"],
+  "additionalProperties": false
+}

@@ -4,6 +4,9 @@ TradingAgents 适配器
 将 TradingAgents 的 propagate() 输出转换为本系统 Skill-2 所需的格式：
 {rating_score: int(1-10), signal: str, confidence: float(0-100)}
 
+TradingAgents-Coin 以 git submodule 形式引入，位于 vendor/TradingAgents-Coin，
+通过 `pip install -e vendor/TradingAgents-Coin` 以 editable 模式安装。
+
 支持两种模式：
 - fast_mode=True：单次 LLM 调用，约 10-30 秒完成
 - fast_mode=False（默认）：完整 TradingAgents 多智能体辩论，约 5-10 分钟
@@ -29,6 +32,23 @@ load_dotenv(os.path.join(_project_root, ".env"))
 log = logging.getLogger(__name__)
 
 
+# ── 模型配置（可通过 .env 覆盖）──────────────────────────────────────────────
+# 环境变量优先，函数参数次之，最后用默认值
+def _env(key: str, default: str) -> str:
+    """读取环境变量，空字符串视为未设置。"""
+    return os.environ.get(key, "").strip() or default
+
+
+# 快速模式使用的模型
+FAST_LLM_MODEL = _env("FAST_LLM_MODEL", "MiniMax-M2.7-highspeed")
+
+# TradingAgents 完整模式使用的模型
+DEFAULT_LLM_PROVIDER = _env("LLM_PROVIDER", "minimax")
+DEFAULT_DEEP_THINK_LLM = _env("DEEP_THINK_LLM", "MiniMax-M2.7-highspeed")
+DEFAULT_QUICK_THINK_LLM = _env("QUICK_THINK_LLM", "MiniMax-M2.7-highspeed")
+DEFAULT_BACKEND_URL = _env("LLM_BACKEND_URL", "")
+
+
 # ── 快速分析器（单次 LLM 调用）─────────────────────────────────────────────
 
 def _fetch_binance_ticker(symbol: str) -> Dict[str, Any]:
@@ -48,32 +68,83 @@ def _fetch_binance_ticker(symbol: str) -> Dict[str, Any]:
     raise ValueError(f"未找到 {symbol} 的市场数据")
 
 
-def _call_fast_llm(prompt: str) -> str:
-    """单次 LLM API 调用，返回文本响应。优先 MiniMax，其次 Gemini。"""
-    minimax_key = os.environ.get("MINIMAX_API_KEY", "").strip()
-    if minimax_key:
+def _call_fast_llm(prompt: str, model: Optional[str] = None) -> str:
+    """单次 LLM API 调用，返回文本响应。
+
+    根据 LLM_PROVIDER 环境变量选择调用路径，支持：
+    - minimax（默认）
+    - zhipu（智谱 GLM）
+    - google（Gemini）
+    - 其他 OpenAI 兼容 provider（openai/qwen/xai/openrouter/ollama）
+
+    Args:
+        prompt: 提示词
+        model: 模型名称，None 则使用 FAST_LLM_MODEL 环境变量配置
+    """
+    model = model or FAST_LLM_MODEL
+    provider = DEFAULT_LLM_PROVIDER
+
+    # ── OpenAI 兼容接口（minimax / zhipu / openai / qwen / xai / openrouter / ollama）
+    # 这些 provider 都走统一的 chat/completions 端点
+    _OPENAI_COMPAT_PROVIDERS = {
+        "minimax":    ("MINIMAX_API_KEY",    "https://api.minimaxi.com/v1"),
+        "zhipu":      ("ZHIPU_API_KEY",      "https://open.bigmodel.cn/api/paas/v4"),
+        "openai":     ("OPENAI_API_KEY",     "https://api.openai.com/v1"),
+        "qwen":       ("QWEN_API_KEY",       "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+        "xai":        ("XAI_API_KEY",        "https://api.x.ai/v1"),
+        "openrouter": ("OPENROUTER_API_KEY", "https://openrouter.ai/api/v1"),
+        "ollama":     (None,                 "http://localhost:11434/v1"),
+    }
+
+    if provider in _OPENAI_COMPAT_PROVIDERS:
+        env_key, default_url = _OPENAI_COMPAT_PROVIDERS[provider]
+        api_key = os.environ.get(env_key, "").strip() if env_key else ""
+        base_url = DEFAULT_BACKEND_URL or default_url
+
+        if env_key and not api_key:
+            raise ValueError(f"快速模式需要 {env_key}，但未设置")
+
+        headers = {"Content-Type": "application/json"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
         resp = requests.post(
-            "https://api.minimaxi.com/v1/chat/completions",
-            headers={"Authorization": f"Bearer {minimax_key}"},
-            json={"model": "MiniMax-M2.7-highspeed",
+            f"{base_url}/chat/completions",
+            headers=headers,
+            json={"model": model,
                   "messages": [{"role": "user", "content": prompt}]},
             timeout=60,
         )
         resp.raise_for_status()
         return resp.json()["choices"][0]["message"]["content"]
 
-    # Fallback to Gemini
-    google_key = os.environ.get("GOOGLE_API_KEY", "").strip()
-    if google_key:
+    # ── Google Gemini（独立 SDK）
+    if provider == "google":
+        google_key = os.environ.get("GOOGLE_API_KEY", "").strip()
+        if not google_key:
+            raise ValueError("快速模式需要 GOOGLE_API_KEY，但未设置")
         from google.genai import Client
         client = Client(api_key=google_key)
         response = client.models.generate_content(
-            model="gemini-2.5-flash",
+            model=model,
             contents=[{"role": "user", "parts": [{"text": prompt}]}],
         )
         return response.text
 
-    raise ValueError("No LLM API key found (MINIMAX_API_KEY or GOOGLE_API_KEY)")
+    # ── Anthropic（独立 SDK）
+    if provider == "anthropic":
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+        if not api_key:
+            raise ValueError("快速模式需要 ANTHROPIC_API_KEY，但未设置")
+        import anthropic
+        client = anthropic.Anthropic(api_key=api_key)
+        message = client.messages.create(
+            model=model, max_tokens=1024,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return message.content[0].text
+
+    raise ValueError(f"快速模式不支持的 LLM_PROVIDER: {provider}")
 
 
 def _extract_json(text: str) -> dict:
@@ -186,9 +257,9 @@ def create_fast_analyzer() -> callable:
 # ── 标准 TradingAgents 分析器 ──────────────────────────────────────────────
 
 def create_trading_agents_analyzer(
-    llm_provider: str = "minimax",
-    deep_think_llm: str = "MiniMax-M2.7-highspeed",
-    quick_think_llm: str = "MiniMax-M2.7-highspeed",
+    llm_provider: Optional[str] = None,
+    deep_think_llm: Optional[str] = None,
+    quick_think_llm: Optional[str] = None,
     backend_url: Optional[str] = None,
     max_debate_rounds: int = 1,
     fast_mode: bool = False,  # 默认使用完整 TradingAgents 多智能体分析
@@ -196,16 +267,41 @@ def create_trading_agents_analyzer(
     """
     创建可注入 TradingAgentsModule 的 analyzer 回调函数。
 
+    所有模型参数支持三级配置（优先级从高到低）：
+    1. 函数参数显式传入
+    2. 环境变量（.env 文件）
+    3. 内置默认值
+
+    环境变量:
+        LLM_PROVIDER:    LLM 提供商 (默认 minimax)
+        DEEP_THINK_LLM:  复杂推理模型 (默认 MiniMax-M2.7-highspeed)
+        QUICK_THINK_LLM: 快速任务模型 (默认 MiniMax-M2.7-highspeed)
+        LLM_BACKEND_URL: API 端点 (minimax 自动推断)
+        FAST_LLM_MODEL:  快速模式使用的模型
+
     参数:
-        llm_provider: LLM 提供商 (openai/google/anthropic/xai/openrouter/ollama/minimax/qwen/zhipu)
-        deep_think_llm: 复杂推理模型
-        quick_think_llm: 快速任务模型
-        backend_url: API 端点（None 则使用各 provider 默认端点，minimax 需传 https://api.minimaxi.com/v1）
+        llm_provider: LLM 提供商，None 则读取环境变量
+        deep_think_llm: 复杂推理模型，None 则读取环境变量
+        quick_think_llm: 快速任务模型，None 则读取环境变量
+        backend_url: API 端点，None 则自动推断
         max_debate_rounds: 多空辩论轮数（越多越准但越慢）
+        fast_mode: True 则使用单次 LLM 快速分析
 
     返回:
         analyzer(symbol, market_data) -> dict
     """
+    # 解析配置：函数参数 > 环境变量 > 默认值
+    llm_provider = llm_provider or DEFAULT_LLM_PROVIDER
+    deep_think_llm = deep_think_llm or DEFAULT_DEEP_THINK_LLM
+    quick_think_llm = quick_think_llm or DEFAULT_QUICK_THINK_LLM
+    if backend_url is None:
+        backend_url = DEFAULT_BACKEND_URL or None
+    log.info(
+        f"[TradingAgentsAdapter] 配置解析完成: provider={llm_provider}, "
+        f"deep={deep_think_llm}, quick={quick_think_llm}, "
+        f"backend={backend_url}, fast_mode={fast_mode}"
+    )
+
     # 快速模式：直接用单次 LLM 调用，不加载完整 TradingAgents 框架
     if fast_mode:
         log.info("[TradingAgentsAdapter] fast_mode=True，使用快速单次 LLM 分析")

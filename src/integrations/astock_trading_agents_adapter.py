@@ -122,7 +122,7 @@ def create_astock_fast_analyzer() -> callable:
                     "comment": f"[快速模式] 行情获取失败: {e}"}
 
         name = quote.get("name", symbol)
-        prompt = f"""你是 A 股量化分析师。请根据以下 {name}({symbol}) 市场数据，给出结构化交易评级。
+        prompt = f"""你是一名专业的 A 股量化研究员。请根据以下 {name}({symbol}) 的市场数据，进行量化评估并输出结构化评分。
 
 市场数据：
 - 当前价格: {quote['last_price']:.2f} 元
@@ -131,10 +131,11 @@ def create_astock_fast_analyzer() -> callable:
 - 最高: {quote['high']:.2f} / 最低: {quote['low']:.2f}
 - 换手率: {quote['turnover_rate']:.2f}%
 
-请直接返回以下 JSON 格式（不解释，只返回 JSON）：
+请基于以上数据，从技术面和资金面角度进行量化评估。
+直接返回以下 JSON 格式（不要解释，只返回 JSON）：
 {{"rating_score": <int 1-10>, "signal": "<long|short|hold>", "confidence": <float 0-100>}}
 
-评级标准：rating_score 6分以上为通过。signal 为 long 表示看多，short 表示看空，hold 表示观望。
+说明：rating_score 为综合评分（1最低10最高），signal 为趋势方向判断，confidence 为置信度百分比。
 """
         try:
             raw = _call_fast_llm(prompt)

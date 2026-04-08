@@ -225,7 +225,7 @@ def create_fast_analyzer() -> callable:
         log.info(f"[FastAnalyzer] {symbol} 行情获取成功: {ticker['last_price']}, "
                  f"24h {ticker['price_change_pct']:+.2f}%")
 
-        prompt = f"""你是加密货币量化分析师。请根据以下 {symbol} 市场数据，给出结构化交易评级。
+        prompt = f"""你是一名专业的加密货币量化研究员。请根据以下 {symbol} 的市场数据，进行量化评估并输出结构化评分。
 
 市场数据：
 - 当前价格: {ticker['last_price']} USDT
@@ -233,10 +233,11 @@ def create_fast_analyzer() -> callable:
 - 24h 成交量: {ticker['quote_volume']/1e6:.1f}M USDT
 - 24h 高点: {ticker['high_24h']} / 低点: {ticker['low_24h']}
 
-请直接返回以下 JSON 格式（不解释，只返回 JSON）：
+请基于以上数据，从技术面和资金面角度进行量化评估。
+直接返回以下 JSON 格式（不要解释，只返回 JSON）：
 {{"rating_score": <int 1-10>, "signal": "<long|short|hold>", "confidence": <float 0-100>}}
 
-评级标准：rating_score 6分以上为通过。signal 为 long 表示建议做多，short 表示做空，hold 表示观望。
+说明：rating_score 为综合评分（1最低10最高），signal 为趋势方向判断，confidence 为置信度百分比。
 """
 
         try:

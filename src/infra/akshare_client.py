@@ -63,10 +63,17 @@ def _safe_float(val) -> Optional[float]:
 
 
 class AkshareClient:
-    """A 股公开数据客户端，供 Skill-1A 注入使用。"""
+    """A 股公开数据客户端，供 Skill-1A 注入使用。
 
-    def __init__(self) -> None:
+    内置本地 K 线缓存：get_klines() 优先查本地 SQLite，
+    命中则零网络请求；未命中或数据不足时联网拉取并自动回写缓存。
+    """
+
+    def __init__(self, cache_db_path: str = "data/kline_cache.db") -> None:
         self._ak = _ensure_akshare()
+        # 延迟导入，避免循环依赖
+        from src.infra.kline_cache import KlineCache
+        self._cache = KlineCache(cache_db_path)
 
     def _retry(self, fn, desc: str = "akshare"):
         last_err = None
@@ -204,11 +211,35 @@ class AkshareClient:
     # ══════════════════════════════════════════════════════
 
     def get_klines(self, symbol: str, period: str = "daily", limit: int = 100) -> List[List]:
-        """获取日线 K 线（前复权）。优先级：腾讯 → 新浪 → 东方财富。"""
+        """获取日线 K 线（前复权）。
+
+        优先查本地缓存，缓存行数 >= limit 直接返回；
+        否则联网拉取，回写缓存后返回。
+        """
         code = _normalize_symbol(symbol)
+        adjust = "qfq"  # 当前固定前复权
+
+        # ── 缓存优先 ──
+        cached = self._cache.query_as_rows(code, adjust, limit)
+        if len(cached) >= limit:
+            log.debug("[AkshareClient] K线缓存命中: %s, %d行", code, len(cached))
+            return cached
+
+        # ── 缓存不足，联网拉取 ──
         df = self._get_klines_any(code, limit)
         if df is not None and not df.empty:
-            return self._df_to_rows(df, limit)
+            rows = self._df_to_rows(df, limit)
+            # 回写缓存
+            if rows:
+                self._cache.upsert_from_list_rows(code, adjust, rows)
+                log.info("[AkshareClient] K线缓存更新: %s, %d行", code, len(rows))
+            return rows
+
+        # ── 联网失败，降级返回已有缓存（即使不足 limit）──
+        if cached:
+            log.warning("[AkshareClient] K线联网失败，降级返回缓存: %s, %d行", code, len(cached))
+            return cached
+
         return []
 
     def _get_klines_any(self, code: str, limit: int):

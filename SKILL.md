@@ -42,4 +42,13 @@ A 股量化筛选 + 深度分析定义在 `skills/astock-analysis/SKILL.md`，
 OpenClaw 会从 `<workspace>/skills/` 目录自动加载。
 
 - Skill-1A：akshare 数据采集（沪深实时行情 + 日线 K 线 + 技术指标评分）
+- Skill-1B：超跌反弹筛选（BIAS/RSI/BOLL/KDJ/MACD背离 六维评分，均值回归策略）
 - Skill-2A：TradingAgents 多智能体深度分析（data_vendors=akshare）
+
+## A 股历史数据服务（底层 Skill）
+
+定义在 `skills/astock-data/SKILL.md`，为上层 Skill 提供标准化数据源。
+
+- Data Provider：本地 SQLite 缓存优先 + 增量联网拉取，标准化 JSON 输出
+- 支持前复权/后复权/不复权，股票代码强校验（sh./sz./bj.前缀）
+- 下游 Skill 通过 `SkillDataProvider.run()` 直接调用，避免重复联网

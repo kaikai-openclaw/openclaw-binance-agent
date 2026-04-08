@@ -917,9 +917,10 @@ class TestStrategyStatsAndTuning:
     @given(data=st.data())
     @settings(max_examples=20)
     def test_normal_win_rate_keeps_defaults(self, data) -> None:
-        """胜率 >= 40% 时，维持默认策略参数：
+        """胜率在 40%-60% 区间时，使用默认参数调用应维持默认策略参数：
         - 评级阈值 = 6
         - 风险比例 = 0.02
+        胜率 > 60% 时应放松参数（阈值下降，风险上升）。
         """
         # 生成 10~50 笔交易，控制胜率 >= 40%
         total = data.draw(st.integers(min_value=10, max_value=50), label="total")
@@ -946,13 +947,36 @@ class TestStrategyStatsAndTuning:
         # 必须返回非 None 的 ReflectionLog
         assert result is not None, "胜率 >= 40% 时也应返回 ReflectionLog"
 
-        # 验证维持默认参数
-        assert result.suggested_rating_threshold == 6, (
-            f"胜率正常时评级阈值应为默认值 6，实际为 {result.suggested_rating_threshold}"
-        )
-        assert result.suggested_risk_ratio == 0.02, (
-            f"胜率正常时风险比例应为默认值 0.02，实际为 {result.suggested_risk_ratio}"
-        )
+        win_rate = winning_count / total * 100
+
+        if win_rate > 60:
+            # 放松：阈值应 <= 默认值 6，风险应 >= 默认值 0.02
+            assert result.suggested_rating_threshold <= 6, (
+                f"胜率 {win_rate:.1f}% > 60% 时评级阈值应 <= 6，"
+                f"实际为 {result.suggested_rating_threshold}"
+            )
+            assert result.suggested_risk_ratio >= 0.02, (
+                f"胜率 {win_rate:.1f}% > 60% 时风险比例应 >= 0.02，"
+                f"实际为 {result.suggested_risk_ratio}"
+            )
+            # 阈值下限 5
+            assert result.suggested_rating_threshold >= 5, (
+                f"放松后评级阈值 {result.suggested_rating_threshold} 应 >= 下限 5"
+            )
+            # 风险上限 0.03
+            assert result.suggested_risk_ratio <= 0.03, (
+                f"放松后风险比例 {result.suggested_risk_ratio} 应 <= 上限 0.03"
+            )
+        else:
+            # 40%-60% 区间：维持默认参数
+            assert result.suggested_rating_threshold == 6, (
+                f"胜率 {win_rate:.1f}% 在正常区间时评级阈值应为默认值 6，"
+                f"实际为 {result.suggested_rating_threshold}"
+            )
+            assert result.suggested_risk_ratio == 0.02, (
+                f"胜率 {win_rate:.1f}% 在正常区间时风险比例应为默认值 0.02，"
+                f"实际为 {result.suggested_risk_ratio}"
+            )
 
 
 # ============================================================

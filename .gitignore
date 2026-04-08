@@ -28,9 +28,15 @@ Thumbs.db
 .venv/
 
 # SQLite databases (runtime generated)
+*.db
+*.db-shm
+*.db-wal
 data/*.db
 data/*.db-shm
 data/*.db-wal
+data/*.json
+data/*.json-shm
+data/*.json-wal
 
 # pytest cache
 .pytest_cache/

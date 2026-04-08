@@ -1,5 +1,16 @@
 # HEARTBEAT.md
 
-# Keep this file empty (or with only comments) to skip heartbeat API calls.
+# 每5分钟检查一次持仓和止盈止损触发情况
 
-# Add tasks below when you want the agent to check something periodically.
+## 定期检查任务
+
+### 1. 监控止盈止损触发
+- 脚本: `scripts/monitor_positions.py`
+- 频率: 每5分钟
+- 如果有触发: 立即通知用户
+- 如果无触发: 仅记录日志
+
+### 2. 账户状态检查
+- 频率: 每30分钟
+- 检查总资金、持仓、盈亏
+- 如果日亏损>5%: 发出警告

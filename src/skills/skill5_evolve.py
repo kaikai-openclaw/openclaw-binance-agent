@@ -260,7 +260,7 @@ class Skill5Evolve(BaseSkill):
         计算策略统计并执行调优逻辑。
 
         需求 5.4: 基于最近 50 笔交易计算胜率和平均盈亏比
-        需求 5.5: 胜率低于 40% 时生成调优建议
+        需求 5.5: 胜率低于 40% 时收紧参数，高于 60% 时放松参数
         需求 5.6: 基于反思日志调整评级阈值和风险比例
         需求 5.7: 交易记录不足 10 笔时跳过进化计算
 
@@ -286,13 +286,28 @@ class Skill5Evolve(BaseSkill):
                     f"交易记录不足 10 笔（当前 {trade_count} 笔），"
                     "使用默认策略参数"
                 ),
+                "current_rating_threshold": DEFAULT_RATING_THRESHOLD,
+                "current_risk_ratio": DEFAULT_RISK_RATIO,
             }
 
         # 需求 5.4: 计算策略统计
         stats = self._memory_store.compute_stats(recent_trades)
 
-        # 需求 5.5 & 5.6: 调用 compute_evolution_adjustment
-        reflection = compute_evolution_adjustment(recent_trades)
+        # 从上一轮反思日志读取当前参数（闭合反馈环）
+        latest_reflection = self._memory_store.get_latest_reflection()
+        if latest_reflection is not None:
+            current_threshold = latest_reflection.suggested_rating_threshold
+            current_risk = latest_reflection.suggested_risk_ratio
+        else:
+            current_threshold = DEFAULT_RATING_THRESHOLD
+            current_risk = DEFAULT_RISK_RATIO
+
+        # 需求 5.5 & 5.6: 渐进式双向调优
+        reflection = compute_evolution_adjustment(
+            recent_trades,
+            current_rating_threshold=current_threshold,
+            current_risk_ratio=current_risk,
+        )
 
         adjustment_applied = False
         adjustment_detail = "胜率正常，维持当前策略参数"
@@ -308,11 +323,12 @@ class Skill5Evolve(BaseSkill):
 
             # 需求 5.6: 判断是否需要调整参数
             if (
-                reflection.suggested_rating_threshold
-                != DEFAULT_RATING_THRESHOLD
-                or reflection.suggested_risk_ratio != DEFAULT_RISK_RATIO
+                reflection.suggested_rating_threshold != current_threshold
+                or reflection.suggested_risk_ratio != current_risk
             ):
                 adjustment_applied = True
+                adjustment_detail = reflection.reasoning
+            else:
                 adjustment_detail = reflection.reasoning
 
         return {
@@ -321,6 +337,14 @@ class Skill5Evolve(BaseSkill):
             "trade_count": trade_count,
             "adjustment_applied": adjustment_applied,
             "adjustment_detail": adjustment_detail,
+            "current_rating_threshold": (
+                reflection.suggested_rating_threshold
+                if reflection else current_threshold
+            ),
+            "current_risk_ratio": (
+                reflection.suggested_risk_ratio
+                if reflection else current_risk
+            ),
         }
 
     @staticmethod

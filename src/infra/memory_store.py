@@ -239,6 +239,31 @@ class MemoryStore:
             reasoning=row[5],
         )
 
+    def get_evolved_params(
+        self,
+        default_rating_threshold: int = 6,
+        default_risk_ratio: float = 0.02,
+    ) -> tuple[int, float]:
+        """
+        获取进化后的策略参数，供 Pipeline 编排层注入 Skill-2/3。
+
+        从最新反思日志读取建议参数，若无记录则返回默认值。
+
+        参数:
+            default_rating_threshold: 默认评级过滤阈值
+            default_risk_ratio: 默认风险比例
+
+        返回:
+            (rating_threshold, risk_ratio) 元组
+        """
+        reflection = self.get_latest_reflection()
+        if reflection is None:
+            return default_rating_threshold, default_risk_ratio
+        return (
+            reflection.suggested_rating_threshold,
+            reflection.suggested_risk_ratio,
+        )
+
     def close(self) -> None:
         """关闭数据库连接。"""
         self._conn.close()

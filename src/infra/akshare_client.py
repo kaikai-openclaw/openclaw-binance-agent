@@ -236,6 +236,7 @@ class AkshareClient:
                 symbol=f"{exchange}{code}",
                 start_date=start.strftime("%Y-%m-%d"),
                 end_date=end.strftime("%Y-%m-%d"),
+                adjust="qfq",
             ), f"klines_tx({code})")
         if df is not None and "volume" not in df.columns and "amount" in df.columns:
             df = df.rename(columns={"amount": "volume"})

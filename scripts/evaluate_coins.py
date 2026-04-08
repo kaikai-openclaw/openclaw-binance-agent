@@ -20,10 +20,11 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
 
 import requests
+from dotenv import load_dotenv
 
-# TradingAgents 导入
-from tradingagents.graph.trading_graph import TradingAgentsGraph
-from tradingagents.default_config import DEFAULT_CONFIG
+load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
+
+from src.integrations.trading_agents_adapter import create_trading_agents_analyzer
 
 
 # ── Binance 市场数据 ────────────────────────────────────
@@ -67,59 +68,7 @@ def get_top_coins(limit: int = 20) -> list[dict]:
         return []
 
 
-# ── TradingAgents 分析 ────────────────────────────────────
-
-def create_trading_agents():
-    """创建 TradingAgents 分析器。"""
-    config = DEFAULT_CONFIG.copy()
-    config["llm_provider"] = "google"
-    config["deep_think_llm"] = "gemini-2.5-flash"
-    config["quick_think_llm"] = "gemini-2.5-flash"
-    config["backend_url"] = None  # Google 用默认端点，不走 OpenAI
-    config["max_debate_rounds"] = 1
-    config["data_vendors"] = {
-        "core_stock_apis": "binance",
-        "technical_indicators": "binance",
-        "fundamental_data": "binance",
-        "news_data": "binance",
-    }
-
-    return TradingAgentsGraph(debug=False, config=config)
-
-
-def analyze_with_trading_agents(ta: TradingAgentsGraph, symbol: str, market_data: dict) -> dict:
-    """
-    调用 TradingAgents 分析单个币种。
-    注意：symbol 传入如 BTCUSDT，转换为 BTC-USD 给 yfinance
-    """
-    # BTCUSDT → BTC-USD（yfinance 加密货币格式）
-    ticker = symbol.replace("USDT", "-USD")
-    analysis_date = datetime.now().strftime("%Y-%m-%d")
-
-    try:
-        _, decision = ta.propagate(ticker, analysis_date)
-        return _parse_decision(decision)
-    except Exception as e:
-        print(f"TA 错误: {e}", end=" ")
-        return None
-
-
-def _parse_decision(decision: str) -> dict:
-    """将 TradingAgents 文本决策解析为结构化评级。"""
-    d = decision.lower()
-
-    if "strong buy" in d or "strongly recommend buying" in d:
-        return {"rating": 9, "signal": "long", "confidence": 85, "reason": "强烈买入"}
-    elif " buy" in d or ("long" in d and "hold" not in d):
-        return {"rating": 7, "signal": "long", "confidence": 70, "reason": "买入"}
-    elif "strong sell" in d or "strongly recommend selling" in d:
-        return {"rating": 9, "signal": "short", "confidence": 85, "reason": "强烈卖出"}
-    elif " sell" in d or "short" in d:
-        return {"rating": 7, "signal": "short", "confidence": 70, "reason": "卖出"}
-    elif "hold" in d or "neutral" in d or "accumulation" in d:
-        return {"rating": 5, "signal": "hold", "confidence": 50, "reason": "观望"}
-    else:
-        return {"rating": 5, "signal": "hold", "confidence": 50, "reason": decision[:50]}
+# ── TradingAgents 分析（通过 adapter，读取 .env 配置）─────────────
 
 
 # ── 主程序 ──────────────────────────────────────────────
@@ -127,17 +76,13 @@ def _parse_decision(decision: str) -> dict:
 def evaluate_coins(top: int = 5):
     """评测前 N 个活跃币种。"""
 
-    # 加载 API Key
-    env_path = os.path.join(PROJECT_ROOT, ".env")
-    if os.path.exists(env_path):
-        with open(env_path) as f:
-            for line in f:
-                line = line.strip()
-                if line.startswith("GOOGLE_API_KEY="):
-                    os.environ.setdefault("GOOGLE_API_KEY", line.split("=", 1)[1].strip())
+    from src.integrations.trading_agents_adapter import (
+        DEFAULT_LLM_PROVIDER, DEFAULT_DEEP_THINK_LLM,
+    )
 
     print("=" * 70)
     print("  加密货币活跃度评测报告 (TradingAgents AI)")
+    print(f"  模型: {DEFAULT_LLM_PROVIDER} / {DEFAULT_DEEP_THINK_LLM}")
     print(f"  生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 70)
 
@@ -150,16 +95,16 @@ def evaluate_coins(top: int = 5):
 
     print(f"获取到 {len(coins)} 个活跃币种\n")
 
-    # 初始化 TradingAgents
+    # 初始化 TradingAgents（通过 adapter，自动读取 .env 配置）
     print("正在初始化 TradingAgents (多智能体分析框架)...")
     print("首次初始化约需 60 秒，请耐心等待...\n")
+    analyzer = None
     try:
-        ta = create_trading_agents()
+        analyzer = create_trading_agents_analyzer()
         print("TradingAgents 初始化成功\n")
     except Exception as e:
         print(f"TradingAgents 初始化失败: {e}")
         print("将使用规则引擎作为备选\n")
-        ta = None
 
     results = []
 
@@ -167,10 +112,20 @@ def evaluate_coins(top: int = 5):
         symbol = coin["symbol"]
         print(f"[{i:2}/{len(coins)}] TradingAgents 分析 {symbol}...", end=" ", flush=True)
 
-        if ta:
-            # 每次分析约需 30-60 秒
+        if analyzer:
             print("(分析中，约需 30-60 秒...)", end=" ", flush=True)
-            analysis = analyze_with_trading_agents(ta, symbol, coin)
+            try:
+                analysis = analyzer(symbol, coin)
+                # adapter 返回 rating_score，统一映射为 rating
+                analysis = {
+                    "rating": analysis.get("rating_score", 5),
+                    "signal": analysis.get("signal", "hold"),
+                    "confidence": analysis.get("confidence", 50),
+                    "reason": analysis.get("comment", "")[:100] or analysis.get("signal", "hold"),
+                }
+            except Exception as e:
+                print(f"分析失败: {e}", end=" ")
+                analysis = None
         else:
             analysis = None
 

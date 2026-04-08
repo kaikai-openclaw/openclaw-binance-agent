@@ -9,12 +9,14 @@ Risk_Controller 风控拦截层模块
 - check_daily_loss(): 日亏损 ≥ 5% 检测
 - execute_degradation(): 取消挂单、停止实盘、告警、切换 Paper Mode
 - is_paper_mode(): 查询当前模式
-- record_stop_loss(): 记录止损事件，启动冷却期
+- record_stop_loss(): 记录止损事件，启动冷却期（持久化到 SQLite）
 """
 
 import logging
-from datetime import datetime, timedelta
-from typing import List, Tuple
+import os
+import sqlite3
+from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 from src.models.types import (
     AccountState,
@@ -31,6 +33,7 @@ class RiskController:
 
     所有交易指令在到达 Binance_Fapi_Client 之前必须通过此层校验。
     四大风控常量为硬编码，不可通过配置修改。
+    止损冷却记录持久化到 SQLite，进程重启后冷却期不丢失。
     """
 
     # 硬编码常量（不可配置）
@@ -39,11 +42,47 @@ class RiskController:
     DAILY_LOSS_THRESHOLD = 0.05       # 日亏损阈值 5%
     STOP_LOSS_COOLDOWN_HOURS = 24     # 止损后同方向冷却期（小时）
 
-    def __init__(self) -> None:
+    _CREATE_COOLDOWN_TABLE_SQL = """
+        CREATE TABLE IF NOT EXISTS stop_loss_cooldowns (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            symbol      TEXT NOT NULL,
+            direction   TEXT NOT NULL,
+            recorded_at TEXT NOT NULL
+        )
+    """
+
+    _CREATE_COOLDOWN_INDEX_SQL = """
+        CREATE INDEX IF NOT EXISTS idx_cooldown_recorded_at
+        ON stop_loss_cooldowns(recorded_at DESC)
+    """
+
+    def __init__(self, db_path: Optional[str] = None) -> None:
+        """
+        初始化 RiskController。
+
+        参数:
+            db_path: SQLite 数据库路径。为 None 时使用内存列表（兼容旧行为/测试）。
+                     传入路径时止损冷却记录持久化到 SQLite。
+        """
         # 模拟盘模式标志
         self._paper_mode: bool = False
-        # 止损冷却记录：列表，每项为 (symbol, direction, timestamp)
-        self._stop_loss_records: List[Tuple[str, str, datetime]] = []
+
+        # 持久化模式
+        self._db_path = db_path
+        self._conn: Optional[sqlite3.Connection] = None
+
+        # 内存回退（无 db_path 时使用，兼容旧行为和测试）
+        self._stop_loss_records: list[tuple[str, str, datetime]] = []
+
+        if db_path is not None:
+            db_dir = os.path.dirname(db_path)
+            if db_dir:
+                os.makedirs(db_dir, exist_ok=True)
+            self._conn = sqlite3.connect(db_path)
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute(self._CREATE_COOLDOWN_TABLE_SQL)
+            self._conn.execute(self._CREATE_COOLDOWN_INDEX_SQL)
+            self._conn.commit()
 
     def validate_order(
         self, order: OrderRequest, account: AccountState
@@ -164,12 +203,25 @@ class RiskController:
         """
         记录某币种某方向的止损事件，启动 24 小时冷却期。
 
+        持久化到 SQLite（若已配置），同时写入内存列表作为回退。
+
         参数:
             symbol: 币种交易对符号，如 "BTCUSDT"
             direction: 交易方向，"long" 或 "short"
         """
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
+
+        # 内存记录（兼容无 db_path 场景）
         self._stop_loss_records.append((symbol, direction, now))
+
+        if self._conn is not None:
+            self._conn.execute(
+                "INSERT INTO stop_loss_cooldowns "
+                "(symbol, direction, recorded_at) VALUES (?, ?, ?)",
+                (symbol, direction, now.isoformat()),
+            )
+            self._conn.commit()
+
         log.info(
             f"止损记录: {symbol} {direction} 于 {now.isoformat()}，"
             f"冷却期 {self.STOP_LOSS_COOLDOWN_HOURS} 小时"
@@ -212,15 +264,42 @@ class RiskController:
         """
         检查指定币种和方向是否处于止损冷却期内。
 
-        遍历止损记录，若存在同 symbol 同 direction 且
-        记录时间距今不超过 STOP_LOSS_COOLDOWN_HOURS 小时，则返回 True。
+        优先查询 SQLite（若已配置），否则回退到内存列表。
         """
-        now = datetime.now()
-        cooldown_delta = timedelta(hours=self.STOP_LOSS_COOLDOWN_HOURS)
+        now = datetime.now(timezone.utc)
 
+        if self._conn is not None:
+            cutoff = (now - timedelta(hours=self.STOP_LOSS_COOLDOWN_HOURS)).isoformat()
+            cursor = self._conn.execute(
+                "SELECT 1 FROM stop_loss_cooldowns "
+                "WHERE symbol = ? AND direction = ? AND recorded_at > ? "
+                "LIMIT 1",
+                (symbol, direction, cutoff),
+            )
+            return cursor.fetchone() is not None
+
+        # 内存回退
+        cooldown_delta = timedelta(hours=self.STOP_LOSS_COOLDOWN_HOURS)
         for rec_symbol, rec_direction, rec_time in self._stop_loss_records:
             if rec_symbol == symbol and rec_direction == direction:
-                if now - rec_time < cooldown_delta:
+                # 兼容 naive datetime（旧测试用 datetime.now() 无时区）
+                if rec_time.tzinfo is None:
+                    elapsed = datetime.now() - rec_time
+                else:
+                    elapsed = now - rec_time
+                if elapsed < cooldown_delta:
                     return True
 
+        return False
+
+    def close(self) -> None:
+        """关闭数据库连接（若有）。"""
+        if self._conn is not None:
+            self._conn.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
         return False

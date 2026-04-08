@@ -6,7 +6,7 @@
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import List, Optional
 import logging
@@ -257,17 +257,23 @@ def calculate_pnl_ratio(
 
 def compute_evolution_adjustment(
     trades: List[TradeRecord],
+    current_rating_threshold: int = 6,
+    current_risk_ratio: float = 0.02,
 ) -> Optional[ReflectionLog]:
     """
-    基于最近 50 笔交易计算策略调优建议。
+    基于最近 50 笔交易计算策略调优建议（渐进式双向调整）。
 
     规则：
     - 交易记录不足 10 笔时跳过，返回 None
-    - 胜率低于 40% 时生成调优建议
-    - 调优方向：提高评级过滤阈值、降低风险比例
+    - 胜率 < 40%：收紧（阈值 +1，风险 ×0.8）
+    - 胜率 > 60%：放松（阈值 -1，风险 ×1.1）
+    - 40%-60%：维持当前参数
+    - 附带按评级分段的胜率分析，辅助决策
 
     参数:
         trades: 交易记录列表（按平仓时间倒序排列）
+        current_rating_threshold: 当前评级过滤阈值（从上一轮反思日志读取）
+        current_risk_ratio: 当前风险比例（从上一轮反思日志读取）
 
     返回:
         ReflectionLog 调优建议，或 None（记录不足 10 笔时）
@@ -283,33 +289,70 @@ def compute_evolution_adjustment(
     total_pnl = sum(t.pnl_amount for t in recent)
     avg_pnl_ratio = total_pnl / len(recent)
 
-    now = datetime.now()
+    # 按评级分段分析胜率
+    rating_analysis = _analyze_by_rating(recent)
 
-    if win_rate >= 40:
-        # 胜率正常，维持当前策略参数
-        return ReflectionLog(
-            created_at=now,
-            win_rate=win_rate,
-            avg_pnl_ratio=avg_pnl_ratio,
-            suggested_rating_threshold=6,   # 维持默认
-            suggested_risk_ratio=0.02,      # 维持默认
-            reasoning="胜率正常，维持当前策略参数",
+    now = datetime.now(timezone.utc)
+
+    if win_rate < 40:
+        # 收紧：阈值 +1（上限 8），风险 ×0.8（下限 0.005）
+        new_threshold = min(8, current_rating_threshold + 1)
+        new_risk_ratio = max(0.005, round(current_risk_ratio * 0.8, 4))
+        reasoning = (
+            f"胜率 {win_rate:.1f}% 低于 40% 阈值，"
+            f"收紧评级过滤阈值 {current_rating_threshold}→{new_threshold}，"
+            f"降低风险比例 {current_risk_ratio:.4f}→{new_risk_ratio:.4f}"
+        )
+    elif win_rate > 60:
+        # 放松：阈值 -1（下限 5），风险 ×1.1（上限 0.03）
+        new_threshold = max(5, current_rating_threshold - 1)
+        new_risk_ratio = min(0.03, round(current_risk_ratio * 1.1, 4))
+        reasoning = (
+            f"胜率 {win_rate:.1f}% 高于 60% 阈值，"
+            f"放松评级过滤阈值 {current_rating_threshold}→{new_threshold}，"
+            f"提高风险比例 {current_risk_ratio:.4f}→{new_risk_ratio:.4f}"
+        )
+    else:
+        # 40%-60%：维持当前参数
+        new_threshold = current_rating_threshold
+        new_risk_ratio = current_risk_ratio
+        reasoning = (
+            f"胜率 {win_rate:.1f}% 处于正常区间(40%-60%)，"
+            f"维持当前策略参数"
         )
 
-    # 胜率低于 40%，需要调优
-    # 策略：提高评级门槛（更严格筛选）+ 降低风险比例（更保守）
-    new_threshold = min(8, 6 + int((40 - win_rate) / 10))
-    new_risk_ratio = max(0.005, 0.02 * (win_rate / 40))
+    if rating_analysis:
+        reasoning += f"；评级分段分析: {rating_analysis}"
 
     return ReflectionLog(
         created_at=now,
         win_rate=win_rate,
         avg_pnl_ratio=avg_pnl_ratio,
         suggested_rating_threshold=new_threshold,
-        suggested_risk_ratio=round(new_risk_ratio, 4),
-        reasoning=(
-            f"胜率 {win_rate:.1f}% 低于 40% 阈值，"
-            f"建议提高评级过滤阈值至 {new_threshold}，"
-            f"降低风险比例至 {new_risk_ratio:.4f}"
-        ),
+        suggested_risk_ratio=new_risk_ratio,
+        reasoning=reasoning,
     )
+
+
+def _analyze_by_rating(trades: List[TradeRecord]) -> str:
+    """
+    按评级分段分析胜率，辅助进化决策。
+
+    参数:
+        trades: 交易记录列表
+
+    返回:
+        格式化的分段分析字符串，如 "6分:3胜/5笔(60.0%), 7分:2胜/3笔(66.7%)"
+    """
+    buckets: dict[int, list[TradeRecord]] = {}
+    for t in trades:
+        buckets.setdefault(t.rating_score, []).append(t)
+
+    parts = []
+    for score in sorted(buckets.keys()):
+        group = buckets[score]
+        wins = sum(1 for t in group if t.pnl_amount > 0)
+        wr = wins / len(group) * 100
+        parts.append(f"{score}分:{wins}胜/{len(group)}笔({wr:.1f}%)")
+
+    return ", ".join(parts)

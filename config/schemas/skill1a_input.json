@@ -25,16 +25,16 @@
       "type": "object",
       "properties": {
         "min_pct": { "type": "number", "default": 1.5 },
-        "max_pct": { "type": "number", "default": 9.9 }
+        "max_pct": { "type": "number", "default": 9.9, "description": "主板涨跌幅上限，创业板/科创板自动适配 19.9%" }
       },
       "additionalProperties": false,
-      "description": "绝对涨跌幅区间百分比"
+      "description": "绝对涨跌幅区间百分比（主板默认 9.9%，创业板/科创板自动 19.9%）"
     },
     "volume_surge_ratio": {
       "type": "number",
       "minimum": 1.0,
       "default": 1.3,
-      "description": "短期量比阈值，默认 1.3 倍"
+      "description": "日线成交量活跃度阈值：近 5 根 K 线均量 / 近 20 根均量（非行情软件「当日量比」）。默认 ≥1.3 才通过"
     },
     "min_signal_score": {
       "type": "integer",
@@ -61,6 +61,29 @@
       "type": "array",
       "items": { "type": "string" },
       "description": "指定分析的 A 股代码列表（如 ['600519', '000001']）"
+    },
+    "min_price": {
+      "type": "number",
+      "minimum": 0,
+      "default": 2.0,
+      "description": "最低股价（元），排除低价股，默认 2 元"
+    },
+    "min_klines": {
+      "type": "integer",
+      "minimum": 20,
+      "maximum": 200,
+      "default": 60,
+      "description": "最低 K 线数量，排除次新股，默认 60（约 3 个月）"
+    },
+    "long_only": {
+      "type": "boolean",
+      "default": true,
+      "description": "仅输出做多信号（A 股散户无法直接做空），默认 true"
+    },
+    "strict_target_filters": {
+      "type": "boolean",
+      "default": false,
+      "description": "为 true 时，即使指定 target_symbols 也应用 volume_surge_ratio、min_signal_score、min_adx（默认 false 保持兼容）"
     }
   },
   "required": ["trigger_time"],

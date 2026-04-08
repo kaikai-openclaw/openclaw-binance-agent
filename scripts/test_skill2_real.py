@@ -36,10 +36,6 @@ def main():
     print("\n[init] 初始化 TradingAgents (MiniMax)...")
     t0 = time.time()
     analyzer = create_trading_agents_analyzer(
-        llm_provider="minimax",
-        deep_think_llm="MiniMax-M2.7-highspeed",
-        quick_think_llm="MiniMax-M2.7-highspeed",
-        backend_url="https://api.minimaxi.com/v1",
         max_debate_rounds=0,
     )
     print(f"   初始化耗时: {time.time() - t0:.1f}s")

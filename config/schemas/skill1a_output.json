@@ -18,7 +18,11 @@
           "amount": { "type": "number", "minimum": 0 },
           "price_change_pct": { "type": "number" },
           "amplitude_pct": { "type": ["number", "null"], "minimum": 0 },
-          "volume_surge_ratio": { "type": "number", "minimum": 0 },
+          "volume_surge_ratio": {
+            "type": "number",
+            "minimum": 0,
+            "description": "近5日日线均量/近20日日线均量，非盘口当日量比"
+          },
           "rsi": { "type": ["number", "null"] },
           "ema_bullish": { "type": "boolean" },
           "macd_bullish": { "type": "boolean" },

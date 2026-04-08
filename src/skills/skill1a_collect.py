@@ -3,8 +3,12 @@ Skill-1A：A股量化数据采集与候选筛选
 
 四步筛选流水线（与 Skill-1 同构，数据源替换为 akshare）：
   1. 大盘过滤 — 实时行情快照，按成交额、振幅、涨跌幅区间过滤
-  2. 活跃度异动 — 日线 K 线计算短期量比
+     - 创业板/科创板自动适配 20% 涨跌停
+     - 排除 ST / 退市 / 北交所 / 低价股 / 一字板
+  2. 活跃度异动 — 日线成交量：近 5 根均量 / 近 20 根均量（非行情软件「当日量比」）
+     - 次新股保护：K 线不足 min_klines 根直接跳过
   3. 技术指标 — RSI / EMA / MACD / ATR / ADX 多因子双向信号评分
+     - 默认 long_only 模式，过滤做空信号
   4. 相关性去重
 
 数据源：AkshareClient（akshare 公开接口，无需 API Key）
@@ -49,14 +53,21 @@ log = logging.getLogger(__name__)
 DEFAULT_MIN_AMOUNT = 500_000_000       # 最低成交额 5 亿元
 DEFAULT_MIN_AMPLITUDE_PCT = 3.0        # 最低振幅 3%
 DEFAULT_PRICE_CHANGE_MIN = 1.5         # 最低绝对涨跌幅 1.5%
-DEFAULT_PRICE_CHANGE_MAX = 9.9         # 最高绝对涨跌幅 9.9%（涨跌停前）
+DEFAULT_PRICE_CHANGE_MAX = 9.9         # 主板最高绝对涨跌幅 9.9%（涨跌停前）
+DEFAULT_PRICE_CHANGE_MAX_20 = 19.9     # 创业板/科创板最高绝对涨跌幅 19.9%
 DEFAULT_VOLUME_SURGE_RATIO = 1.3       # 量比阈值（A 股日线波动较小，放宽）
 DEFAULT_MIN_SIGNAL_SCORE = 55          # 最低信号评分
 DEFAULT_MIN_ADX = 18.0                 # 最低 ADX（A 股趋势性偏弱，放宽）
 DEFAULT_MAX_CANDIDATES = 10
+DEFAULT_MIN_PRICE = 2.0                # 最低股价（排除低价股）
+DEFAULT_MIN_KLINES = 60                # 最低 K 线数量（排除次新股）
+DEFAULT_LONG_ONLY = True               # 默认仅做多（A 股散户无法直接做空）
 
 # A 股排除关键词（ST、退市、B 股等）
 _EXCLUDE_KEYWORDS = {"ST", "*ST", "退", "B股", "PT"}
+
+# 创业板/科创板代码前缀（20% 涨跌停）
+_20PCT_LIMIT_PREFIXES = ("300", "301", "688", "689")
 
 
 class Skill1ACollect(BaseSkill):
@@ -89,6 +100,10 @@ class Skill1ACollect(BaseSkill):
         min_adx = input_data.get("min_adx", DEFAULT_MIN_ADX)
         max_cands = input_data.get("max_candidates", DEFAULT_MAX_CANDIDATES)
         target_symbols = input_data.get("target_symbols")
+        min_price = input_data.get("min_price", DEFAULT_MIN_PRICE)
+        min_klines = input_data.get("min_klines", DEFAULT_MIN_KLINES)
+        long_only = input_data.get("long_only", DEFAULT_LONG_ONLY)
+        strict_target = input_data.get("strict_target_filters", False)
 
         pipeline_run_id = str(uuid.uuid4())
 
@@ -104,7 +119,7 @@ class Skill1ACollect(BaseSkill):
                 pool = self._client.get_spot_by_hist(target_symbols)
         else:
             pool = self._filter_tickers(
-                all_tickers, min_amount, min_amp, pc_min, pc_max,
+                all_tickers, min_amount, min_amp, pc_min, pc_max, min_price,
             )
         log.info("[skill1a] Step1: %d/%d 通过大盘过滤", len(pool), total_count)
 
@@ -120,7 +135,7 @@ class Skill1ACollect(BaseSkill):
             symbol = item["symbol"]
             try:
                 klines = self._client.get_klines(symbol, "daily", KLINE_LIMIT)
-                if not klines or len(klines) < VOLUME_LONG_WINDOW:
+                if not klines or len(klines) < min_klines:
                     continue
 
                 closes = [float(k[4]) for k in klines]
@@ -131,20 +146,24 @@ class Skill1ACollect(BaseSkill):
                 surge = calc_volume_surge(volumes)
                 if surge is None:
                     surge = 0.0
-                if not target_symbols and surge < surge_ratio:
+                if (not target_symbols or strict_target) and surge < surge_ratio:
                     continue
 
                 score_detail = self._calc_signal_score(
                     closes, highs, lows,
                     item.get("amount", 0), max_amount_val,
                 )
-                # 指定个股模式：跳过评分和 ADX 过滤，直接输出
-                if not target_symbols:
+                # 指定个股模式默认跳过评分/ADX；strict_target_filters=true 时与全市场一致
+                if not target_symbols or strict_target:
                     if score_detail["total_score"] < min_signal:
                         continue
                     adx_val = score_detail["adx"]
                     if adx_val is None or adx_val < min_adx:
                         continue
+
+                # A 股默认仅做多：过滤掉做空信号
+                if long_only and score_detail["direction"] == "short":
+                    continue
 
                 returns_map[symbol] = calc_returns(closes)
 
@@ -227,8 +246,9 @@ class Skill1ACollect(BaseSkill):
         min_amp: float,
         pc_min: float,
         pc_max: float,
+        min_price: float,
     ) -> List[dict]:
-        """Step 1: 大盘过滤。排除 ST / 退市 / 北交所 / 成交额不足。"""
+        """Step 1: 大盘过滤。排除 ST / 退市 / 北交所 / 低价股 / 一字板 / 成交额不足。"""
         result = []
         for t in tickers:
             raw_symbol = t.get("symbol", "")
@@ -244,6 +264,13 @@ class Skill1ACollect(BaseSkill):
             if symbol.startswith(("8", "9")):
                 continue
 
+            close = t.get("close")
+            if close is None or close <= 0:
+                continue
+            # 排除低价股
+            if close < min_price:
+                continue
+
             amount = t.get("amount")
             if amount is None or amount < min_amount:
                 continue
@@ -252,15 +279,27 @@ class Skill1ACollect(BaseSkill):
             if amp is None or amp < min_amp:
                 continue
 
+            # 排除一字涨停/跌停板（开盘=最高=最低，无法交易）
+            high = t.get("high")
+            low = t.get("low")
+            open_p = t.get("open")
+            if (high is not None and low is not None and open_p is not None
+                    and high == low == open_p and high > 0):
+                continue
+
             change = t.get("change_pct")
             if change is None:
                 continue
             abs_change = abs(change)
-            if abs_change < pc_min or abs_change > pc_max:
+            if abs_change < pc_min:
                 continue
-
-            close = t.get("close")
-            if close is None or close <= 0:
+            # 创业板/科创板 20% 涨跌停，主板 10%
+            effective_pc_max = (
+                DEFAULT_PRICE_CHANGE_MAX_20
+                if symbol.startswith(_20PCT_LIMIT_PREFIXES)
+                else pc_max
+            )
+            if abs_change > effective_pc_max:
                 continue
 
             # 统一 symbol 为纯 6 位

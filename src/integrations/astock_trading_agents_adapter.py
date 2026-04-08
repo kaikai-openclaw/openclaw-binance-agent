@@ -44,7 +44,7 @@ DEFAULT_BACKEND_URL = _env("LLM_BACKEND_URL", "")
 # ── 快速分析器（单次 LLM）─────────────────────────────────
 
 def _fetch_astock_quote(symbol: str) -> Dict[str, Any]:
-    """通过 akshare 获取 A 股行情，优先实时，fallback 日线。"""
+    """获取 A 股行情，优先实时行情，fallback 本地缓存日线。"""
     # 方案 A：东方财富实时
     try:
         import akshare as ak
@@ -66,28 +66,49 @@ def _fetch_astock_quote(symbol: str) -> Dict[str, Any]:
     except Exception:
         pass
 
-    # 方案 B：新浪日线 fallback
+    # 方案 B：本地 SQLite 缓存日线（零网络）
     try:
-        import akshare as ak
-        from src.infra.akshare_client import _symbol_exchange
-        exchange = _symbol_exchange(symbol).lower()
-        df = ak.stock_zh_a_daily(symbol=f"{exchange}{symbol}", adjust="qfq")
-        if df is not None and not df.empty:
-            last = df.iloc[-1]
-            prev = df.iloc[-2] if len(df) >= 2 else last
-            close = float(last["close"])
-            prev_close = float(prev["close"]) if len(df) >= 2 else close
+        from src.infra.kline_cache import KlineCache
+        cache = KlineCache()
+        rows = cache.query_as_rows(symbol, "qfq", 2)
+        cache.close()
+        if rows and len(rows) >= 2:
+            last, prev = rows[-1], rows[-2]
+            close = float(last[4])
+            prev_close = float(prev[4])
             change_pct = ((close - prev_close) / prev_close * 100) if prev_close > 0 else 0
             return {
-                "symbol": symbol,
-                "name": "",
+                "symbol": symbol, "name": "",
                 "last_price": close,
                 "change_pct": round(change_pct, 2),
-                "volume": float(last.get("volume", 0)),
-                "amount": float(last.get("amount", 0)),
-                "high": float(last.get("high", close)),
-                "low": float(last.get("low", close)),
-                "turnover_rate": float(last.get("turnover", 0) or 0) * 100,
+                "volume": float(last[5]),
+                "amount": 0.0,
+                "high": float(last[2]),
+                "low": float(last[3]),
+                "turnover_rate": 0.0,
+            }
+    except Exception:
+        pass
+
+    # 方案 C：AkshareClient（自带缓存层）
+    try:
+        from src.infra.akshare_client import AkshareClient, _symbol_exchange
+        client = AkshareClient()
+        klines = client.get_klines(symbol, "daily", 2)
+        if klines and len(klines) >= 2:
+            last, prev = klines[-1], klines[-2]
+            close = float(last[4])
+            prev_close = float(prev[4])
+            change_pct = ((close - prev_close) / prev_close * 100) if prev_close > 0 else 0
+            return {
+                "symbol": symbol, "name": "",
+                "last_price": close,
+                "change_pct": round(change_pct, 2),
+                "volume": float(last[5]),
+                "amount": 0.0,
+                "high": float(last[2]),
+                "low": float(last[3]),
+                "turnover_rate": 0.0,
             }
     except Exception as e:
         raise ValueError(f"获取 {symbol} 行情失败（所有接口）: {e}")

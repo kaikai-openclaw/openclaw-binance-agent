@@ -1,25 +1,39 @@
 """
-Skill-1B：A股超跌反弹筛选
+Skill-1B：A 股超跌反弹筛选（双模式）
 
-多维度超跌信号检测与综合评分：
-  1. 基础过滤 — 排除 ST/退市/北交所/低价股/流动性枯竭股（不做当日涨跌预筛）
-  2. 超跌信号检测 — 六维度量化评分：
-     - 价格偏离度: 20日乖离率（BIAS < -6%）
-     - 动量极值: RSI(14) 超卖区（< 35）
-     - 连续杀跌: 连续下跌天数 + 近10日累计跌幅（< -8%）
-     - 通道突破: 布林带下轨突破
-     - 动量背离: MACD 底背离
-     - KDJ 极值: J 值 < 0
-  3. 辅助确认 — 底部放量（恐慌盘涌出）
-  4. 相关性去重
+两种独立的超跌分析模式，针对 A 股市场特性深度定制：
 
-设计原则：超跌是历史累积状态，基础过滤仅排雷不做当日预筛，
-          让 K 线技术指标来判断是否真正超跌。
+## 短期超跌反弹（ShortTermAStockOversold）— 3~5 天持仓
+  适用场景：情绪错杀后的技术性修复，连续跌停后开板反弹
+  核心逻辑：恐慌抛售 → 超卖极值 → 底部放量（恐慌盘出尽）→ V 型反弹
+  回看窗口：20~30 天日线
+  A 股特有信号：
+    - 跌停板计数（连续跌停是 A 股独有的极端信号）
+    - 底部放量权重高（T+1 下恐慌盘集中释放 = 抛压出尽）
+    - KDJ 金叉确认（短期反转的即时信号）
+  阈值特点：RSI < 25、BIAS < -8%、连跌 ≥ 3 天、累跌 < -12%（10 天内）
 
-策略逻辑：均值回归，捕捉市场情绪错杀后的短期修复机会。
-风险提示：超跌反弹本质是左侧交易（接飞刀），必须严格止损。
+## 长期超跌蓄能（LongTermAStockOversold）— 2~4 周持仓
+  适用场景：中期阴跌后的底部构筑，缩量企稳 + 均值回归
+  核心逻辑：持续下跌 → 深度偏离均线 → 缩量筑底（不是放量！）→ MACD 底背离 → 趋势反转
+  回看窗口：60~120 天日线
+  A 股特有信号：
+    - 缩量企稳（A 股底部特征是地量，不是放量）
+    - 距 120 日高点回撤幅度（A 股中期调整通常 30-50%）
+    - MACD 底背离权重高（日线级别背离在 A 股可靠性很高）
+    - 60 日乖离率（中期偏离度比 20 日更有意义）
+  阈值特点：RSI < 35、BIAS(60) < -15%、连跌 ≥ 5 天、累跌 < -25%（30 天内）
 
-数据源：AkshareClient（akshare 公开接口，K 线优先走本地缓存）
+两者共享：基础过滤（排除 ST/退市/北交所/低价股）、相关性去重
+
+A 股 vs 加密货币的关键差异（影响指标设计）：
+  - 涨跌停板 10%/20% → 连续跌停是极端信号，需要专门计数
+  - T+1 交易 → 底部放量 = 恐慌盘集中释放 = 抛压出尽信号
+  - 板块联动强 → 相关性去重更重要
+  - 无资金费率 → 用换手率/量能变化替代
+  - 底部特征是缩量（地量见地价）→ 长期模式用缩量企稳而非放量
+
+数据源：AkshareClient（akshare 公开接口，K 线优先走本地 SQLite 缓存）
 """
 
 import logging
@@ -46,255 +60,86 @@ from src.skills.skill1_collect import (
 
 log = logging.getLogger(__name__)
 
-# ── 默认参数 ──────────────────────────────────────────────
-DEFAULT_MIN_AMOUNT = 50_000_000        # 最低成交额 5000 万
-DEFAULT_MIN_PRICE = 3.0
-DEFAULT_MIN_KLINES = 60                # 约 3 个月（放宽，覆盖更多次新股）
-DEFAULT_RSI_THRESHOLD = 35.0           # RSI < 35 视为偏弱（放宽，原 25 太严）
-DEFAULT_BIAS_THRESHOLD = -6.0          # 20日乖离率 < -6%（放宽，原 -10% 太严）
-DEFAULT_CONSECUTIVE_DOWN = 3           # 连续下跌 ≥ 3 天
-DEFAULT_DROP_PCT = -8.0                # 近 N 日累计跌幅 < -8%（放宽，原 -15%）
-DEFAULT_DROP_LOOKBACK = 10             # 回看 10 天
-DEFAULT_MIN_OVERSOLD_SCORE = 25        # 最低评分（放宽，原 50 太严）
-DEFAULT_MAX_CANDIDATES = 30            # 输出上限（扩大，原 15）
-DEFAULT_PREFILTER_CHANGE_PCT = 0.0     # 当日涨跌幅预筛（0=禁用，不再用当日跌幅过滤）
+# ══════════════════════════════════════════════════════════
+# 共享常量
+# ══════════════════════════════════════════════════════════
 
-# 布林带参数
 BOLL_PERIOD = 20
 BOLL_STD_MULT = 2.0
-
-# KDJ 参数
 KDJ_PERIOD = 9
 KDJ_M1 = 3
 KDJ_M2 = 3
 
-# 排除关键词
 _EXCLUDE_KEYWORDS = {"ST", "*ST", "退", "B股", "PT"}
-_20PCT_LIMIT_PREFIXES = ("300", "301", "688", "689")
 
-# ── 评分权重（满分 100）──────────────────────────────────
-W_BIAS = 20       # 乖离率
-W_RSI = 20        # RSI 超卖
-W_DROP = 15       # 连续杀跌 + 累计跌幅
-W_BOLL = 15       # 布林带下轨突破
-W_MACD_DIV = 15   # MACD 底背离
-W_KDJ = 10        # KDJ J值极值
-W_VOLUME = 5      # 底部放量确认（加分项）
+DEFAULT_MIN_AMOUNT = 50_000_000
+DEFAULT_MIN_PRICE = 3.0
+DEFAULT_MIN_OVERSOLD_SCORE = 25
+DEFAULT_MAX_CANDIDATES = 30
+DEFAULT_PREFILTER_CHANGE_PCT = 0.0
+
+# ══════════════════════════════════════════════════════════
+# 短期超跌参数（3~5 天反弹）
+# ══════════════════════════════════════════════════════════
+
+ST_MIN_KLINES = 30               # 最低 30 天数据
+ST_RSI_THRESHOLD = 25.0          # RSI < 25 极端超卖（A 股有涨跌停，RSI 更容易到极值）
+ST_BIAS_THRESHOLD = -8.0         # 20 日乖离率 < -8%
+ST_CONSECUTIVE_DOWN = 3          # 连续下跌 ≥ 3 天
+ST_DROP_PCT = -12.0              # 近 10 日累计跌幅 < -12%
+ST_DROP_LOOKBACK = 10            # 回看 10 天
+ST_DRAWDOWN_LOOKBACK = 30        # 距高点回看 30 天
+
+# 短期评分权重（满分 100）— 侧重即时超卖信号和恐慌盘释放
+ST_W_RSI = 20           # RSI 极端超卖（短期核心）
+ST_W_BIAS = 12          # 乖离率
+ST_W_DROP = 12          # 连续杀跌 + 累计跌幅
+ST_W_BOLL = 10          # 布林带下轨突破
+ST_W_MACD_DIV = 5       # MACD 底背离（短期可靠性一般）
+ST_W_KDJ = 10           # KDJ J 值极值（短期反转信号）
+ST_W_LIMIT_DOWN = 13    # 跌停板计数（A 股独有，连续跌停 = 极端恐慌）
+ST_W_VOLUME = 13        # 底部放量（T+1 下恐慌盘集中释放 = 抛压出尽）
+ST_W_DRAWDOWN = 5       # 距高点回撤（短期权重低）
+
+# ══════════════════════════════════════════════════════════
+# 长期超跌蓄能参数（2~4 周波段）
+# ══════════════════════════════════════════════════════════
+
+LT_MIN_KLINES = 60               # 最低 60 天数据
+LT_RSI_THRESHOLD = 35.0          # RSI < 35（长期不需要极端值，偏弱即可）
+LT_BIAS_THRESHOLD = -15.0        # 60 日乖离率 < -15%（用 60 日均线衡量中期偏离）
+LT_BIAS_PERIOD = 60              # 长期用 60 日乖离率（不是 20 日）
+LT_CONSECUTIVE_DOWN = 5          # 连续下跌 ≥ 5 天
+LT_DROP_PCT = -25.0              # 近 30 日累计跌幅 < -25%
+LT_DROP_LOOKBACK = 30            # 回看 30 天
+LT_DRAWDOWN_LOOKBACK = 120       # 距高点回看 120 天（半年，覆盖完整中期调整）
+LT_DRAWDOWN_THRESHOLD = -30.0    # 距高点回撤 > 30%
+
+# 长期评分权重（满分 100）— 侧重趋势偏离和底部构筑信号
+LT_W_RSI = 10           # RSI（长期权重降低）
+LT_W_BIAS = 18          # 60 日乖离率（中期偏离度，长期核心）
+LT_W_DROP = 10          # 连续杀跌 + 累计跌幅
+LT_W_BOLL = 8           # 布林带
+LT_W_MACD_DIV = 18      # MACD 底背离（日线级别在 A 股可靠性很高，长期核心）
+LT_W_KDJ = 5            # KDJ（长期权重低）
+LT_W_LIMIT_DOWN = 3     # 跌停板（长期看意义不大）
+LT_W_SHRINK_VOL = 13    # 缩量企稳（A 股底部特征：地量见地价，长期独有）
+LT_W_DRAWDOWN = 15      # 距高点回撤（长期核心）
 
 
-class Skill1BOversold(BaseSkill):
-    """
-    A 股超跌反弹筛选 Skill。
+# ══════════════════════════════════════════════════════════
+# 共享基类
+# ══════════════════════════════════════════════════════════
 
-    多维度超跌信号检测 + 综合评分，输出格式兼容下游 Skill-2A 深度分析。
-    """
+class _AStockOversoldBase(BaseSkill):
+    """A 股超跌筛选共享基类。"""
 
-    def __init__(
-        self,
-        state_store: StateStore,
-        input_schema: dict,
-        output_schema: dict,
-        client: Any,
-    ) -> None:
+    def __init__(self, state_store, input_schema, output_schema, client) -> None:
         super().__init__(state_store, input_schema, output_schema)
-        self.name = "skill1b_oversold"
         self._client = client
 
-    def run(self, input_data: dict) -> dict:
-        min_amount = input_data.get("min_amount", DEFAULT_MIN_AMOUNT)
-        min_price = input_data.get("min_price", DEFAULT_MIN_PRICE)
-        min_klines = input_data.get("min_klines", DEFAULT_MIN_KLINES)
-        rsi_thresh = input_data.get("rsi_threshold", DEFAULT_RSI_THRESHOLD)
-        bias_thresh = input_data.get("bias_threshold", DEFAULT_BIAS_THRESHOLD)
-        consec_down = input_data.get("consecutive_down_days", DEFAULT_CONSECUTIVE_DOWN)
-        drop_pct_thresh = input_data.get("drop_pct_threshold", DEFAULT_DROP_PCT)
-        drop_lookback = input_data.get("drop_lookback_days", DEFAULT_DROP_LOOKBACK)
-        min_score = input_data.get("min_oversold_score", DEFAULT_MIN_OVERSOLD_SCORE)
-        max_cands = input_data.get("max_candidates", DEFAULT_MAX_CANDIDATES)
-        target_symbols = input_data.get("target_symbols")
-        require_vol = input_data.get("require_volume_confirm", False)
-        prefilter_pct = input_data.get("prefilter_change_pct", DEFAULT_PREFILTER_CHANGE_PCT)
-
-        pipeline_run_id = str(uuid.uuid4())
-
-        # ── Step 1: 获取实时行情 & 基础过滤 ──
-        all_tickers = self._client.get_spot_all()
-        total_count = len(all_tickers)
-
-        if target_symbols:
-            pool = self._build_target_pool(all_tickers, target_symbols)
-            if not pool and hasattr(self._client, "get_spot_by_hist"):
-                pool = self._client.get_spot_by_hist(target_symbols)
-        else:
-            pool = self._base_filter(all_tickers, min_amount, min_price, prefilter_pct)
-        log.info("[skill1b] Step1: %d/%d 通过基础过滤", len(pool), total_count)
-
-        # ── Step 2: 超跌信号检测 + 评分 ──
-        scored: List[dict] = []
-        returns_map: Dict[str, List[float]] = {}
-
-        for item in pool:
-            symbol = item["symbol"]
-            try:
-                klines = self._client.get_klines(symbol, "daily", max(KLINE_LIMIT, min_klines))
-                if not klines or len(klines) < min_klines:
-                    continue
-
-                closes = [float(k[4]) for k in klines]
-                highs = [float(k[2]) for k in klines]
-                lows = [float(k[3]) for k in klines]
-                volumes = [float(k[5]) for k in klines]
-
-                result = self._calc_oversold_score(
-                    closes, highs, lows, volumes,
-                    rsi_thresh, bias_thresh, consec_down,
-                    drop_pct_thresh, drop_lookback,
-                )
-
-                if result["oversold_score"] < min_score and not target_symbols:
-                    continue
-
-                if require_vol and (result["volume_surge"] is None or result["volume_surge"] < 1.5):
-                    continue
-
-                returns_map[symbol] = calc_returns(closes)
-
-                atr_val = calc_atr(highs, lows, closes, ATR_PERIOD)
-                last_close = closes[-1]
-                atr_pct = round(atr_val / last_close * 100, 2) if (atr_val and last_close > 0) else None
-
-                scored.append({
-                    "symbol": symbol,
-                    "name": item.get("name", ""),
-                    "close": last_close,
-                    "amount": item.get("amount", 0),
-                    "rsi": result["rsi"],
-                    "bias_20": result["bias_20"],
-                    "consecutive_down": result["consecutive_down"],
-                    "drop_pct": result["drop_pct"],
-                    "below_boll_lower": result["below_boll_lower"],
-                    "kdj_j": result["kdj_j"],
-                    "macd_divergence": result["macd_divergence"],
-                    "volume_surge": result["volume_surge"],
-                    "oversold_score": result["oversold_score"],
-                    "signal_details": result["signal_details"],
-                    "atr_pct": atr_pct,
-                    "collected_at": datetime.now(timezone.utc).isoformat(),
-                })
-            except Exception as exc:
-                log.warning("[skill1b] %s 分析失败: %s", symbol, exc)
-                continue
-
-        scored.sort(key=lambda x: x["oversold_score"], reverse=True)
-
-        # ── Step 3: 相关性去重 ──
-        candidates = self._deduplicate(scored, returns_map, max_cands)
-
-        log.info("[skill1b] 完成: pool=%d, scored=%d, output=%d",
-                 len(pool), len(scored), len(candidates))
-
-        return {
-            "state_id": str(uuid.uuid4()),
-            "candidates": candidates,
-            "pipeline_run_id": pipeline_run_id,
-            "filter_summary": {
-                "total_tickers": total_count,
-                "after_base_filter": len(pool),
-                "after_oversold_filter": len(scored),
-                "output_count": len(candidates),
-            },
-        }
-
-    # ── 超跌评分核心 ─────────────────────────────────────
-
     @staticmethod
-    def _calc_oversold_score(
-        closes: List[float],
-        highs: List[float],
-        lows: List[float],
-        volumes: List[float],
-        rsi_thresh: float,
-        bias_thresh: float,
-        consec_down_thresh: int,
-        drop_pct_thresh: float,
-        drop_lookback: int,
-    ) -> dict:
-        """计算超跌综合评分（满分 100）。"""
-        signals = []
-        score = 0.0
-
-        # ── 1. RSI 超卖 ──
-        rsi_val = calc_rsi(closes, RSI_PERIOD)
-        rsi_score = 0.0
-        if rsi_val is not None and rsi_val < rsi_thresh:
-            # RSI 越低分越高，线性映射
-            rsi_score = W_RSI * min(1.0, (rsi_thresh - rsi_val) / rsi_thresh)
-            signals.append(f"RSI({RSI_PERIOD})={rsi_val:.1f}<{rsi_thresh}")
-        score += rsi_score
-
-        # ── 2. 乖离率 BIAS(20) ──
-        bias_20 = _calc_bias(closes, BOLL_PERIOD)
-        bias_score = 0.0
-        if bias_20 is not None and bias_20 < bias_thresh:
-            bias_score = W_BIAS * min(1.0, (bias_thresh - bias_20) / abs(bias_thresh))
-            signals.append(f"BIAS(20)={bias_20:.1f}%<{bias_thresh}%")
-        score += bias_score
-
-        # ── 3. 连续杀跌 + 累计跌幅 ──
-        consec = _calc_consecutive_down(closes)
-        drop_pct = _calc_drop_pct(closes, drop_lookback)
-        drop_score = 0.0
-        if consec >= consec_down_thresh:
-            drop_score += W_DROP * 0.5 * min(1.0, consec / (consec_down_thresh * 2))
-            signals.append(f"连跌{consec}天≥{consec_down_thresh}")
-        if drop_pct is not None and drop_pct < drop_pct_thresh:
-            drop_score += W_DROP * 0.5 * min(1.0, (drop_pct_thresh - drop_pct) / abs(drop_pct_thresh))
-            signals.append(f"近{drop_lookback}日跌{drop_pct:.1f}%<{drop_pct_thresh}%")
-        score += min(drop_score, float(W_DROP))
-
-        # ── 4. 布林带下轨突破 ──
-        below_boll = _check_below_boll_lower(closes)
-        if below_boll:
-            score += W_BOLL
-            signals.append("跌破BOLL下轨")
-
-        # ── 5. MACD 底背离 ──
-        macd_div = _check_macd_divergence(closes)
-        if macd_div:
-            score += W_MACD_DIV
-            signals.append("MACD底背离")
-
-        # ── 6. KDJ J值极值 ──
-        kdj_j = _calc_kdj_j(closes, highs, lows)
-        kdj_score = 0.0
-        if kdj_j is not None and kdj_j < 0:
-            kdj_score = W_KDJ * min(1.0, abs(kdj_j) / 20.0)
-            signals.append(f"KDJ_J={kdj_j:.1f}<0")
-        score += kdj_score
-
-        # ── 7. 底部放量（加分项）──
-        vol_surge = _calc_volume_surge_bottom(volumes)
-        if vol_surge is not None and vol_surge >= 1.5:
-            score += W_VOLUME
-            signals.append(f"底部放量{vol_surge:.1f}x")
-
-        return {
-            "rsi": round(rsi_val, 2) if rsi_val is not None else None,
-            "bias_20": round(bias_20, 2) if bias_20 is not None else None,
-            "consecutive_down": consec,
-            "drop_pct": round(drop_pct, 2) if drop_pct is not None else None,
-            "below_boll_lower": below_boll,
-            "kdj_j": round(kdj_j, 2) if kdj_j is not None else None,
-            "macd_divergence": macd_div,
-            "volume_surge": round(vol_surge, 2) if vol_surge is not None else None,
-            "oversold_score": round(score),
-            "signal_details": " | ".join(signals) if signals else "无超跌信号",
-        }
-
-    # ── 基础过滤 ─────────────────────────────────────────
-
-    @staticmethod
-    def _build_target_pool(all_tickers: List[dict], target_symbols: List[str]) -> List[dict]:
+    def _build_target_pool(all_tickers, target_symbols):
         normalized = set()
         for s in target_symbols:
             s = s.strip().upper()
@@ -312,69 +157,397 @@ class Skill1BOversold(BaseSkill):
         return pool
 
     @staticmethod
-    def _base_filter(tickers: List[dict], min_amount: float, min_price: float,
-                     prefilter_pct: float = DEFAULT_PREFILTER_CHANGE_PCT) -> List[dict]:
-        """基础过滤：仅排雷，不做激进的当日预筛。
-
-        超跌是历史累积状态，不应该只看今天一天的涨跌。
-        排雷逻辑：
-        1. 排除 ST/退市/北交所/低价股
-        2. 排除流动性枯竭（成交额过低）
-        3. 可选：当日跌幅预筛（prefilter_pct=0 时禁用）
-        """
+    def _base_filter(tickers, min_amount, min_price, prefilter_pct=0.0):
         result = []
         for t in tickers:
             raw_symbol = t.get("symbol", "")
             name = t.get("name", "")
             symbol = raw_symbol[-6:] if len(raw_symbol) > 6 else raw_symbol
-
             if any(kw in name for kw in _EXCLUDE_KEYWORDS):
                 continue
             if symbol.startswith(("8", "9")):
                 continue
-
             close = t.get("close")
             if close is None or close <= 0 or close < min_price:
                 continue
-
             amount = t.get("amount")
             if amount is None or amount < min_amount:
                 continue
-
-            # 可选预筛：当日跌幅（prefilter_pct=0 或正数时禁用）
             if prefilter_pct < 0:
                 change = t.get("change_pct")
                 if change is not None and change > prefilter_pct:
                     continue
-
             result.append({**t, "symbol": symbol})
         return result
 
     @staticmethod
-    def _deduplicate(
-        scored: List[dict], returns_map: Dict[str, List[float]], max_cands: int,
-    ) -> List[dict]:
-        selected: List[dict] = []
-        selected_returns: List[List[float]] = []
+    def _deduplicate(scored, returns_map, max_cands):
+        selected, selected_returns = [], []
         for item in scored:
             if len(selected) >= max_cands:
                 break
             rets = returns_map.get(item["symbol"], [])
-            redundant = False
-            for sel_rets in selected_returns:
-                if calc_correlation(rets, sel_rets) > CORRELATION_THRESHOLD:
-                    redundant = True
-                    break
-            if not redundant:
+            if not any(calc_correlation(rets, sr) > CORRELATION_THRESHOLD for sr in selected_returns):
                 selected.append(item)
                 selected_returns.append(rets)
         return selected
 
+    def _run_scan(self, input_data: dict, mode: str) -> dict:
+        """通用扫描流程。mode = 'short' 或 'long'。"""
+        min_amount = input_data.get("min_amount", DEFAULT_MIN_AMOUNT)
+        min_price = input_data.get("min_price", DEFAULT_MIN_PRICE)
+        min_score = input_data.get("min_oversold_score", DEFAULT_MIN_OVERSOLD_SCORE)
+        max_cands = input_data.get("max_candidates", DEFAULT_MAX_CANDIDATES)
+        target_symbols = input_data.get("target_symbols")
+        prefilter_pct = input_data.get("prefilter_change_pct", DEFAULT_PREFILTER_CHANGE_PCT)
+
+        if mode == "long":
+            min_klines = input_data.get("min_klines", LT_MIN_KLINES)
+            rsi_thresh = input_data.get("rsi_threshold", LT_RSI_THRESHOLD)
+            bias_thresh = input_data.get("bias_threshold", LT_BIAS_THRESHOLD)
+            consec_thresh = input_data.get("consecutive_down_days", LT_CONSECUTIVE_DOWN)
+            drop_thresh = input_data.get("drop_pct_threshold", LT_DROP_PCT)
+            drop_lookback = input_data.get("drop_lookback_days", LT_DROP_LOOKBACK)
+        else:
+            min_klines = input_data.get("min_klines", ST_MIN_KLINES)
+            rsi_thresh = input_data.get("rsi_threshold", ST_RSI_THRESHOLD)
+            bias_thresh = input_data.get("bias_threshold", ST_BIAS_THRESHOLD)
+            consec_thresh = input_data.get("consecutive_down_days", ST_CONSECUTIVE_DOWN)
+            drop_thresh = input_data.get("drop_pct_threshold", ST_DROP_PCT)
+            drop_lookback = input_data.get("drop_lookback_days", ST_DROP_LOOKBACK)
+
+        pipeline_run_id = str(uuid.uuid4())
+
+        all_tickers = self._client.get_spot_all()
+        total_count = len(all_tickers)
+
+        if target_symbols:
+            pool = self._build_target_pool(all_tickers, target_symbols)
+            if not pool and hasattr(self._client, "get_spot_by_hist"):
+                pool = self._client.get_spot_by_hist(target_symbols)
+        else:
+            pool = self._base_filter(all_tickers, min_amount, min_price, prefilter_pct)
+
+        log.info("[%s] Step1: %d/%d 通过基础过滤", self.name, len(pool), total_count)
+
+        # 拉取足够的 K 线
+        kline_need = max(KLINE_LIMIT, min_klines,
+                         LT_DRAWDOWN_LOOKBACK + 20 if mode == "long" else ST_DRAWDOWN_LOOKBACK + 20)
+
+        scored: List[dict] = []
+        returns_map: Dict[str, List[float]] = {}
+
+        for item in pool:
+            symbol = item["symbol"]
+            try:
+                klines = self._client.get_klines(symbol, "daily", kline_need)
+                if not klines or len(klines) < min_klines:
+                    continue
+
+                closes = [float(k[4]) for k in klines]
+                highs = [float(k[2]) for k in klines]
+                lows = [float(k[3]) for k in klines]
+                volumes = [float(k[5]) for k in klines]
+
+                if mode == "short":
+                    result = _calc_short_term_score(
+                        closes, highs, lows, volumes,
+                        rsi_thresh, bias_thresh, consec_thresh,
+                        drop_thresh, drop_lookback,
+                    )
+                else:
+                    result = _calc_long_term_score(
+                        closes, highs, lows, volumes,
+                        rsi_thresh, bias_thresh, consec_thresh,
+                        drop_thresh, drop_lookback,
+                    )
+
+                if result["oversold_score"] < min_score and not target_symbols:
+                    continue
+
+                returns_map[symbol] = calc_returns(closes)
+                atr_val = calc_atr(highs, lows, closes, ATR_PERIOD)
+                last_close = closes[-1]
+                atr_pct = round(atr_val / last_close * 100, 2) if (atr_val and last_close > 0) else None
+
+                scored.append({
+                    "symbol": symbol,
+                    "name": item.get("name", ""),
+                    "close": last_close,
+                    "amount": item.get("amount", 0),
+                    "rsi": result["rsi"],
+                    "bias_20": result["bias"],
+                    "consecutive_down": result["consecutive_down"],
+                    "drop_pct": result["drop_pct"],
+                    "below_boll_lower": result["below_boll_lower"],
+                    "kdj_j": result["kdj_j"],
+                    "macd_divergence": result["macd_divergence"],
+                    "volume_surge": result.get("volume_surge"),
+                    "oversold_score": result["oversold_score"],
+                    "signal_details": result["signal_details"],
+                    "atr_pct": atr_pct,
+                    "collected_at": datetime.now(timezone.utc).isoformat(),
+                })
+            except Exception as exc:
+                log.warning("[%s] %s 分析失败: %s", self.name, symbol, exc)
+
+        scored.sort(key=lambda x: x["oversold_score"], reverse=True)
+        candidates = self._deduplicate(scored, returns_map, max_cands)
+
+        log.info("[%s] 完成: pool=%d, scored=%d, output=%d",
+                 self.name, len(pool), len(scored), len(candidates))
+
+        return {
+            "state_id": str(uuid.uuid4()),
+            "candidates": candidates,
+            "pipeline_run_id": pipeline_run_id,
+            "filter_summary": {
+                "total_tickers": total_count,
+                "after_base_filter": len(pool),
+                "after_oversold_filter": len(scored),
+                "output_count": len(candidates),
+            },
+        }
+
 
 # ══════════════════════════════════════════════════════════
-# 超跌指标计算（纯函数）
+# 短期超跌反弹 Skill
 # ══════════════════════════════════════════════════════════
 
+class ShortTermAStockOversold(_AStockOversoldBase):
+    """A 股短期超跌反弹筛选（3~5 天持仓）。
+
+    捕捉情绪错杀后的技术性修复。
+    核心信号：RSI 极端超卖 + 跌停板计数 + 底部放量（恐慌盘出尽）。
+    """
+
+    def __init__(self, state_store, input_schema, output_schema, client) -> None:
+        super().__init__(state_store, input_schema, output_schema, client)
+        self.name = "skill1b_oversold_short"
+
+    def run(self, input_data: dict) -> dict:
+        return self._run_scan(input_data, mode="short")
+
+
+# ══════════════════════════════════════════════════════════
+# 长期超跌蓄能 Skill
+# ══════════════════════════════════════════════════════════
+
+class LongTermAStockOversold(_AStockOversoldBase):
+    """A 股长期超跌蓄能筛选（2~4 周持仓）。
+
+    捕捉中期阴跌后的底部构筑和均值回归。
+    核心信号：60 日 BIAS 深度偏离 + MACD 底背离 + 缩量企稳 + 距高点深度回撤。
+    """
+
+    def __init__(self, state_store, input_schema, output_schema, client) -> None:
+        super().__init__(state_store, input_schema, output_schema, client)
+        self.name = "skill1b_oversold_long"
+
+    def run(self, input_data: dict) -> dict:
+        return self._run_scan(input_data, mode="long")
+
+
+# 向后兼容：保留原名指向短期版本
+Skill1BOversold = ShortTermAStockOversold
+
+
+# ══════════════════════════════════════════════════════════
+# 短期超跌评分（侧重即时超卖 + 恐慌盘释放）
+# ══════════════════════════════════════════════════════════
+
+def _calc_short_term_score(
+    closes: List[float], highs: List[float], lows: List[float],
+    volumes: List[float],
+    rsi_thresh: float, bias_thresh: float, consec_thresh: int,
+    drop_thresh: float, drop_lookback: int,
+) -> dict:
+    """短期超跌评分（满分 100）。
+
+    侧重即时超卖极值和恐慌盘释放信号。
+    A 股特有：跌停板计数（权重 13）、底部放量（权重 13）。
+    """
+    signals = []
+    score = 0.0
+
+    # ── 1. RSI 极端超卖（权重 20）──
+    rsi_val = calc_rsi(closes, RSI_PERIOD)
+    if rsi_val is not None and rsi_val < rsi_thresh:
+        score += ST_W_RSI * min(1.0, (rsi_thresh - rsi_val) / rsi_thresh)
+        signals.append(f"RSI={rsi_val:.1f}<{rsi_thresh}")
+
+    # ── 2. 20 日乖离率（权重 12）──
+    bias = _calc_bias(closes, BOLL_PERIOD)
+    if bias is not None and bias < bias_thresh:
+        score += ST_W_BIAS * min(1.0, (bias_thresh - bias) / abs(bias_thresh))
+        signals.append(f"BIAS(20)={bias:.1f}%<{bias_thresh}%")
+
+    # ── 3. 连续杀跌 + 累计跌幅（权重 12）──
+    consec = _calc_consecutive_down(closes)
+    drop_pct = _calc_drop_pct(closes, drop_lookback)
+    drop_score = 0.0
+    if consec >= consec_thresh:
+        drop_score += ST_W_DROP * 0.5 * min(1.0, consec / (consec_thresh * 2))
+        signals.append(f"连跌{consec}天≥{consec_thresh}")
+    if drop_pct is not None and drop_pct < drop_thresh:
+        drop_score += ST_W_DROP * 0.5 * min(1.0, (drop_thresh - drop_pct) / abs(drop_thresh))
+        signals.append(f"近{drop_lookback}日跌{drop_pct:.1f}%")
+    score += min(drop_score, float(ST_W_DROP))
+
+    # ── 4. 布林带下轨突破（权重 10）──
+    below_boll = _check_below_boll_lower(closes)
+    if below_boll:
+        score += ST_W_BOLL
+        signals.append("跌破BOLL下轨")
+
+    # ── 5. MACD 底背离（权重 5，短期可靠性一般）──
+    macd_div = _check_macd_divergence(closes, lookback=20)
+    if macd_div:
+        score += ST_W_MACD_DIV
+        signals.append("MACD底背离")
+
+    # ── 6. KDJ J 值极值（权重 10）──
+    kdj_j = _calc_kdj_j(closes, highs, lows)
+    if kdj_j is not None and kdj_j < 0:
+        score += ST_W_KDJ * min(1.0, abs(kdj_j) / 20.0)
+        signals.append(f"KDJ_J={kdj_j:.1f}<0")
+
+    # ── 7. 跌停板计数（权重 13，A 股独有）──
+    # 连续跌停 = 流动性枯竭 = 极端恐慌，开板后反弹概率高
+    limit_down_count = _calc_limit_down_count(closes)
+    if limit_down_count >= 1:
+        ld_score = ST_W_LIMIT_DOWN * min(1.0, limit_down_count / 3.0)
+        score += ld_score
+        signals.append(f"近期{limit_down_count}个跌停")
+
+    # ── 8. 底部放量（权重 13，T+1 下恐慌盘集中释放）──
+    vol_surge = _calc_volume_surge_bottom(volumes)
+    if vol_surge is not None and vol_surge >= 1.5:
+        score += ST_W_VOLUME * min(1.0, (vol_surge - 1.0) / 2.0)
+        signals.append(f"底部放量{vol_surge:.1f}x")
+
+    # ── 9. 距高点回撤（权重 5，短期参考）──
+    drawdown = _calc_distance_from_high(closes, ST_DRAWDOWN_LOOKBACK)
+    if drawdown is not None and drawdown < -15.0:
+        score += ST_W_DRAWDOWN * min(1.0, (-15.0 - drawdown) / 15.0)
+        signals.append(f"距高点{drawdown:.1f}%")
+
+    return {
+        "rsi": round(rsi_val, 2) if rsi_val is not None else None,
+        "bias": round(bias, 2) if bias is not None else None,
+        "consecutive_down": consec,
+        "drop_pct": round(drop_pct, 2) if drop_pct is not None else None,
+        "below_boll_lower": below_boll,
+        "kdj_j": round(kdj_j, 2) if kdj_j is not None else None,
+        "macd_divergence": macd_div,
+        "volume_surge": round(vol_surge, 2) if vol_surge is not None else None,
+        "oversold_score": round(score),
+        "signal_details": " | ".join(signals) if signals else "无超跌信号",
+    }
+
+
+# ══════════════════════════════════════════════════════════
+# 长期超跌蓄能评分（侧重趋势偏离 + 底部构筑）
+# ══════════════════════════════════════════════════════════
+
+def _calc_long_term_score(
+    closes: List[float], highs: List[float], lows: List[float],
+    volumes: List[float],
+    rsi_thresh: float, bias_thresh: float, consec_thresh: int,
+    drop_thresh: float, drop_lookback: int,
+) -> dict:
+    """长期超跌蓄能评分（满分 100）。
+
+    侧重中期趋势偏离和底部构筑信号。
+    A 股特有：缩量企稳（权重 13，地量见地价）、60 日乖离率（权重 18）。
+    """
+    signals = []
+    score = 0.0
+
+    # ── 1. RSI 偏弱（权重 10）──
+    rsi_val = calc_rsi(closes, RSI_PERIOD)
+    if rsi_val is not None and rsi_val < rsi_thresh:
+        score += LT_W_RSI * min(1.0, (rsi_thresh - rsi_val) / rsi_thresh)
+        signals.append(f"RSI={rsi_val:.1f}<{rsi_thresh}")
+
+    # ── 2. 60 日乖离率（权重 18，长期核心）──
+    # 用 60 日均线衡量中期偏离度，比 20 日更能反映中期超跌
+    bias = _calc_bias(closes, LT_BIAS_PERIOD)
+    if bias is not None and bias < bias_thresh:
+        score += LT_W_BIAS * min(1.0, (bias_thresh - bias) / abs(bias_thresh))
+        signals.append(f"BIAS(60)={bias:.1f}%<{bias_thresh}%")
+
+    # ── 3. 连续杀跌 + 累计跌幅（权重 10）──
+    consec = _calc_consecutive_down(closes)
+    drop_pct = _calc_drop_pct(closes, drop_lookback)
+    drop_score = 0.0
+    if consec >= consec_thresh:
+        drop_score += LT_W_DROP * 0.5 * min(1.0, consec / (consec_thresh * 2))
+        signals.append(f"连跌{consec}天≥{consec_thresh}")
+    if drop_pct is not None and drop_pct < drop_thresh:
+        drop_score += LT_W_DROP * 0.5 * min(1.0, (drop_thresh - drop_pct) / abs(drop_thresh))
+        signals.append(f"近{drop_lookback}日跌{drop_pct:.1f}%")
+    score += min(drop_score, float(LT_W_DROP))
+
+    # ── 4. 布林带下轨突破（权重 8）──
+    below_boll = _check_below_boll_lower(closes)
+    if below_boll:
+        score += LT_W_BOLL
+        signals.append("跌破BOLL下轨")
+
+    # ── 5. MACD 底背离（权重 18，长期核心）──
+    # 日线级别 MACD 底背离在 A 股可靠性很高，回看 60 天
+    macd_div = _check_macd_divergence(closes, lookback=60)
+    if macd_div:
+        score += LT_W_MACD_DIV
+        signals.append("MACD底背离(60日)")
+
+    # ── 6. KDJ J 值（权重 5）──
+    kdj_j = _calc_kdj_j(closes, highs, lows)
+    if kdj_j is not None and kdj_j < 0:
+        score += LT_W_KDJ * min(1.0, abs(kdj_j) / 20.0)
+        signals.append(f"KDJ_J={kdj_j:.1f}<0")
+
+    # ── 7. 跌停板（权重 3，长期看意义不大）──
+    limit_down_count = _calc_limit_down_count(closes)
+    if limit_down_count >= 2:
+        score += LT_W_LIMIT_DOWN
+        signals.append(f"近期{limit_down_count}个跌停")
+
+    # ── 8. 缩量企稳（权重 13，A 股底部独有特征）──
+    # A 股底部特征是"地量见地价"：成交量萎缩到极致 = 抛压枯竭 = 底部
+    # 与短期的"放量"信号相反！长期底部是缩量筑底
+    shrink = _calc_volume_shrink(volumes)
+    if shrink is not None and shrink < 0.5:
+        # 当前量能不到 20 日均量的 50% = 极度缩量
+        shrink_score = LT_W_SHRINK_VOL * min(1.0, (0.5 - shrink) / 0.3)
+        score += shrink_score
+        signals.append(f"缩量企稳(量比{shrink:.2f})")
+
+    # ── 9. 距 120 日高点回撤（权重 15，长期核心）──
+    drawdown = _calc_distance_from_high(closes, LT_DRAWDOWN_LOOKBACK)
+    if drawdown is not None and drawdown < LT_DRAWDOWN_THRESHOLD:
+        score += LT_W_DRAWDOWN * min(1.0,
+            (LT_DRAWDOWN_THRESHOLD - drawdown) / abs(LT_DRAWDOWN_THRESHOLD))
+        signals.append(f"距120日高点{drawdown:.1f}%")
+
+    return {
+        "rsi": round(rsi_val, 2) if rsi_val is not None else None,
+        "bias": round(bias, 2) if bias is not None else None,
+        "consecutive_down": consec,
+        "drop_pct": round(drop_pct, 2) if drop_pct is not None else None,
+        "below_boll_lower": below_boll,
+        "kdj_j": round(kdj_j, 2) if kdj_j is not None else None,
+        "macd_divergence": macd_div,
+        "volume_surge": round(shrink, 2) if shrink is not None else None,
+        "oversold_score": round(score),
+        "signal_details": " | ".join(signals) if signals else "无超跌信号",
+    }
+
+
+# ══════════════════════════════════════════════════════════
+# 纯函数指标库
+# ══════════════════════════════════════════════════════════
 
 def _calc_bias(closes: List[float], period: int = 20) -> Optional[float]:
     """计算乖离率 BIAS = (收盘价 - MA) / MA * 100。"""
@@ -387,7 +560,6 @@ def _calc_bias(closes: List[float], period: int = 20) -> Optional[float]:
 
 
 def _calc_consecutive_down(closes: List[float]) -> int:
-    """计算最近连续下跌天数。"""
     count = 0
     for i in range(len(closes) - 1, 0, -1):
         if closes[i] < closes[i - 1]:
@@ -398,7 +570,6 @@ def _calc_consecutive_down(closes: List[float]) -> int:
 
 
 def _calc_drop_pct(closes: List[float], lookback: int) -> Optional[float]:
-    """计算近 N 日累计跌幅（%）。"""
     if len(closes) < lookback + 1:
         return None
     base = closes[-(lookback + 1)]
@@ -408,117 +579,104 @@ def _calc_drop_pct(closes: List[float], lookback: int) -> Optional[float]:
 
 
 def _check_below_boll_lower(closes: List[float]) -> bool:
-    """检查最新收盘价是否跌破布林带下轨。"""
     if len(closes) < BOLL_PERIOD:
         return False
     window = closes[-BOLL_PERIOD:]
     ma = sum(window) / BOLL_PERIOD
     variance = sum((x - ma) ** 2 for x in window) / BOLL_PERIOD
     std = math.sqrt(variance)
-    lower = ma - BOLL_STD_MULT * std
-    return closes[-1] < lower
+    return closes[-1] < ma - BOLL_STD_MULT * std
 
 
 def _calc_kdj_j(
     closes: List[float], highs: List[float], lows: List[float],
     period: int = KDJ_PERIOD, m1: int = KDJ_M1, m2: int = KDJ_M2,
 ) -> Optional[float]:
-    """计算 KDJ 指标的 J 值。J = 3K - 2D。"""
     if len(closes) < period + m1 + m2:
         return None
-
-    # 计算 RSV 序列
     rsvs = []
     for i in range(period - 1, len(closes)):
-        h_window = highs[i - period + 1: i + 1]
-        l_window = lows[i - period + 1: i + 1]
-        hh = max(h_window)
-        ll = min(l_window)
-        if hh == ll:
-            rsvs.append(50.0)
-        else:
-            rsvs.append((closes[i] - ll) / (hh - ll) * 100)
-
+        hh = max(highs[i - period + 1: i + 1])
+        ll = min(lows[i - period + 1: i + 1])
+        rsvs.append(50.0 if hh == ll else (closes[i] - ll) / (hh - ll) * 100)
     if not rsvs:
         return None
-
-    # K = SMA(RSV, m1)，D = SMA(K, m2)
-    k_val = rsvs[0]
-    d_val = k_val
+    k_val = d_val = rsvs[0]
     for rsv in rsvs[1:]:
         k_val = (k_val * (m1 - 1) + rsv) / m1
         d_val = (d_val * (m2 - 1) + k_val) / m2
-
-    j_val = 3 * k_val - 2 * d_val
-    return j_val
+    return 3 * k_val - 2 * d_val
 
 
 def _check_macd_divergence(closes: List[float], lookback: int = 30) -> bool:
-    """
-    检测 MACD 底背离：价格创新低但 MACD 柱状图未创新低。
-
-    简化实现：比较最近 lookback 根 K 线内的两个低点区域。
-    """
+    """检测 MACD 底背离。"""
     macd_data = calc_macd(closes)
-    hist = macd_data.get("histogram")
-    if hist is None:
+    if macd_data.get("histogram") is None or len(closes) < lookback + 10:
         return False
-
-    # 需要足够的数据
-    if len(closes) < lookback + 10:
-        return False
-
-    recent_closes = closes[-lookback:]
-    recent_hist_start = len(closes) - lookback
-
-    # 找最近 lookback 根内的最低价位置
-    min_idx = 0
-    for i in range(1, len(recent_closes)):
-        if recent_closes[i] < recent_closes[min_idx]:
-            min_idx = i
-
-    # 在最低价之前找次低点（至少间隔 5 根）
+    recent = closes[-lookback:]
+    base_idx = len(closes) - lookback
+    min_idx = min(range(len(recent)), key=lambda i: recent[i])
     prev_min_idx = None
-    search_end = max(0, min_idx - 5)
-    for i in range(search_end - 1, -1, -1):
-        if prev_min_idx is None or recent_closes[i] < recent_closes[prev_min_idx]:
+    for i in range(max(0, min_idx - 5) - 1, -1, -1):
+        if prev_min_idx is None or recent[i] < recent[prev_min_idx]:
             prev_min_idx = i
-
-    if prev_min_idx is None:
+    if prev_min_idx is None or recent[min_idx] >= recent[prev_min_idx]:
         return False
-
-    # 价格创新低
-    if recent_closes[min_idx] >= recent_closes[prev_min_idx]:
-        return False
-
-    # 获取对应位置的 MACD histogram
-    # calc_macd 返回的是最后一根的值，需要重新计算序列
-    # 简化：用两段区域的 closes 分别算 MACD
-    full_idx_1 = recent_hist_start + prev_min_idx
-    full_idx_2 = recent_hist_start + min_idx
-
-    macd1 = calc_macd(closes[:full_idx_1 + 1])
-    macd2 = calc_macd(closes[:full_idx_2 + 1])
-
-    h1 = macd1.get("histogram")
-    h2 = macd2.get("histogram")
-
-    if h1 is None or h2 is None:
-        return False
-
-    # MACD histogram 未创新低 = 底背离
-    return h2 > h1
+    h1 = calc_macd(closes[:base_idx + prev_min_idx + 1]).get("histogram")
+    h2 = calc_macd(closes[:base_idx + min_idx + 1]).get("histogram")
+    return h1 is not None and h2 is not None and h2 > h1
 
 
-def _calc_volume_surge_bottom(volumes: List[float], short_w: int = 1, long_w: int = 5) -> Optional[float]:
-    """
-    底部放量检测：最后一根 K 线成交量 / 前 5 根均量。
+def _calc_distance_from_high(closes: List[float], lookback: int) -> Optional[float]:
+    if len(closes) < 2:
+        return None
+    window = closes[-min(lookback, len(closes)):]
+    high = max(window)
+    return (closes[-1] - high) / high * 100 if high > 0 else None
 
-    放量 ≥ 1.5 倍视为恐慌盘涌出信号。
-    """
+
+def _calc_volume_surge_bottom(volumes: List[float], long_w: int = 5) -> Optional[float]:
+    """底部放量：最后一根 / 前 5 根均量。"""
     if len(volumes) < long_w + 1:
         return None
     avg = sum(volumes[-(long_w + 1):-1]) / long_w
-    if avg <= 0:
+    return volumes[-1] / avg if avg > 0 else None
+
+
+# ── A 股独有指标 ─────────────────────────────────────────
+
+def _calc_limit_down_count(closes: List[float], lookback: int = 10) -> int:
+    """计算近 N 天内的跌停板次数。
+
+    A 股跌停判定：
+    - 主板/中小板：跌幅 ≥ 9.5%（考虑四舍五入，实际跌停是 -10%）
+    - 创业板/科创板：跌幅 ≥ 19%（实际跌停是 -20%）
+    简化处理：跌幅 ≥ 9.5% 视为跌停（覆盖 10% 和 20% 两种）
+    """
+    count = 0
+    end = len(closes)
+    start = max(1, end - lookback)
+    for i in range(start, end):
+        if closes[i - 1] > 0:
+            change = (closes[i] - closes[i - 1]) / closes[i - 1] * 100
+            if change <= -9.5:
+                count += 1
+    return count
+
+
+def _calc_volume_shrink(volumes: List[float], short_w: int = 5, long_w: int = 20) -> Optional[float]:
+    """缩量企稳检测：近 5 日均量 / 近 20 日均量。
+
+    A 股底部特征是"地量见地价"：
+    - 比值 < 0.5 = 极度缩量（抛压枯竭）
+    - 比值 < 0.3 = 地量级别（底部信号极强）
+
+    这与短期超跌的"放量"信号相反！
+    短期看放量 = 恐慌盘出尽 → 即时反弹
+    长期看缩量 = 抛压枯竭 → 底部构筑完成
+    """
+    if len(volumes) < long_w + 1:
         return None
-    return volumes[-1] / avg
+    short_avg = sum(volumes[-short_w:]) / short_w
+    long_avg = sum(volumes[-(long_w + 1):-1]) / long_w
+    return short_avg / long_avg if long_avg > 0 else None

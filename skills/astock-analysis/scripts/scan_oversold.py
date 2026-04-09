@@ -31,7 +31,7 @@ load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
 from datetime import datetime, timezone
 from src.infra.akshare_client import AkshareClient
 from src.infra.state_store import StateStore
-from src.skills.skill1b_oversold import Skill1BOversold
+from src.skills.skill1b_oversold import Skill1BOversold, ShortTermAStockOversold, LongTermAStockOversold
 
 logging.basicConfig(
     level=logging.INFO,
@@ -49,6 +49,9 @@ def main():
     parser = argparse.ArgumentParser(description="A 股超跌反弹筛选（Skill-1B）")
     parser.add_argument("symbols", nargs="*", type=str,
                         help="A 股代码（如 600519 SH000001）")
+    parser.add_argument("--mode", type=str, default="short",
+                        choices=["short", "long"],
+                        help="扫描模式：short=短期超跌反弹(3~5天), long=长期超跌蓄能(2~4周)（默认 short）")
     parser.add_argument("--scan", action="store_true",
                         help="全市场扫描模式")
     parser.add_argument("--rsi", type=float, default=25,
@@ -104,16 +107,26 @@ def main():
         else:
             print("📡 Skill-1B 超跌反弹筛选: 全市场扫描...")
 
+        mode_label = "短期超跌反弹(3~5天)" if args.mode == "short" else "长期超跌蓄能(2~4周)"
+        print(f"   模式: {mode_label}")
         print(f"   参数: RSI<{args.rsi} | BIAS<{args.bias}% | "
               f"跌幅<{args.drop}%/{args.drop_days}日 | 评分≥{args.min_score} | "
               f"当日跌幅<{args.prefilter}%")
 
-        skill1b = Skill1BOversold(
-            state_store=store,
-            input_schema=load_schema("skill1b_input.json"),
-            output_schema=load_schema("skill1b_output.json"),
-            client=client,
-        )
+        if args.mode == "long":
+            skill1b = LongTermAStockOversold(
+                state_store=store,
+                input_schema=load_schema("skill1b_input.json"),
+                output_schema=load_schema("skill1b_output.json"),
+                client=client,
+            )
+        else:
+            skill1b = ShortTermAStockOversold(
+                state_store=store,
+                input_schema=load_schema("skill1b_input.json"),
+                output_schema=load_schema("skill1b_output.json"),
+                client=client,
+            )
         trigger_id = store.save("oversold_trigger", trigger_data)
         s1_id = skill1b.execute(trigger_id)
         s1_data = store.load(s1_id)

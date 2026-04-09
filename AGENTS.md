@@ -59,6 +59,7 @@
 | 技能 | 路径 | 用途 |
 |------|------|------|
 | 加密货币交易 | `skills/binance-trading/` | 5 步交易流水线 |
+| 加密货币数据 | `skills/binance-data/` | 合约 K 线本地缓存 + 批量预加载 |
 | A 股分析 | `skills/astock-analysis/` | 量化筛选 + 超跌反弹 + 深度分析 |
 | A 股数据服务 | `skills/astock-data/` | 本地缓存 + 批量预加载 + 标准化输出 |
 

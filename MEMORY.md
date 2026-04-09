@@ -29,14 +29,18 @@ SkillDataProvider (run)        → SQLite 缓存 → akshare 增量拉取
 - 持仓上限: 24 小时
 - 止损: 3%，止盈: 6%（盈亏比 2:1）
 
-### A 股超跌反弹（Skill-1B）
+### A 股超跌反弹（Skill-1B，2026-04-09 重构为双模式）
 
-- RSI 阈值: 35（原 25，2026-04-08 放宽）
-- BIAS 阈值: -6%（原 -10%）
-- 近 10 日跌幅阈值: -8%（原 -15%）
-- 最低评分: 25（原 50）
-- 当日预筛: 已禁用（超跌是历史累积状态，不应只看当天）
-- 效果: 筛选漏斗从 50→0 提升到 4252→475→30
+**短期超跌反弹（ShortTermAStockOversold）— 3~5 天持仓**
+- RSI < 25（极端超卖）、BIAS(20) < -8%、连跌 ≥ 3 天、累跌 < -12%（10 天内）
+- A 股独有：跌停板计数（权重 13）、底部放量（权重 13，T+1 恐慌盘释放）
+- 核心逻辑：恐慌抛售 → 超卖极值 → 抛压出尽 → V 型反弹
+
+**长期超跌蓄能（LongTermAStockOversold）— 2~4 周持仓**
+- RSI < 35、BIAS(60) < -15%、连跌 ≥ 5 天、累跌 < -25%（30 天内）
+- A 股独有：缩量企稳（权重 13，地量见地价）、60 日乖离率（权重 18）
+- MACD 底背离回看 60 天（权重 18）、距 120 日高点回撤 > 30%（权重 15）
+- 核心逻辑：持续阴跌 → 深度偏离均线 → 缩量筑底 → 趋势反转
 
 ## 关键决策记录
 
@@ -53,8 +57,42 @@ SkillDataProvider (run)        → SQLite 缓存 → akshare 增量拉取
 - akshare stock_info_a_code_name：不稳定，经常中途断连
 - baostock TCP 10030：端口可达但协议握手卡住
 
+### Binance 合约 K 线缓存（2026-04-09 建立）
+
+- 本地 SQLite 缓存：`data/binance_kline_cache.db`
+- 缓存模块：`src/infra/binance_kline_cache.py`（BinanceKlineCache）
+- 按 (symbol, interval, open_time) 三元组唯一索引
+- BinancePublicClient 新增 `kline_cache` 参数 + `get_klines_cached()` / `get_klines_range()` 方法
+- BinancePublicClient 新增 `get_funding_rates_all()` / `get_open_interest()` 资金费率和持仓量接口
+- 预加载完成：538 个 USDT 永续合约，552,132 行 4h K 线，84.3 MB
+- 预加载脚本：`skills/binance-data/scripts/preload_klines.py`
+- 数据查询脚本：`skills/binance-data/scripts/fetch_data.py`
+- 设计与 A 股 KlineCache 对齐：缓存优先、WAL 模式、增量拉取
+
+### 加密货币超跌反弹筛选（2026-04-09 建立）
+
+- Skill 模块：`src/skills/crypto_oversold.py`
+  - `ShortTermOversoldSkill` — 短期超跌（4h），捕捉恐慌抛售 V 型反转
+  - `LongTermOversoldSkill` — 长期超跌（1d），捕捉中期均值回归
+  - `CryptoOversoldSkill` — 向后兼容别名，指向短期版本
+- CLI 脚本：`skills/binance-data/scripts/scan_oversold.py --mode short|long`
+- 短期核心信号：RSI<20 + 资金费率(权重20) + 底部放量(权重10)
+- 长期核心信号：BIAS<-15% + MACD底背离(权重15) + 距高点回撤(权重15)
+- 首次扫描：短期 5 候选，长期 11 候选（PIPPINUSDT 评分 47 最高）
+
+### 缓存链路（更新）
+
+```
+Skill-1 (get_klines)           → BinancePublicClient → Binance fapi（无缓存，原有行为）
+Skill-1 (get_klines_cached)    → BinanceKlineCache → Binance fapi（缓存优先）
+预加载 (get_klines_range)      → Binance fapi → BinanceKlineCache（自动分页+回写）
+fetch_data.py                  → BinanceKlineCache → BinancePublicClient（CLI 查询）
+```
+
 ## 待办
 
 - [ ] 用户转入 USDT 后开始加密货币实盘
 - [ ] 先用 Paper Mode 跑几轮验证策略
 - [ ] 定期更新本地 K 线缓存（每日增量）
+- [ ] Skill-1 切换到 get_klines_cached() 以利用本地缓存
+- [ ] 运行一次全市场预加载验证缓存链路

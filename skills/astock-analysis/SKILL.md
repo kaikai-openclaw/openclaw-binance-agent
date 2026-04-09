@@ -60,14 +60,19 @@ metadata: {"openclaw":{"requires":{"bins":[".venv/bin/python3"]}}}
 超跌反弹本质是左侧交易（接飞刀），必须严格止损。
 单一指标无效，需多维共振确认。适用于震荡市和牛市回调期，单边熊市中失效风险高。
 
-## Skill-2A：深度分析（手动调用）
+## Skill-2A：深度分析
 
-接收 Skill-1A 或 Skill-1B 输出的 state_id，执行 TradingAgents 深度分析评级。
+支持两种调用方式：直接传股票代码（独立调用）或传 state_id（接上游）。
 
 ```bash
-.venv/bin/python3 {baseDir}/scripts/deep_analyze.py <state_id>
-.venv/bin/python3 {baseDir}/scripts/deep_analyze.py <state_id> --fast
-.venv/bin/python3 {baseDir}/scripts/deep_analyze.py <state_id> --threshold 7
+# 独立调用：直接传股票代码
+.venv/bin/python3 {baseDir}/scripts/deep_analyze.py 600519
+.venv/bin/python3 {baseDir}/scripts/deep_analyze.py 600519 000001 300750 --fast
+
+# 接上游：传 Skill-1A/1B 输出的 state_id
+.venv/bin/python3 {baseDir}/scripts/deep_analyze.py --state-id <state_id>
+.venv/bin/python3 {baseDir}/scripts/deep_analyze.py --state-id <state_id> --fast
+.venv/bin/python3 {baseDir}/scripts/deep_analyze.py --state-id <state_id> --threshold 7
 ```
 
 ## 筛选流程（Skill-1A）

@@ -261,7 +261,14 @@ def create_astock_trading_agents_analyzer(
             raise ValueError("TradingAgents 返回空决策")
 
         result = _parse_decision(decision)
-        result["comment"] = _clean_llm_text(decision)[:500] if decision else "无分析结果"
+        # 优先保存完整分析报告（final_trade_decision），而非压缩后的信号词
+        full_report = ""
+        if final_state:
+            full_report = final_state.get("final_trade_decision", "")
+        if full_report:
+            result["comment"] = _clean_llm_text(full_report)[:2000]
+        else:
+            result["comment"] = _clean_llm_text(decision)[:500] if decision else "无分析结果"
         return result
 
     return analyzer

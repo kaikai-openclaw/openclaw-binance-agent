@@ -269,6 +269,10 @@ def create_astock_trading_agents_analyzer(
             result["comment"] = _clean_llm_text(full_report)[:2000]
         else:
             result["comment"] = _clean_llm_text(decision)[:500] if decision else "无分析结果"
+        # 保存完整分析报告到磁盘
+        if final_state:
+            from src.infra.report_store import save_analysis_report
+            save_analysis_report(final_state, symbol, market="astock")
         return result
 
     return analyzer

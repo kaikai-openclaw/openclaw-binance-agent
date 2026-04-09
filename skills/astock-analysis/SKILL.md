@@ -1,18 +1,40 @@
 ---
 name: astock-analysis
-description: A股量化数据采集与深度分析。通过 akshare 获取沪深A股实时行情和日线数据，执行量化筛选（大盘过滤→量比→技术指标→相关性去重），再调用 TradingAgents 多智能体框架进行深度分析评级。用于A股行情分析、选股、技术面评估。
+description: A股深度分析与量化筛选。当用户说"深度分析"、"分析XX股票"时，直接调用 deep_analyze.py 传入股票代码。当用户说"筛选"、"扫描"、"选股"时调用筛选脚本。用于A股行情分析、选股、技术面评估、深度评级。
 user-invocable: true
 metadata: {"openclaw":{"requires":{"bins":[".venv/bin/python3"]}}}
 ---
 
 # A 股分析 Agent
 
-沪深 A 股量化筛选 + TradingAgents 深度分析，Skill-1A / Skill-1B / Skill-2A 独立调用。
-数据源为 akshare（东方财富），无需 API Key。
+沪深 A 股深度分析 + 量化筛选，数据源为 akshare（东方财富），无需 API Key。
 
-## Skill-1A：量化筛选（趋势/动量）
+## 深度分析（最常用）
 
-对指定个股或全市场执行量化筛选，输出候选列表和 state_id。
+当用户说"深度分析"、"分析某只股票"、"评级"时，直接用这个。
+支持直接传股票代码（独立调用）或传 state_id（接上游筛选结果）。
+
+```bash
+# 直接分析指定股票（最常用）
+.venv/bin/python3 {baseDir}/scripts/deep_analyze.py 601615
+.venv/bin/python3 {baseDir}/scripts/deep_analyze.py 600519 000001 300750
+
+# 快速模式（单次 LLM，10-30秒/股）
+.venv/bin/python3 {baseDir}/scripts/deep_analyze.py 601615 --fast
+
+# 接上游筛选结果
+.venv/bin/python3 {baseDir}/scripts/deep_analyze.py --state-id <state_id>
+.venv/bin/python3 {baseDir}/scripts/deep_analyze.py --state-id <state_id> --fast
+.venv/bin/python3 {baseDir}/scripts/deep_analyze.py --state-id <state_id> --threshold 7
+```
+
+- 完整模式（默认）：TradingAgents 多智能体辩论，约 5-10 分钟/股
+- 快速模式（`--fast`）：单次 LLM 调用，约 10-30 秒/股
+- 评级输出：1-10 分，≥6 分通过，附带多空信号和置信度
+
+## 量化筛选（Skill-1A：趋势/动量）
+
+当用户说"筛选"、"扫描"、"选股"、"全市场扫描"时使用。
 
 ```bash
 .venv/bin/python3 {baseDir}/scripts/analyze_astock.py 600519
@@ -20,82 +42,79 @@ metadata: {"openclaw":{"requires":{"bins":[".venv/bin/python3"]}}}
 .venv/bin/python3 {baseDir}/scripts/analyze_astock.py --scan
 ```
 
-输出包含 state_id，用于后续手动调用 Skill-2A。
+筛选流程：大盘过滤 → 量比异动 → 技术指标评分 → 相关性去重。
+输出包含 state_id，可接深度分析。
 
-## Skill-1B：超跌反弹筛选
+## 超跌反弹筛选（Skill-1B）
 
-多维度超跌信号检测（均值回归策略），捕捉市场情绪错杀后的短期修复机会。
-
-```bash
-.venv/bin/python3 {baseDir}/scripts/scan_oversold.py --scan                    # 全市场扫描
-.venv/bin/python3 {baseDir}/scripts/scan_oversold.py 600519                    # 指定个股
-.venv/bin/python3 {baseDir}/scripts/scan_oversold.py 600519 000001 300750      # 多个个股
-.venv/bin/python3 {baseDir}/scripts/scan_oversold.py --scan --rsi 30           # 自定义 RSI 阈值
-.venv/bin/python3 {baseDir}/scripts/scan_oversold.py --scan --bias -8          # 自定义乖离率阈值
-.venv/bin/python3 {baseDir}/scripts/scan_oversold.py --scan --min-score 40     # 降低评分门槛
-.venv/bin/python3 {baseDir}/scripts/scan_oversold.py --scan --volume-confirm   # 要求底部放量确认
-```
-
-输出包含 state_id，可手动调用 Skill-2A 深度分析。
-
-### 超跌信号维度（六维评分，满分 100）
-
-1. 价格偏离度（20分）— 20日乖离率 BIAS < -10%
-2. 动量极值（20分）— RSI(14) < 25，超卖区
-3. 连续杀跌（15分）— 连续下跌天数 + 近N日累计跌幅
-4. 通道突破（15分）— 收盘价跌破布林带(20,2)下轨
-5. 动量背离（15分）— MACD 底背离（价格新低但 MACD 柱未新低）
-6. KDJ 极值（10分）— J 值 < 0
-7. 底部放量（5分加分）— 最后一根成交量 ≥ 前5日均量 1.5 倍
-
-### 基础过滤（排雷）
-
-- 排除 ST / *ST / 退市 / 北交所
-- 排除股价 < 3 元低价股
-- 排除日均成交额 < 5000 万流动性枯竭股
-- 相关性去重（Pearson > 0.85）
-
-### 风险提示
-
-超跌反弹本质是左侧交易（接飞刀），必须严格止损。
-单一指标无效，需多维共振确认。适用于震荡市和牛市回调期，单边熊市中失效风险高。
-
-## Skill-2A：深度分析
-
-支持两种调用方式：直接传股票代码（独立调用）或传 state_id（接上游）。
+当用户说"超跌"、"反弹"、"超卖"、"抄底"时使用。
+支持短期（3~5天反弹）和长期（2~4周蓄能）两种模式。
 
 ```bash
-# 独立调用：直接传股票代码
-.venv/bin/python3 {baseDir}/scripts/deep_analyze.py 600519
-.venv/bin/python3 {baseDir}/scripts/deep_analyze.py 600519 000001 300750 --fast
-
-# 接上游：传 Skill-1A/1B 输出的 state_id
-.venv/bin/python3 {baseDir}/scripts/deep_analyze.py --state-id <state_id>
-.venv/bin/python3 {baseDir}/scripts/deep_analyze.py --state-id <state_id> --fast
-.venv/bin/python3 {baseDir}/scripts/deep_analyze.py --state-id <state_id> --threshold 7
+# 短期超跌反弹（默认）
+.venv/bin/python3 {baseDir}/scripts/scan_oversold.py --scan --mode short
+# 长期超跌蓄能
+.venv/bin/python3 {baseDir}/scripts/scan_oversold.py --scan --mode long
+# 指定个股
+.venv/bin/python3 {baseDir}/scripts/scan_oversold.py 600519 --mode short
+.venv/bin/python3 {baseDir}/scripts/scan_oversold.py --scan --rsi 30 --min-score 40
 ```
 
-## 筛选流程（Skill-1A）
+## 交易计划生成
 
-1. 大盘过滤 — 成交额 ≥5亿、振幅 ≥3%、|涨跌幅| 1.5%-9.9%
-2. 活跃度异动 — 日线量比 ≥1.3
-3. 技术指标评分 — RSI/EMA/MACD/ADX/流动性 多因子双向评分（满分100）
-4. 相关性去重 — Pearson 相关系数 >0.85 的候选去重
+当用户说"交易计划"、"怎么买"、"止损止盈"、"仓位"时使用。
+一步到位：超跌筛选 → 生成交易计划（入场/止损/止盈/仓位）。
 
-自动排除：ST / *ST / 退市 / 北交所标的
+```bash
+# 短期反弹交易计划（默认 10 万资金）
+.venv/bin/python3 {baseDir}/scripts/make_trade_plan.py --scan --mode short
+# 长期蓄能交易计划
+.venv/bin/python3 {baseDir}/scripts/make_trade_plan.py --scan --mode long
+# 指定资金和个股
+.venv/bin/python3 {baseDir}/scripts/make_trade_plan.py --scan --mode short --capital 500000
+.venv/bin/python3 {baseDir}/scripts/make_trade_plan.py --scan --mode short --symbols 600519 000001
+# JSON 输出（供程序调用）
+.venv/bin/python3 {baseDir}/scripts/make_trade_plan.py --scan --mode short --json
+```
 
-## 深度分析（Skill-2A）
+## 历史分析报告
 
-- 完整模式（默认）：TradingAgents 多智能体辩论，约 5-10 分钟/股
-- 快速模式（`--fast`）：单次 LLM 调用，约 10-30 秒/股
+当用户说"历史报告"、"之前的分析"、"查看报告"时使用。
+TradingAgents 深度分析的完整报告（多智能体辩论过程）会自动保存。
 
-TradingAgents 通过 akshare 获取：
-- 日线 OHLCV 行情（stock_zh_a_hist）
-- 技术指标（stockstats 本地计算）
-- 基本面数据（stock_individual_info_em + 财务分析指标）
-- 个股新闻（stock_news_em）
+```bash
+# 列出所有历史报告
+.venv/bin/python3 {baseDir}/scripts/view_reports.py
+# 只看 A 股报告
+.venv/bin/python3 {baseDir}/scripts/view_reports.py --market astock
+# 查看指定股票的最新报告
+.venv/bin/python3 {baseDir}/scripts/view_reports.py --symbol 600519
+# 查看指定日期的报告
+.venv/bin/python3 {baseDir}/scripts/view_reports.py --symbol 600519 --date 2026-04-09
+# 查看加密货币报告
+.venv/bin/python3 {baseDir}/scripts/view_reports.py --market crypto
+.venv/bin/python3 {baseDir}/scripts/view_reports.py --symbol BTCUSDT
+```
 
-评级输出：1-10 分，≥6 分通过，附带多空信号和置信度。
+## 意图匹配指南
+
+| 用户说的 | 应该调用 |
+|---------|---------|
+| "深度分析 601615" | `deep_analyze.py 601615` |
+| "分析一下茅台" | `deep_analyze.py 600519` |
+| "快速分析 000001" | `deep_analyze.py 000001 --fast` |
+| "评级 300750" | `deep_analyze.py 300750` |
+| "筛选A股" / "全市场扫描" | `analyze_astock.py --scan` |
+| "看看600519技术面" | `analyze_astock.py 600519` |
+| "超跌扫描" / "找反弹机会" | `scan_oversold.py --scan --mode short` |
+| "长期超跌蓄能" | `scan_oversold.py --scan --mode long` |
+| "601615超跌了吗" | `scan_oversold.py 601615` |
+| "交易计划" / "怎么买" | `make_trade_plan.py --scan --mode short` |
+| "长期交易计划" | `make_trade_plan.py --scan --mode long` |
+| "50万资金交易计划" | `make_trade_plan.py --scan --mode short --capital 500000` |
+| "历史报告" / "之前的分析" | `view_reports.py` |
+| "600519的分析报告" | `view_reports.py --symbol 600519` |
+| "加密货币报告" | `view_reports.py --market crypto` |
 
 ## 配置
 
@@ -103,8 +122,6 @@ TradingAgents 通过 akshare 获取：
 - `LLM_PROVIDER` — LLM 提供商（默认 minimax）
 - `FAST_LLM_MODEL` — 快速模式模型名称
 - 对应 provider 的 API Key（如 `MINIMAX_API_KEY`）
-
-无需 Binance API Key。
 
 ## 注意事项
 

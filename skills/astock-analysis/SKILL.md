@@ -1,6 +1,6 @@
 ---
 name: astock-analysis
-description: A股深度分析与量化筛选。当用户说"深度分析"、"分析XX股票"时，直接调用 deep_analyze.py 传入股票代码。当用户说"筛选"、"扫描"、"选股"时调用筛选脚本。用于A股行情分析、选股、技术面评估、深度评级。
+description: A股深度分析、量化筛选与交易计划生成。当用户说"深度分析"、"分析XX股票"时调用deep_analyze.py。当用户说"超跌"、"反弹"、"抄底"时调用scan_oversold.py（支持短期/长期双模式）。当用户说"交易计划"、"怎么买"、"止损止盈"时调用make_trade_plan.py。当用户说"历史报告"、"之前的分析"时调用view_reports.py。用于A股行情分析、选股、技术面评估、深度评级、交易策略制定。
 user-invocable: true
 metadata: {"openclaw":{"requires":{"bins":[".venv/bin/python3"]}}}
 ---

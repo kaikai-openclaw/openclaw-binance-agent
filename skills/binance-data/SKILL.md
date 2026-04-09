@@ -1,6 +1,6 @@
 ---
 name: binance-data
-description: Binance U本位合约历史K线数据基础设施服务。本地SQLite缓存优先、增量联网拉取、标准化JSON输出。为下游交易分析/回测/图表Skill提供稳定高效的数据源，避免重复联网。支持多周期（1m~1M），交易对自动校验。
+description: Binance U本位合约数据基础设施与超跌反弹分析。本地SQLite缓存优先、增量联网拉取。超跌反弹扫描支持短期(4h)和长期(1d)双模式，八维度评分含资金费率。当用户说"币圈超跌"、"加密货币反弹"、"预加载K线"时使用。
 user-invocable: true
 metadata: {"openclaw":{"requires":{"bins":[".venv/bin/python3"]}}}
 ---
@@ -103,35 +103,66 @@ cache.close()
 
 ## 超跌反弹扫描
 
-全市场扫描超跌反弹候选币种，八维度量化评分。
+全市场扫描超跌反弹候选币种，支持短期（4h）和长期（1d）两种模式。
 
 ```bash
-# 全市场扫描
-.venv/bin/python3 {baseDir}/scripts/scan_oversold.py
+# 短期超跌（4h，默认）— 捕捉恐慌抛售后的 V 型反转
+.venv/bin/python3 {baseDir}/scripts/scan_oversold.py --mode short
+
+# 长期超跌（1d 日线）— 捕捉中期超跌后的均值回归
+.venv/bin/python3 {baseDir}/scripts/scan_oversold.py --mode long
 
 # 指定币种
-.venv/bin/python3 {baseDir}/scripts/scan_oversold.py --symbols BTC,ETH,SOL
+.venv/bin/python3 {baseDir}/scripts/scan_oversold.py --mode short --symbols BTC,ETH,SOL
 
 # 调整评分阈值
-.venv/bin/python3 {baseDir}/scripts/scan_oversold.py --min-score 30
+.venv/bin/python3 {baseDir}/scripts/scan_oversold.py --mode long --min-score 30
 
 # JSON 输出
-.venv/bin/python3 {baseDir}/scripts/scan_oversold.py --json
+.venv/bin/python3 {baseDir}/scripts/scan_oversold.py --mode short --json
 ```
 
-### 超跌评分体系（满分 100，针对加密货币市场）
+### 短期超跌评分（4h K 线，满分 100）
+
+侧重即时超卖信号和资金费率，适合日内/隔日超短线。
 
 | 维度 | 权重 | 阈值 | 说明 |
 |------|------|------|------|
-| RSI(14) 超卖 | 15 | < 25 | 比 A 股(35)更极端，币圈波动大 |
-| 乖离率 BIAS(20) | 15 | < -12% | 比 A 股(-6%)更极端 |
-| 连续杀跌+累计跌幅 | 12 | ≥5根/< -20% | 4h K 线，5根≈20小时 |
-| 布林带下轨突破 | 10 | 跌破下轨 | 标准 BOLL(20,2) |
-| MACD 底背离 | 10 | 价格新低+MACD未新低 | 动量反转信号 |
-| KDJ J值极值 | 8 | J < 0 | 超卖极值 |
-| 资金费率 | 15 | < -0.1% | 币圈独有，空头拥挤=反弹概率高 |
-| 距高点回撤 | 10 | > 30% | 币圈常见深度回调后反弹 |
-| 底部放量(加分) | 5 | ≥ 2.0x | 恐慌盘涌出信号 |
+| 资金费率 | 20 | < -0.1% | 币圈独有，空头拥挤=反弹概率高 |
+| RSI(14) 超卖 | 18 | < 20 | 极端超卖 |
+| BIAS(20) | 12 | < -10% | 短期偏离 |
+| 底部放量 | 10 | ≥ 2.0x | 恐慌盘涌出 |
+| 距高点回撤 | 10 | > -20% | 短期回撤 |
+| 连续杀跌 | 10 | ≥5根/< -15% | 3 天内 |
+| 布林带 | 8 | 跌破下轨 | |
+| KDJ J值 | 7 | < 0 | |
+| MACD 底背离 | 5 | | 4h 级别可靠性一般 |
+
+### 长期超跌评分（1d 日线，满分 100）
+
+侧重趋势偏离和背离信号，适合波段交易（3天~2周）。
+
+| 维度 | 权重 | 阈值 | 说明 |
+|------|------|------|------|
+| BIAS(20) | 15 | < -15% | 日线偏离 |
+| MACD 底背离 | 15 | 60 天回看 | 日线级别可靠性高 |
+| 距高点回撤 | 15 | > -40% | 180 天回看，覆盖完整中期下跌 |
+| 连续杀跌+累跌 | 12 | ≥3天/< -30% | 14 天内 |
+| RSI(14) | 12 | < 30 | |
+| 布林带 | 10 | 跌破下轨 | |
+| 资金费率 | 8 | < -0.1% | 长期看权重降低 |
+| KDJ J值 | 8 | < 0 | |
+| 底部放量 | 5 | ≥ 1.5x | |
+
+### 意图匹配指南
+
+| 用户说的 | 应该调用 |
+|---------|---------|
+| "币圈超跌扫描" | `scan_oversold.py --mode short` |
+| "长期超跌币种" | `scan_oversold.py --mode long` |
+| "BTC 超跌了吗" | `scan_oversold.py --mode short --symbols BTC` |
+| "预加载 K 线" | `preload_klines.py` |
+| "查询 BTCUSDT 历史" | `fetch_data.py BTCUSDT --start 2024-01-01 --end 2024-06-30` |
 
 ## 设计原则
 

@@ -1,6 +1,6 @@
 ---
 name: astock-analysis
-description: A股深度分析、量化筛选与交易计划生成。当用户说"深度分析"、"分析XX股票"时调用deep_analyze.py。当用户说"超跌"、"反弹"、"抄底"时调用scan_oversold.py（支持短期/长期双模式）。当用户说"交易计划"、"怎么买"、"止损止盈"时调用make_trade_plan.py。当用户说"历史报告"、"之前的分析"时调用view_reports.py。用于A股行情分析、选股、技术面评估、深度评级、交易策略制定。
+description: A股深度分析、量化筛选与交易计划生成。当用户说"深度分析"、"分析XX股票"时调用deep_analyze.py。当用户说"趋势选股"、"趋势扫描"时调用analyze_astock.py。当用户说"超跌"、"反弹"、"抄底"时调用scan_oversold.py（支持短期/长期双模式）。当用户说"底部反转"、"放量反转"、"底部放量"时调用scan_reversal.py。当用户说"交易计划"、"怎么买"、"止损止盈"时调用make_trade_plan.py。当用户说"历史报告"、"之前的分析"时调用view_reports.py。用于A股行情分析、选股、技术面评估、深度评级、交易策略制定。
 user-invocable: true
 metadata: {"openclaw":{"requires":{"bins":[".venv/bin/python3"]}}}
 ---
@@ -32,18 +32,29 @@ metadata: {"openclaw":{"requires":{"bins":[".venv/bin/python3"]}}}
 - 快速模式（`--fast`）：单次 LLM 调用，约 10-30 秒/股
 - 评级输出：1-10 分，≥6 分通过，附带多空信号和置信度
 
-## 量化筛选（Skill-1A：趋势/动量）
+## 量化筛选（Skill-1A：趋势选股 v2）
 
-当用户说"筛选"、"扫描"、"选股"、"全市场扫描"时使用。
+当用户说"趋势选股"、"趋势扫描"、"选股"、"全市场扫描"时使用。
+六维度趋势评分：均线多头排列 + MACD 持续性 + ADX 趋势强度 + 量价配合 + 突破确认 + RSI 趋势区间。
 
 ```bash
-.venv/bin/python3 {baseDir}/scripts/analyze_astock.py 600519
-.venv/bin/python3 {baseDir}/scripts/analyze_astock.py SH600519
 .venv/bin/python3 {baseDir}/scripts/analyze_astock.py --scan
+.venv/bin/python3 {baseDir}/scripts/analyze_astock.py 600519
 ```
 
-筛选流程：大盘过滤 → 量比异动 → 技术指标评分 → 相关性去重。
-输出包含 state_id，可接深度分析。
+## 底部放量反转筛选
+
+当用户说"底部反转"、"放量反转"、"底部放量"、"反转信号"时使用。
+九维度反转评分：底部放量 + 价格企稳 + 均线拐头 + MACD 反转 + 距底部距离 + 前期跌幅 + 换手率 + KDJ 金叉 + 长下影线。
+
+```bash
+# 全市场扫描
+.venv/bin/python3 {baseDir}/scripts/scan_reversal.py --scan
+# 指定个股
+.venv/bin/python3 {baseDir}/scripts/scan_reversal.py 600519
+# 调整评分门槛
+.venv/bin/python3 {baseDir}/scripts/scan_reversal.py --scan --min-score 50
+```
 
 ## 超跌反弹筛选（Skill-1B）
 
@@ -104,8 +115,10 @@ TradingAgents 深度分析的完整报告（多智能体辩论过程）会自动
 | "分析一下茅台" | `deep_analyze.py 600519` |
 | "快速分析 000001" | `deep_analyze.py 000001 --fast` |
 | "评级 300750" | `deep_analyze.py 300750` |
-| "筛选A股" / "全市场扫描" | `analyze_astock.py --scan` |
-| "看看600519技术面" | `analyze_astock.py 600519` |
+| "趋势选股" / "全市场扫描" | `analyze_astock.py --scan` |
+| "看看600519趋势" | `analyze_astock.py 600519` |
+| "底部反转" / "放量反转" | `scan_reversal.py --scan` |
+| "600519底部反转了吗" | `scan_reversal.py 600519` |
 | "超跌扫描" / "找反弹机会" | `scan_oversold.py --scan --mode short` |
 | "长期超跌蓄能" | `scan_oversold.py --scan --mode long` |
 | "601615超跌了吗" | `scan_oversold.py 601615` |

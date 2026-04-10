@@ -1,133 +1,124 @@
 """
-Skill-1A：A股量化数据采集与候选筛选
+Skill-1A：A 股趋势选股（v2 重设计）
 
-四步筛选流水线（与 Skill-1 同构，数据源替换为 akshare）：
-  1. 大盘过滤 — 实时行情快照，按成交额、振幅、涨跌幅区间过滤
-     - 创业板/科创板自动适配 20% 涨跌停
-     - 排除 ST / 退市 / 北交所 / 低价股 / 一字板
-  2. 活跃度异动 — 日线成交量：近 5 根均量 / 近 20 根均量（非行情软件「当日量比」）
-     - 次新股保护：K 线不足 min_klines 根直接跳过
-  3. 技术指标 — RSI / EMA / MACD / ATR / ADX 多因子双向信号评分
-     - 默认 long_only 模式，过滤做空信号
+针对 A 股市场特性的趋势选股系统，核心理念：
+  "趋势为王，量价配合，均线确认"
+
+与 v1 的关键改进：
+  1. 降低成交额门槛（5亿→1亿），覆盖中小盘趋势启动股
+  2. 去掉振幅和涨跌幅下限，不再排除缩量窄幅整理和慢牛
+  3. 新增均线多头排列检测（MA5/10/20/60，A 股趋势交易的基础）
+  4. 新增突破前高/平台检测（箱体突破是 A 股最经典的趋势启动信号）
+  5. 新增换手率评估（比成交额更能反映真实活跃度）
+  6. 重新分配权重：均线排列 > MACD 持续性 > ADX > 量价配合 > 突破确认
+
+四步筛选流水线：
+  1. 基础过滤 — 排除 ST/退市/北交所/低价股/一字板/流动性枯竭
+  2. K 线数据获取 + 均线计算
+  3. 多因子趋势评分（满分 100）：
+     - 均线多头排列（25 分）— A 股趋势交易的基石
+     - MACD 持续性（20 分）— 趋势动量确认
+     - ADX 趋势强度（15 分）— 区分趋势和震荡
+     - 量价配合（15 分）— 放量上涨 + 换手率健康
+     - 突破确认（15 分）— 突破前高/20日高点
+     - RSI 趋势区间（10 分）— 处于 50-80 强势区间
   4. 相关性去重
 
-数据源：AkshareClient（akshare 公开接口，无需 API Key）
+数据源：AkshareClient（akshare 公开接口，K 线优先走本地 SQLite 缓存）
 """
 
 import logging
+import math
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional
 
 from src.infra.state_store import StateStore
 from src.skills.base import BaseSkill
 from src.skills.skill1_collect import (
-    # 复用 Skill-1 的纯函数技术指标计算
     calc_ema,
     calc_rsi,
     calc_macd,
-    calc_volume_surge,
     calc_atr,
     calc_adx,
     calc_returns,
     calc_correlation,
-    # 复用常量
     KLINE_LIMIT,
-    VOLUME_LONG_WINDOW,
     CORRELATION_THRESHOLD,
-    WEIGHT_RSI,
-    WEIGHT_EMA,
-    WEIGHT_MACD,
-    WEIGHT_ADX,
-    WEIGHT_LIQUIDITY,
-    RSI_OVERSOLD,
-    RSI_OVERBOUGHT,
+    RSI_PERIOD,
     EMA_FAST,
     EMA_SLOW,
-    ADX_TREND_THRESHOLD,
+    ATR_PERIOD,
 )
 
 log = logging.getLogger(__name__)
 
-# ── A 股默认参数 ──────────────────────────────────────────
-DEFAULT_MIN_AMOUNT = 500_000_000       # 最低成交额 5 亿元
-DEFAULT_MIN_AMPLITUDE_PCT = 3.0        # 最低振幅 3%
-DEFAULT_PRICE_CHANGE_MIN = 1.5         # 最低绝对涨跌幅 1.5%
-DEFAULT_PRICE_CHANGE_MAX = 9.9         # 主板最高绝对涨跌幅 9.9%（涨跌停前）
-DEFAULT_PRICE_CHANGE_MAX_20 = 19.9     # 创业板/科创板最高绝对涨跌幅 19.9%
-DEFAULT_VOLUME_SURGE_RATIO = 1.3       # 量比阈值（A 股日线波动较小，放宽）
-DEFAULT_MIN_SIGNAL_SCORE = 55          # 最低信号评分
-DEFAULT_MIN_ADX = 18.0                 # 最低 ADX（A 股趋势性偏弱，放宽）
-DEFAULT_MAX_CANDIDATES = 10
-DEFAULT_MIN_PRICE = 2.0                # 最低股价（排除低价股）
-DEFAULT_MIN_KLINES = 60                # 最低 K 线数量（排除次新股）
-DEFAULT_LONG_ONLY = True               # 默认仅做多（A 股散户无法直接做空）
+# ══════════════════════════════════════════════════════════
+# 默认参数（针对 A 股趋势选股调优）
+# ══════════════════════════════════════════════════════════
 
-# A 股排除关键词（ST、退市、B 股等）
+DEFAULT_MIN_AMOUNT = 100_000_000       # 最低成交额 1 亿（覆盖中小盘趋势启动股）
+DEFAULT_MIN_PRICE = 3.0                # 最低股价
+DEFAULT_MIN_KLINES = 60                # 最低 K 线数量（约 3 个月，排除次新股）
+DEFAULT_MIN_SIGNAL_SCORE = 50          # 最低信号评分
+DEFAULT_MAX_CANDIDATES = 15            # 输出上限
+
+# 排除关键词
 _EXCLUDE_KEYWORDS = {"ST", "*ST", "退", "B股", "PT"}
-
-# 创业板/科创板代码前缀（20% 涨跌停）
 _20PCT_LIMIT_PREFIXES = ("300", "301", "688", "689")
+
+# ── 均线参数 ──────────────────────────────────────────────
+MA_PERIODS = [5, 10, 20, 60]          # A 股经典均线组合
+
+# ── 评分权重（满分 100）──────────────────────────────────
+W_MA_ALIGN = 25        # 均线多头排列（A 股趋势交易的基石）
+W_MACD = 20            # MACD 持续性（趋势动量确认）
+W_ADX = 15             # ADX 趋势强度
+W_VOLUME = 15          # 量价配合（放量上涨 + 换手率健康）
+W_BREAKOUT = 15        # 突破确认（突破前高/平台）
+W_RSI = 10             # RSI 趋势区间（50-80 强势区）
+
+# ── 突破检测参数 ──────────────────────────────────────────
+BREAKOUT_LOOKBACK = 20                 # 回看 20 天寻找前高
+BREAKOUT_MARGIN = 0.02                 # 突破前高 2% 以上才算有效突破
+
+# ── 换手率参数 ────────────────────────────────────────────
+TURNOVER_HEALTHY_MIN = 2.0             # 健康换手率下限 2%
+TURNOVER_HEALTHY_MAX = 15.0            # 健康换手率上限 15%（过高可能是出货）
 
 
 class Skill1ACollect(BaseSkill):
-    """
-    A 股量化数据采集与候选筛选 Skill。
+    """A 股趋势选股 Skill（v2）。"""
 
-    与 Skill-1（Binance）同构的四步筛选，数据源为 akshare。
-    输出格式兼容下游 Skill-2A 深度分析。
-    """
-
-    def __init__(
-        self,
-        state_store: StateStore,
-        input_schema: dict,
-        output_schema: dict,
-        client: Any,
-    ) -> None:
+    def __init__(self, state_store, input_schema, output_schema, client) -> None:
         super().__init__(state_store, input_schema, output_schema)
         self.name = "skill1a_collect"
         self._client = client
 
     def run(self, input_data: dict) -> dict:
         min_amount = input_data.get("min_amount", DEFAULT_MIN_AMOUNT)
-        min_amp = input_data.get("min_amplitude_pct", DEFAULT_MIN_AMPLITUDE_PCT)
-        pc_range = input_data.get("price_change_range", {})
-        pc_min = pc_range.get("min_pct", DEFAULT_PRICE_CHANGE_MIN)
-        pc_max = pc_range.get("max_pct", DEFAULT_PRICE_CHANGE_MAX)
-        surge_ratio = input_data.get("volume_surge_ratio", DEFAULT_VOLUME_SURGE_RATIO)
-        min_signal = input_data.get("min_signal_score", DEFAULT_MIN_SIGNAL_SCORE)
-        min_adx = input_data.get("min_adx", DEFAULT_MIN_ADX)
-        max_cands = input_data.get("max_candidates", DEFAULT_MAX_CANDIDATES)
-        target_symbols = input_data.get("target_symbols")
         min_price = input_data.get("min_price", DEFAULT_MIN_PRICE)
         min_klines = input_data.get("min_klines", DEFAULT_MIN_KLINES)
-        long_only = input_data.get("long_only", DEFAULT_LONG_ONLY)
-        strict_target = input_data.get("strict_target_filters", False)
+        min_score = input_data.get("min_signal_score", DEFAULT_MIN_SIGNAL_SCORE)
+        max_cands = input_data.get("max_candidates", DEFAULT_MAX_CANDIDATES)
+        target_symbols = input_data.get("target_symbols")
 
         pipeline_run_id = str(uuid.uuid4())
 
-        # ── Step 1: 获取实时行情 & 大盘过滤 ──
+        # ── Step 1: 基础过滤 ──
         all_tickers = self._client.get_spot_all()
         total_count = len(all_tickers)
 
         if target_symbols:
-            pool = self._build_target_pool(all_tickers, target_symbols)
-            # 终极 fallback：实时接口全挂时，用日线数据构造行情
+            pool = _build_target_pool(all_tickers, target_symbols)
             if not pool and hasattr(self._client, "get_spot_by_hist"):
-                log.info("[skill1a] 实时接口未找到目标，尝试日线 fallback")
                 pool = self._client.get_spot_by_hist(target_symbols)
         else:
-            pool = self._filter_tickers(
-                all_tickers, min_amount, min_amp, pc_min, pc_max, min_price,
-            )
-        log.info("[skill1a] Step1: %d/%d 通过大盘过滤", len(pool), total_count)
+            pool = _base_filter(all_tickers, min_amount, min_price)
 
-        max_amount_val = max((item["amount"] for item in pool if item.get("amount")), default=1.0)
-        if max_amount_val <= 0:
-            max_amount_val = 1.0
+        log.info("[skill1a] Step1: %d/%d 通过基础过滤", len(pool), total_count)
 
-        # ── Step 2 + 3: K 线技术指标 ──
+        # ── Step 2+3: K 线分析 + 趋势评分 ──
         scored: List[dict] = []
         returns_map: Dict[str, List[float]] = {}
 
@@ -143,60 +134,56 @@ class Skill1ACollect(BaseSkill):
                 lows = [float(k[3]) for k in klines]
                 volumes = [float(k[5]) for k in klines]
 
-                surge = calc_volume_surge(volumes)
-                if surge is None:
-                    surge = 0.0
-                if (not target_symbols or strict_target) and surge < surge_ratio:
+                result = _calc_trend_score(closes, highs, lows, volumes,
+                                           item.get("turnover", 0))
+
+                # 趋势方向必须是做多（A 股散户无法做空）
+                if result["direction"] != "long":
                     continue
 
-                score_detail = self._calc_signal_score(
-                    closes, highs, lows,
-                    item.get("amount", 0), max_amount_val,
-                )
-                # 指定个股模式默认跳过评分/ADX；strict_target_filters=true 时与全市场一致
-                if not target_symbols or strict_target:
-                    if score_detail["total_score"] < min_signal:
-                        continue
-                    adx_val = score_detail["adx"]
-                    if adx_val is None or adx_val < min_adx:
-                        continue
-
-                # A 股默认仅做多：过滤掉做空信号
-                if long_only and score_detail["direction"] == "short":
+                if result["total_score"] < min_score and not target_symbols:
                     continue
 
                 returns_map[symbol] = calc_returns(closes)
 
+                atr_val = calc_atr(highs, lows, closes, ATR_PERIOD)
+                last_close = closes[-1]
+                atr_pct = round(atr_val / last_close * 100, 2) if (atr_val and last_close > 0) else None
+
                 scored.append({
                     "symbol": symbol,
                     "name": item.get("name", ""),
+                    "close": last_close,
                     "amount": item.get("amount", 0),
-                    "price_change_pct": item.get("change_pct", 0),
-                    "amplitude_pct": item.get("amplitude_pct", 0),
-                    "volume_surge_ratio": round(surge, 2),
-                    "rsi": score_detail["rsi"],
-                    "ema_bullish": score_detail["ema_bullish"],
-                    "macd_bullish": score_detail["macd_bullish"],
-                    "signal_score": score_detail["total_score"],
-                    "signal_direction": score_detail["direction"],
-                    "atr": score_detail["atr"],
-                    "atr_pct": score_detail["atr_pct"],
-                    "adx": score_detail["adx"],
+                    "change_pct": item.get("change_pct", 0),
+                    "turnover": item.get("turnover", 0),
+                    "signal_score": result["total_score"],
+                    "signal_direction": result["direction"],
+                    "ma_align_score": result["ma_align_score"],
+                    "ma_align_detail": result["ma_align_detail"],
+                    "macd_score": result["macd_score"],
+                    "adx": result["adx"],
+                    "adx_score": result["adx_score"],
+                    "volume_score": result["volume_score"],
+                    "breakout_score": result["breakout_score"],
+                    "breakout_detail": result["breakout_detail"],
+                    "rsi": result["rsi"],
+                    "rsi_score": result["rsi_score"],
+                    "ema_bullish": result["ema_bullish"],
+                    "macd_bullish": result["macd_bullish"],
+                    "atr_pct": atr_pct,
                     "collected_at": datetime.now(timezone.utc).isoformat(),
                 })
             except Exception as exc:
-                log.warning("[skill1a] %s K线分析失败: %s", symbol, exc)
-                continue
+                log.warning("[skill1a] %s 分析失败: %s", symbol, exc)
 
         scored.sort(key=lambda x: x["signal_score"], reverse=True)
 
         # ── Step 4: 相关性去重 ──
         candidates = _deduplicate(scored, returns_map, max_cands)
 
-        log.info(
-            "[skill1a] 完成: pool=%d, scored=%d, output=%d",
-            len(pool), len(scored), len(candidates),
-        )
+        log.info("[skill1a] 完成: pool=%d, scored=%d, output=%d",
+                 len(pool), len(scored), len(candidates))
 
         return {
             "state_id": str(uuid.uuid4()),
@@ -210,257 +197,354 @@ class Skill1ACollect(BaseSkill):
             },
         }
 
-    # ── 内部方法 ──────────────────────────────────────────
 
-    @staticmethod
-    def _build_target_pool(
-        all_tickers: List[dict], target_symbols: List[str],
-    ) -> List[dict]:
-        normalized = set()
-        for s in target_symbols:
-            s = s.strip()
-            if not s:
-                continue
-            # 去掉可能的交易所前缀
-            for pfx in ("SH", "SZ", "BJ", "sh", "sz", "bj"):
-                if s.upper().startswith(pfx) and len(s) > 2:
-                    s = s[len(pfx):]
-            s = s.replace(".", "")
-            normalized.add(s)
+# ══════════════════════════════════════════════════════════
+# 趋势评分核心（满分 100）
+# ══════════════════════════════════════════════════════════
 
-        pool = []
-        for t in all_tickers:
-            sym = t.get("symbol", "")
-            # 兼容新浪格式 sh600519 → 取后 6 位
-            code = sym[-6:] if len(sym) > 6 else sym
-            if code in normalized:
-                # 统一 symbol 为纯 6 位代码
-                t = {**t, "symbol": code}
-                pool.append(t)
-        return pool
+def _calc_trend_score(
+    closes: List[float],
+    highs: List[float],
+    lows: List[float],
+    volumes: List[float],
+    turnover: float = 0,
+) -> dict:
+    """A 股趋势多因子评分。
 
-    @staticmethod
-    def _filter_tickers(
-        tickers: List[dict],
-        min_amount: float,
-        min_amp: float,
-        pc_min: float,
-        pc_max: float,
-        min_price: float,
-    ) -> List[dict]:
-        """Step 1: 大盘过滤。排除 ST / 退市 / 北交所 / 低价股 / 一字板 / 成交额不足。"""
-        result = []
-        for t in tickers:
-            raw_symbol = t.get("symbol", "")
-            name = t.get("name", "")
+    六维度评分体系，专为 A 股趋势交易设计：
+    1. 均线多头排列（25 分）— 趋势的基石
+    2. MACD 持续性（20 分）— 动量确认
+    3. ADX 趋势强度（15 分）— 区分趋势和震荡
+    4. 量价配合（15 分）— 放量上涨 + 换手率
+    5. 突破确认（15 分）— 突破前高/平台
+    6. RSI 趋势区间（10 分）— 强势区间确认
+    """
+    last_close = closes[-1]
 
-            # 统一提取纯 6 位代码（兼容新浪 sh600519 格式）
-            symbol = raw_symbol[-6:] if len(raw_symbol) > 6 else raw_symbol
+    # ── 1. 均线多头排列（25 分）──
+    ma_result = _score_ma_alignment(closes)
 
-            # 排除 ST、退市、B 股
-            if any(kw in name for kw in _EXCLUDE_KEYWORDS):
-                continue
-            # 排除北交所（8/9 开头）
-            if symbol.startswith(("8", "9")):
-                continue
+    # ── 2. MACD 持续性（20 分）──
+    macd_result = _score_macd_trend(closes)
 
-            close = t.get("close")
-            if close is None or close <= 0:
-                continue
-            # 排除低价股
-            if close < min_price:
-                continue
+    # ── 3. ADX 趋势强度（15 分）──
+    adx_val = calc_adx(highs, lows, closes)
+    adx_score = _score_adx_trend(adx_val)
 
-            amount = t.get("amount")
-            if amount is None or amount < min_amount:
-                continue
+    # ── 4. 量价配合（15 分）──
+    vol_score = _score_volume_price(closes, volumes, turnover)
 
-            amp = t.get("amplitude_pct")
-            if amp is None or amp < min_amp:
-                continue
+    # ── 5. 突破确认（15 分）──
+    breakout_result = _score_breakout(closes, highs, volumes)
 
-            # 排除一字涨停/跌停板（开盘=最高=最低，无法交易）
-            high = t.get("high")
-            low = t.get("low")
-            open_p = t.get("open")
-            if (high is not None and low is not None and open_p is not None
-                    and high == low == open_p and high > 0):
-                continue
+    # ── 6. RSI 趋势区间（10 分）──
+    rsi_val = calc_rsi(closes, RSI_PERIOD)
+    rsi_score = _score_rsi_trend(rsi_val)
 
-            change = t.get("change_pct")
-            if change is None:
-                continue
-            abs_change = abs(change)
-            if abs_change < pc_min:
-                continue
-            # 创业板/科创板 20% 涨跌停，主板 10%
-            effective_pc_max = (
-                DEFAULT_PRICE_CHANGE_MAX_20
-                if symbol.startswith(_20PCT_LIMIT_PREFIXES)
-                else pc_max
-            )
-            if abs_change > effective_pc_max:
-                continue
+    total = (ma_result["score"] + macd_result["score"] + adx_score +
+             vol_score + breakout_result["score"] + rsi_score)
 
-            # 统一 symbol 为纯 6 位
-            result.append({**t, "symbol": symbol})
-        return result
+    # 方向判断：均线多头排列 + MACD 看多 → long，否则 neutral
+    direction = "long" if ma_result["score"] >= 10 and macd_result["bullish"] else "neutral"
 
-    def _calc_signal_score(
-        self,
-        closes: List[float],
-        highs: List[float],
-        lows: List[float],
-        amount: float,
-        max_amount: float,
-    ) -> dict:
-        """多因子技术指标评分（复用 Skill-1 的评分逻辑）。"""
-        import math
-        rsi_val = calc_rsi(closes)
-        macd = calc_macd(closes)
-        ema20 = calc_ema(closes, EMA_FAST)
-        ema50 = calc_ema(closes, EMA_SLOW)
-        atr_val = calc_atr(highs, lows, closes)
-        adx_val = calc_adx(highs, lows, closes)
-
-        last_close = closes[-1]
-        last_ema20 = ema20[-1] if ema20 and not math.isnan(ema20[-1]) else None
-        last_ema50 = ema50[-1] if ema50 and not math.isnan(ema50[-1]) else None
-
-        ml = macd.get("macd_line")
-        sl = macd.get("signal_line")
-        hist = macd.get("histogram")
-
-        # 做多评分
-        long_rsi = _score_rsi_long(rsi_val)
-        long_ema = _score_ema(last_close, last_ema20, last_ema50, bullish=True)
-        long_macd = _score_macd(ml, sl, hist, bullish=True)
-
-        # 做空评分
-        short_rsi = _score_rsi_short(rsi_val)
-        short_ema = _score_ema(last_close, last_ema20, last_ema50, bullish=False)
-        short_macd = _score_macd(ml, sl, hist, bullish=False)
-
-        # 方向无关
-        adx_score = _score_adx(adx_val)
-        liq_score = _score_liquidity(amount, max_amount)
-
-        long_total = long_rsi + long_ema + long_macd + adx_score + liq_score
-        short_total = short_rsi + short_ema + short_macd + adx_score + liq_score
-
-        if long_total >= short_total:
-            direction = "long"
-            total_score = long_total
-            ema_bullish = long_ema > 0
-            macd_bullish = long_macd > 0
-        else:
-            direction = "short"
-            total_score = short_total
-            ema_bullish = False
-            macd_bullish = False
-
-        atr_pct = round(atr_val / last_close * 100, 2) if (atr_val and last_close > 0) else None
-
-        return {
-            "rsi": round(rsi_val, 2) if rsi_val is not None else None,
-            "ema_bullish": ema_bullish,
-            "macd_bullish": macd_bullish,
-            "total_score": round(total_score),
-            "direction": direction,
-            "atr": round(atr_val, 4) if atr_val is not None else None,
-            "atr_pct": atr_pct,
-            "adx": round(adx_val, 2) if adx_val is not None else None,
-        }
+    return {
+        "total_score": round(total),
+        "direction": direction,
+        "ma_align_score": round(ma_result["score"]),
+        "ma_align_detail": ma_result["detail"],
+        "ema_bullish": ma_result["score"] >= 10,
+        "macd_score": round(macd_result["score"]),
+        "macd_bullish": macd_result["bullish"],
+        "adx": round(adx_val, 2) if adx_val is not None else None,
+        "adx_score": round(adx_score),
+        "volume_score": round(vol_score),
+        "breakout_score": round(breakout_result["score"]),
+        "breakout_detail": breakout_result["detail"],
+        "rsi": round(rsi_val, 2) if rsi_val is not None else None,
+        "rsi_score": round(rsi_score),
+    }
 
 
-# ── 评分辅助函数（与 Skill-1 逻辑一致）────────────────────
+# ══════════════════════════════════════════════════════════
+# 各维度评分函数
+# ══════════════════════════════════════════════════════════
 
-def _score_rsi_long(rsi: Optional[float]) -> float:
-    if rsi is None:
-        return 0.0
-    if rsi <= RSI_OVERSOLD:
-        return float(WEIGHT_RSI)
-    if rsi >= RSI_OVERBOUGHT:
-        return 0.0
-    return WEIGHT_RSI * (1.0 - (rsi - RSI_OVERSOLD) / (RSI_OVERBOUGHT - RSI_OVERSOLD))
+def _score_ma_alignment(closes: List[float]) -> dict:
+    """均线多头排列评分（满分 25）。
 
+    A 股趋势交易的基石：MA5 > MA10 > MA20 > MA60
+    - 完美多头排列（4 条均线严格递增）：25 分
+    - 3 条均线多头排列：18 分
+    - 价格站上 MA20 且 MA20 > MA60：12 分
+    - 价格站上 MA20：6 分
+    - 其他：0 分
+    """
+    if len(closes) < 60:
+        return {"score": 0, "detail": "数据不足"}
 
-def _score_rsi_short(rsi: Optional[float]) -> float:
-    if rsi is None:
-        return 0.0
-    if rsi >= RSI_OVERBOUGHT:
-        return float(WEIGHT_RSI)
-    if rsi <= RSI_OVERSOLD:
-        return 0.0
-    return WEIGHT_RSI * (rsi - RSI_OVERSOLD) / (RSI_OVERBOUGHT - RSI_OVERSOLD)
+    # 计算各周期 SMA
+    mas = {}
+    for p in MA_PERIODS:
+        mas[p] = sum(closes[-p:]) / p
 
+    last = closes[-1]
+    detail_parts = []
 
-def _score_ema(close: float, ema20: Optional[float], ema50: Optional[float], bullish: bool) -> float:
-    if ema20 is None or ema50 is None:
-        return 0.0
-    if bullish:
-        if close > ema20 > ema50:
-            return float(WEIGHT_EMA)
-        if close > ema20:
-            return WEIGHT_EMA * 0.5
+    # 检查多头排列层级
+    above_all = last > mas[5] > mas[10] > mas[20] > mas[60]
+    above_3 = last > mas[5] > mas[10] > mas[20]
+    above_20_60 = last > mas[20] and mas[20] > mas[60]
+    above_20 = last > mas[20]
+
+    if above_all:
+        score = 25.0
+        detail_parts.append("完美多头排列(MA5>10>20>60)")
+    elif above_3:
+        score = 18.0
+        detail_parts.append("三线多头(MA5>10>20)")
+    elif above_20_60:
+        score = 12.0
+        detail_parts.append("站上MA20且MA20>MA60")
+    elif above_20:
+        score = 6.0
+        detail_parts.append("站上MA20")
     else:
-        if close < ema20 < ema50:
-            return float(WEIGHT_EMA)
-        if close < ema20:
-            return WEIGHT_EMA * 0.5
-    return 0.0
+        score = 0.0
+        detail_parts.append("均线空头或混乱")
+
+    # 加分：均线斜率向上（MA20 近 5 日在上升）
+    if len(closes) >= 65:
+        ma20_5d_ago = sum(closes[-25:-5]) / 20
+        if mas[20] > ma20_5d_ago * 1.005:  # MA20 近 5 日上升 0.5% 以上
+            score = min(score + 2, W_MA_ALIGN)
+            detail_parts.append("MA20上升")
+
+    return {"score": min(score, W_MA_ALIGN), "detail": " | ".join(detail_parts)}
 
 
-def _score_macd(ml, sl, hist, bullish: bool) -> float:
+def _score_macd_trend(closes: List[float]) -> dict:
+    """MACD 趋势持续性评分（满分 20）。
+
+    不只看金叉/死叉，更看 MACD 的持续性：
+    - MACD 线 > 0 且柱状图 > 0 且柱状图在放大：20 分（强趋势）
+    - MACD 线 > 0 且柱状图 > 0：15 分（趋势确认）
+    - MACD 线 > 信号线（金叉状态）：10 分
+    - MACD 线 > 0 但柱状图 < 0（趋势减弱）：5 分
+    """
+    macd = calc_macd(closes)
+    ml = macd.get("macd_line")
+    sl = macd.get("signal_line")
+    hist = macd.get("histogram")
+
     if ml is None or sl is None or hist is None:
-        return 0.0
-    if bullish:
-        if ml > 0 and hist >= 0:
-            return float(WEIGHT_MACD)
-        if hist > 0:
-            return WEIGHT_MACD * 0.5
+        return {"score": 0, "bullish": False}
+
+    bullish = ml > sl
+
+    if ml > 0 and hist > 0:
+        # 检查柱状图是否在放大（需要前一根的 histogram）
+        # 简化：用 MACD 线的绝对值判断动量强度
+        if ml > sl * 1.1:  # MACD 线明显高于信号线
+            return {"score": 20.0, "bullish": True}
+        return {"score": 15.0, "bullish": True}
+    elif bullish:
+        return {"score": 10.0, "bullish": True}
+    elif ml > 0:
+        return {"score": 5.0, "bullish": True}
     else:
-        if ml < 0 and hist <= 0:
-            return float(WEIGHT_MACD)
-        if hist < 0:
-            return WEIGHT_MACD * 0.5
-    return 0.0
+        return {"score": 0, "bullish": False}
 
 
-def _score_adx(adx: Optional[float]) -> float:
+def _score_adx_trend(adx: Optional[float]) -> float:
+    """ADX 趋势强度评分（满分 15）。
+
+    ADX > 25：有趋势（线性映射到满分）
+    ADX 20-25：弱趋势（部分得分）
+    ADX < 20：无趋势（0 分）
+    """
     if adx is None:
         return 0.0
-    return WEIGHT_ADX * (min(adx, 50.0) / 50.0)
+    if adx >= 40:
+        return W_ADX  # 强趋势满分
+    if adx >= 25:
+        return W_ADX * 0.7 + W_ADX * 0.3 * (adx - 25) / 15  # 25-40 线性
+    if adx >= 20:
+        return W_ADX * 0.3 * (adx - 20) / 5  # 20-25 弱趋势
+    return 0.0
 
 
-def _score_liquidity(amount: float, max_amount: float) -> float:
-    import math
-    if amount <= 0 or max_amount <= 0:
+def _score_volume_price(
+    closes: List[float], volumes: List[float], turnover: float,
+) -> float:
+    """量价配合评分（满分 15）。
+
+    三个子维度：
+    1. 量比（近 5 日均量 / 近 20 日均量）> 1.2 = 资金关注（5 分）
+    2. 量价同向（价格上涨时成交量放大）（5 分）
+    3. 换手率在健康区间 2%-15%（5 分）
+    """
+    score = 0.0
+
+    # 量比
+    if len(volumes) >= 25:
+        short_avg = sum(volumes[-5:]) / 5
+        long_avg = sum(volumes[-25:-5]) / 20
+        if long_avg > 0:
+            vol_ratio = short_avg / long_avg
+            if vol_ratio >= 1.5:
+                score += 5.0
+            elif vol_ratio >= 1.2:
+                score += 3.0
+
+    # 量价同向：近 5 天中，上涨日的成交量 > 下跌日的成交量
+    if len(closes) >= 6 and len(volumes) >= 6:
+        up_vol, down_vol = 0.0, 0.0
+        for i in range(-5, 0):
+            if closes[i] > closes[i - 1]:
+                up_vol += volumes[i]
+            else:
+                down_vol += volumes[i]
+        if up_vol > down_vol * 1.2:
+            score += 5.0
+        elif up_vol > down_vol:
+            score += 2.5
+
+    # 换手率
+    if turnover and TURNOVER_HEALTHY_MIN <= turnover <= TURNOVER_HEALTHY_MAX:
+        score += 5.0
+    elif turnover and turnover > 0:
+        score += 2.0
+
+    return min(score, W_VOLUME)
+
+
+def _score_breakout(
+    closes: List[float], highs: List[float], volumes: List[float],
+) -> dict:
+    """突破确认评分（满分 15）。
+
+    检测是否突破近期高点/平台：
+    - 突破 20 日最高价 + 放量：15 分（强突破）
+    - 突破 20 日最高价：10 分
+    - 接近 20 日最高价（差距 < 2%）：5 分
+    """
+    if len(closes) < BREAKOUT_LOOKBACK + 1 or len(highs) < BREAKOUT_LOOKBACK + 1:
+        return {"score": 0, "detail": "数据不足"}
+
+    last = closes[-1]
+    # 前 20 天的最高价（不含最后一天）
+    prev_high = max(highs[-(BREAKOUT_LOOKBACK + 1):-1])
+
+    if prev_high <= 0:
+        return {"score": 0, "detail": ""}
+
+    pct_above = (last - prev_high) / prev_high
+
+    if pct_above >= BREAKOUT_MARGIN:
+        # 检查是否放量突破
+        if len(volumes) >= 6:
+            today_vol = volumes[-1]
+            avg_vol = sum(volumes[-6:-1]) / 5
+            if avg_vol > 0 and today_vol > avg_vol * 1.3:
+                return {"score": 15.0, "detail": f"放量突破20日高点({pct_above*100:+.1f}%)"}
+        return {"score": 10.0, "detail": f"突破20日高点({pct_above*100:+.1f}%)"}
+    elif pct_above >= -BREAKOUT_MARGIN:
+        return {"score": 5.0, "detail": f"接近20日高点({pct_above*100:+.1f}%)"}
+    else:
+        return {"score": 0, "detail": ""}
+
+
+def _score_rsi_trend(rsi: Optional[float]) -> float:
+    """RSI 趋势区间评分（满分 10）。
+
+    趋势股的 RSI 通常在 50-80 区间运行：
+    - RSI 55-75：满分（最佳趋势区间）
+    - RSI 50-55 或 75-80：部分得分
+    - RSI < 50 或 > 80：0 分（超卖或超买，不是健康趋势）
+    """
+    if rsi is None:
         return 0.0
-    log_vol = math.log(amount + 1)
-    log_max = math.log(max_amount + 1)
-    if log_max <= 0:
-        return 0.0
-    return WEIGHT_LIQUIDITY * min(log_vol / log_max, 1.0)
+    if 55 <= rsi <= 75:
+        return W_RSI
+    if 50 <= rsi < 55:
+        return W_RSI * (rsi - 50) / 5
+    if 75 < rsi <= 80:
+        return W_RSI * (80 - rsi) / 5
+    return 0.0
+
+
+# ══════════════════════════════════════════════════════════
+# 辅助函数
+# ══════════════════════════════════════════════════════════
+
+def _build_target_pool(all_tickers: List[dict], target_symbols: List[str]) -> List[dict]:
+    normalized = set()
+    for s in target_symbols:
+        s = s.strip().upper()
+        for pfx in ("SH", "SZ", "BJ"):
+            if s.startswith(pfx) and len(s) > 2:
+                s = s[len(pfx):]
+        s = s.replace(".", "")
+        normalized.add(s)
+    pool = []
+    for t in all_tickers:
+        sym = t.get("symbol", "")
+        code = sym[-6:] if len(sym) > 6 else sym
+        if code in normalized:
+            pool.append({**t, "symbol": code})
+    return pool
+
+
+def _base_filter(tickers: List[dict], min_amount: float, min_price: float) -> List[dict]:
+    """基础过滤：排雷 + 流动性。
+
+    与 v1 的关键区别：
+    - 去掉了振幅下限（不再排除缩量窄幅整理股）
+    - 去掉了涨跌幅下限（不再排除慢牛）
+    - 成交额门槛从 5 亿降到 1 亿
+    """
+    result = []
+    for t in tickers:
+        raw_symbol = t.get("symbol", "")
+        name = t.get("name", "")
+        symbol = raw_symbol[-6:] if len(raw_symbol) > 6 else raw_symbol
+
+        # 排除 ST/退市/B 股
+        if any(kw in name for kw in _EXCLUDE_KEYWORDS):
+            continue
+        # 排除北交所
+        if symbol.startswith(("8", "9")):
+            continue
+
+        close = t.get("close")
+        if close is None or close <= 0 or close < min_price:
+            continue
+
+        amount = t.get("amount")
+        if amount is None or amount < min_amount:
+            continue
+
+        # 排除一字涨停/跌停板（无法交易）
+        high = t.get("high")
+        low = t.get("low")
+        open_p = t.get("open")
+        if (high is not None and low is not None and open_p is not None
+                and high == low == open_p and high > 0):
+            continue
+
+        result.append({**t, "symbol": symbol})
+    return result
 
 
 def _deduplicate(
-    scored: List[dict],
-    returns_map: Dict[str, List[float]],
-    max_cands: int,
+    scored: List[dict], returns_map: Dict[str, List[float]], max_cands: int,
 ) -> List[dict]:
-    selected: List[dict] = []
-    selected_returns: List[List[float]] = []
+    selected, selected_returns = [], []
     for item in scored:
         if len(selected) >= max_cands:
             break
         rets = returns_map.get(item["symbol"], [])
-        redundant = False
-        for sel_rets in selected_returns:
-            if calc_correlation(rets, sel_rets) > CORRELATION_THRESHOLD:
-                redundant = True
-                break
-        if not redundant:
+        if not any(calc_correlation(rets, sr) > CORRELATION_THRESHOLD for sr in selected_returns):
             selected.append(item)
             selected_returns.append(rets)
     return selected

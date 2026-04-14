@@ -1,0 +1,40 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CryptoReversalInput",
+  "description": "加密货币合约底部放量反转筛选输入",
+  "type": "object",
+  "properties": {
+    "trigger_time": {
+      "type": "string",
+      "format": "date-time",
+      "description": "触发时间（ISO 8601）"
+    },
+    "target_symbols": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "指定分析的交易对列表（如 BTCUSDT）"
+    },
+    "min_quote_volume": {
+      "type": "number",
+      "minimum": 0,
+      "default": 10000000,
+      "description": "最低 24h 成交额（USDT），默认 1000 万"
+    },
+    "min_reversal_score": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100,
+      "default": 30,
+      "description": "反转综合评分最低阈值（默认 30）"
+    },
+    "max_candidates": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 50,
+      "default": 20,
+      "description": "最终输出候选数量上限"
+    }
+  },
+  "required": ["trigger_time"],
+  "additionalProperties": false
+}

@@ -164,6 +164,136 @@ cache.close()
 | "预加载 K 线" | `preload_klines.py` |
 | "查询 BTCUSDT 历史" | `fetch_data.py BTCUSDT --start 2024-01-01 --end 2024-06-30` |
 
+## 底部放量反转扫描
+
+全市场扫描底部放量反转候选币种，支持短期（4h）和长期（1d）两种模式。
+与超跌反弹的区别：超跌 = "接飞刀"（暴跌中抄底），反转 = "确认转向"（底部构筑完成后入场）。
+
+```bash
+# 短期反转（4h，默认）— 捕捉 4h 级别底部放量后的 V/U 型反转
+.venv/bin/python3 {baseDir}/scripts/scan_reversal.py --mode short
+
+# 长期反转（1d 日线）— 捕捉日线级别底部构筑完成后的趋势反转
+.venv/bin/python3 {baseDir}/scripts/scan_reversal.py --mode long
+
+# 指定币种
+.venv/bin/python3 {baseDir}/scripts/scan_reversal.py --mode short --symbols BTC,ETH,SOL
+
+# 调整评分阈值
+.venv/bin/python3 {baseDir}/scripts/scan_reversal.py --mode long --min-score 25
+
+# JSON 输出
+.venv/bin/python3 {baseDir}/scripts/scan_reversal.py --mode short --json
+```
+
+### 短期反转评分（4h K 线，满分 100）
+
+侧重即时反转确认信号和资金费率回归，适合日内/隔日波段。
+
+| 维度 | 权重 | 说明 |
+|------|------|------|
+| 底部放量 | 18 | 核心信号，近期量能 vs 前期地量（≥2x 触发，≥3.5x 满分）|
+| 资金费率回归 | 15 | 币圈独有，从极端负值回归正常 = 空头平仓 = 反转信号 |
+| 价格企稳 | 15 | 不再创新低 + 波动收窄 |
+| 均线拐头 | 12 | EMA5 上穿 EMA10（金叉）或 EMA 拐头向上 |
+| 距底部距离 | 10 | 距近期最低点 3%-12% 最佳（刚离开底部，还有空间）|
+| MACD 反转 | 8 | 零轴下方金叉（4h 级别可靠性一般）|
+| KDJ 低位金叉 | 8 | K 上穿 D 且都在 50 以下 |
+| 前期跌幅 | 7 | 跌得越深反转空间越大（≥25% 满分）|
+| 长下影线 | 7 | 下方有强支撑 |
+
+### 长期反转评分（1d 日线，满分 100）
+
+侧重趋势反转确认和 MACD 信号，适合波段交易（3天~2周）。
+
+| 维度 | 权重 | 说明 |
+|------|------|------|
+| 均线拐头 | 15 | 日线级别 EMA 金叉/拐头信号强 |
+| MACD 反转 | 15 | 日线 MACD 零轴下方金叉/底背离可靠性高 |
+| 底部放量 | 15 | 日线放量更可靠（≥1.8x 触发，≥3x 满分）|
+| 价格企稳 | 12 | 日线级别不再创新低 + 波动收窄 |
+| 资金费率回归 | 10 | 长期看权重降低 |
+| 距底部距离 | 10 | 距近期最低点 5%-15% 最佳 |
+| 前期跌幅 | 8 | 中期跌幅深度 |
+| KDJ 低位金叉 | 8 | 日线 KDJ 金叉 |
+| 长下影线 | 7 | 日线长下影线 |
+
+### 意图匹配指南（反转）
+
+| 用户说的 | 应该调用 |
+|---------|---------|
+| "币圈反转扫描" | `scan_reversal.py --mode short` |
+| "长期反转币种" | `scan_reversal.py --mode long` |
+| "BTC 底部反转了吗" | `scan_reversal.py --mode short --symbols BTC` |
+| "确认转向的币" | `scan_reversal.py --mode long` |
+
+## 超买做空扫描
+
+全市场扫描短期涨幅过大、多头过度拥挤的币种，寻找高胜率做空机会。
+支持短期（4h）和长期（1d）两种模式。内置轧空风险排查。
+
+```bash
+# 短期超买（4h，默认）— 捕捉 FOMO 情绪见顶后的急跌
+.venv/bin/python3 {baseDir}/scripts/scan_overbought.py --mode short
+
+# 长期超买（1d 日线）— 捕捉日线级别持续上涨后的趋势衰竭
+.venv/bin/python3 {baseDir}/scripts/scan_overbought.py --mode long
+
+# 指定币种
+.venv/bin/python3 {baseDir}/scripts/scan_overbought.py --mode short --symbols BTC,ETH,SOL
+
+# 调整评分阈值
+.venv/bin/python3 {baseDir}/scripts/scan_overbought.py --mode long --min-score 30
+
+# JSON 输出
+.venv/bin/python3 {baseDir}/scripts/scan_overbought.py --mode short --json
+```
+
+### 短期超买评分（4h K 线，满分 100）
+
+侧重即时超买信号和资金费率，适合日内/隔日做空。
+
+| 维度 | 权重 | 阈值 | 说明 |
+|------|------|------|------|
+| 资金费率极端正值 | 18 | > +0.1% | 做空最强信号，多头拥挤到极致 |
+| RSI(14) 超买 | 15 | > 80 | 极端超买 |
+| BIAS(20) | 12 | > +12% | 正向偏离均线 |
+| 量价背离 | 12 | 价涨量缩 | 上涨动能衰竭 |
+| 连续暴涨 | 10 | ≥5根/>+15% | 3 天内 |
+| 布林带 | 8 | 突破上轨 | |
+| KDJ 高位死叉 | 7 | J>100 或死叉 | |
+| MACD 顶背离 | 5 | | 4h 级别可靠性一般 |
+| 长上影线 | 5 | | 上方有强阻力 |
+| 轧空风险 | -8 | 低流动性+高OI | 扣分，避免轧空陷阱 |
+
+### 长期超买评分（1d 日线，满分 100）
+
+侧重趋势衰竭和背离信号，适合波段做空（3天~2周）。
+
+| 维度 | 权重 | 阈值 | 说明 |
+|------|------|------|------|
+| BIAS(20) | 15 | > +18% | 日线偏离 |
+| MACD 顶背离 | 15 | 30 天回看 | 日线级别可靠性高 |
+| 资金费率 | 12 | > +0.1% | 长期看权重降低 |
+| 量价背离 | 12 | 价涨量缩 | 日线量价背离信号强 |
+| 连续暴涨+距低点涨幅 | 12 | ≥5天/>+60% | |
+| RSI(14) | 10 | > 75 | |
+| 布林带 | 8 | 突破上轨 | |
+| KDJ | 7 | J>100 或死叉 | |
+| 长上影线 | 5 | | |
+| 轧空风险 | -4 | | 长期看风险降低 |
+
+### 意图匹配指南（做空）
+
+| 用户说的 | 应该调用 |
+|---------|---------|
+| "超买做空扫描" | `scan_overbought.py --mode short` |
+| "哪些币涨太多了" | `scan_overbought.py --mode short` |
+| "长期超买币种" | `scan_overbought.py --mode long` |
+| "BTC 超买了吗" | `scan_overbought.py --mode short --symbols BTC` |
+| "适合做空的币" | `scan_overbought.py --mode short` |
+| "FOMO 见顶了吗" | `scan_overbought.py --mode short` |
+
 ## 设计原则
 
 1. 职责单一：仅负责"找数据、存数据、给数据"

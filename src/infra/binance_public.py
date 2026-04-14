@@ -197,3 +197,53 @@ class BinancePublicClient:
         except Exception as exc:
             log.warning("获取 %s 持仓量失败: %s", symbol, exc)
             return None
+
+    def get_open_interest_hist(
+        self, symbol: str, period: str = "1h", limit: int = 30,
+    ) -> List[Dict[str, Any]]:
+        """获取历史持仓量统计（/futures/data/openInterestHist）。
+
+        参数:
+            symbol: 交易对（如 "BTCUSDT"）
+            period: 统计周期（5m/15m/30m/1h/2h/4h/6h/12h/1d）
+            limit: 返回条数，最大 500
+
+        返回:
+            [{"symbol": "BTCUSDT", "sumOpenInterest": "12345.678",
+              "sumOpenInterestValue": "123456789.0", "timestamp": 1704067200000}, ...]
+
+        注意: 仅最近 30 天数据可用，无需 API Key。
+        """
+        try:
+            return self._get("/futures/data/openInterestHist", {
+                "symbol": symbol,
+                "period": period,
+                "limit": limit,
+            })
+        except Exception as exc:
+            log.warning("获取 %s 历史持仓量失败: %s", symbol, exc)
+            return []
+
+    def get_top_long_short_ratio(
+        self, symbol: str, period: str = "1h", limit: int = 30,
+    ) -> List[Dict[str, Any]]:
+        """获取大户多空比（/futures/data/topLongShortAccountRatio）。
+
+        参数:
+            symbol: 交易对
+            period: 统计周期（5m/15m/30m/1h/2h/4h/6h/12h/1d）
+            limit: 返回条数，最大 500
+
+        返回:
+            [{"symbol": "BTCUSDT", "longShortRatio": "1.5",
+              "longAccount": "0.6", "shortAccount": "0.4", "timestamp": ...}, ...]
+        """
+        try:
+            return self._get("/futures/data/topLongShortAccountRatio", {
+                "symbol": symbol,
+                "period": period,
+                "limit": limit,
+            })
+        except Exception as exc:
+            log.warning("获取 %s 大户多空比失败: %s", symbol, exc)
+            return []

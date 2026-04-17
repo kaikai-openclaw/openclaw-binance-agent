@@ -462,11 +462,16 @@ def main():
         label = f"{code} {name}" if name else code
 
         if args.skip_existing:
-            if cache.get_row_count(code, args.adjust) > 0:
-                skipped += 1
-                if i % 200 == 0:
-                    _progress(i, total, success, skipped, failed, total_rows, t0)
-                continue
+            date_range = cache.get_date_range(code, args.adjust)
+            if date_range is not None:
+                cached_start, cached_end = date_range
+                # 只有当缓存已覆盖请求的起始日期时才跳过
+                # 如果缓存最早日期 > 请求的 start_date，说明需要补更早的数据
+                if cached_start <= start_date and cached_end >= end_date:
+                    skipped += 1
+                    if i % 200 == 0:
+                        _progress(i, total, success, skipped, failed, total_rows, t0)
+                    continue
 
         if i > 1:
             time.sleep(args.interval)

@@ -15,6 +15,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Callable, List
 
+from src.infra.fees import apply_fees_to_pnl
 from src.infra.memory_store import MemoryStore
 from src.infra.state_store import StateStore
 from src.models.types import (
@@ -53,6 +54,9 @@ class Skill5Evolve(BaseSkill):
         output_schema: dict,
         memory_store: MemoryStore,
         account_state_provider: AccountStateProvider,
+        fee_market: str = "crypto",
+        fee_order_type: str = "taker",
+        fee_vip_discount: float = 0.0,
     ) -> None:
         """
         初始化 Skill-5。
@@ -63,11 +67,16 @@ class Skill5Evolve(BaseSkill):
             output_schema: 输出 JSON Schema
             memory_store: 长期记忆库（注入）
             account_state_provider: 账户状态提供回调
+            fee_market / fee_order_type / fee_vip_discount: P0-4 费率建模参数，
+                用于计算净胜率/净盈亏；不改动原始 pnl_amount 存储（真实性要求）
         """
         super().__init__(state_store, input_schema, output_schema)
         self.name = "skill5_evolve"
         self._memory_store = memory_store
         self._account_state_provider = account_state_provider
+        self._fee_market = fee_market
+        self._fee_order_type = fee_order_type
+        self._fee_vip_discount = fee_vip_discount
 
     def run(self, input_data: dict) -> dict:
         """
@@ -280,6 +289,8 @@ class Skill5Evolve(BaseSkill):
             return {
                 "win_rate": 0.0,
                 "avg_pnl_ratio": 0.0,
+                "net_win_rate": 0.0,
+                "net_avg_pnl_amount": 0.0,
                 "trade_count": trade_count,
                 "adjustment_applied": False,
                 "adjustment_detail": (
@@ -331,9 +342,14 @@ class Skill5Evolve(BaseSkill):
             else:
                 adjustment_detail = reflection.reasoning
 
+        # P0-4：额外计算净胜率/净均盈亏（不改动毛统计，确保不篡改原始数据）
+        net_win_rate, net_avg_pnl = self._compute_net_stats(recent_trades)
+
         return {
             "win_rate": round(stats.win_rate, 2),
             "avg_pnl_ratio": round(stats.avg_pnl_ratio, 4),
+            "net_win_rate": round(net_win_rate, 2),
+            "net_avg_pnl_amount": round(net_avg_pnl, 4),
             "trade_count": trade_count,
             "adjustment_applied": adjustment_applied,
             "adjustment_detail": adjustment_detail,
@@ -346,6 +362,51 @@ class Skill5Evolve(BaseSkill):
                 if reflection else current_risk
             ),
         }
+
+    def _compute_net_stats(
+        self, trades: List[TradeRecord]
+    ) -> tuple[float, float]:
+        """
+        基于 fees 模块扣除手续费和滑点，计算净胜率和净均盈亏。
+
+        保持原始 pnl_amount（毛盈亏）不变，仅在此函数内临时扣除成本。
+        """
+        if not trades:
+            return 0.0, 0.0
+
+        net_pnls: List[float] = []
+        for t in trades:
+            if t.entry_price <= 0 or t.exit_price <= 0:
+                net_pnls.append(t.pnl_amount)
+                continue
+            # TradeRecord 无 quantity 字段；用 pnl_amount 反推 quantity
+            price_diff = abs(t.exit_price - t.entry_price)
+            if price_diff <= 0:
+                net_pnls.append(t.pnl_amount)
+                continue
+            quantity = abs(t.pnl_amount) / price_diff if t.pnl_amount != 0 else 0.0
+            if quantity <= 0:
+                net_pnls.append(t.pnl_amount)
+                continue
+            entry_notional = quantity * t.entry_price
+            exit_notional = quantity * t.exit_price
+            try:
+                net = apply_fees_to_pnl(
+                    gross_pnl=t.pnl_amount,
+                    entry_notional=entry_notional,
+                    exit_notional=exit_notional,
+                    market=self._fee_market,
+                    order_type=self._fee_order_type,
+                    vip_discount=self._fee_vip_discount,
+                )
+            except ValueError:
+                net = t.pnl_amount
+            net_pnls.append(net)
+
+        wins = sum(1 for p in net_pnls if p > 0)
+        net_win_rate = wins / len(net_pnls) * 100.0
+        net_avg = sum(net_pnls) / len(net_pnls)
+        return net_win_rate, net_avg
 
     @staticmethod
     def _generate_markdown(
@@ -401,8 +462,10 @@ class Skill5Evolve(BaseSkill):
             "## 策略进化",
             "",
             f"- 交易笔数: {evolution['trade_count']}",
-            f"- 胜率: {evolution['win_rate']:.1f}%",
+            f"- 胜率（毛）: {evolution['win_rate']:.1f}%",
+            f"- 胜率（净）: {evolution.get('net_win_rate', 0.0):.1f}%",
             f"- 平均盈亏比: {evolution['avg_pnl_ratio']:.4f}",
+            f"- 平均净盈亏金额: {evolution.get('net_avg_pnl_amount', 0.0):.4f}",
             f"- 参数调整: {'是' if evolution['adjustment_applied'] else '否'}",
         ])
 

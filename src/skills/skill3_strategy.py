@@ -6,6 +6,17 @@ Skill-3：交易策略制定
 
 RiskController 和 account_state_provider 通过构造函数注入，便于测试时 mock。
 
+止损止盈策略（P0-1 改造后）:
+  - 优先使用 ATR 动态止损：rating 透传的 atr_pct（来自 Skill-1）→ 止损距离 = atr_pct × atr_stop_mult
+    盈亏比固定 2:1（atr_tp_mult / atr_stop_mult）
+  - 止损距离会 clip 到 [min_stop_pct, max_stop_pct]，避免极端波动或极低波动下的病态止损
+  - 回退路径：无 atr_pct 时沿用旧的固定百分比（3%/6%）并记录 warning
+
+价格来源（P0-2 改造后）:
+  - 生产路径（require_market_price=True）：market_price_provider 必须返回正数，否则该币种被跳过
+  - 测试路径（require_market_price=False，默认）：provider 缺失/失败时回退到 TEST_FALLBACK_PRICE=100.0
+    仅用于单元测试，日志会明确标注
+
 需求: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8
 """
 
@@ -13,6 +24,11 @@ import logging
 import uuid
 from typing import Any, Callable, Dict, List, Optional
 
+from src.infra.fees import (
+    CRYPTO_MAKER_FEE_RATE,
+    CRYPTO_TAKER_FEE_RATE,
+    calc_round_trip_cost_pct,
+)
 from src.infra.risk_controller import RiskController
 from src.infra.state_store import StateStore
 from src.models.types import (
@@ -35,15 +51,27 @@ DEFAULT_MAX_HOLD_HOURS = 24.0
 # 默认杠杆倍数
 DEFAULT_LEVERAGE = 10
 
-# 止损止盈比例常量
+# 止损止盈比例常量（仅在没有 ATR 时的回退路径使用）
 STOP_LOSS_PCT = 0.03       # 止损幅度 3%
 TAKE_PROFIT_PCT = 0.06     # 止盈幅度 6%（盈亏比 2:1）
+
+# ATR 动态止损默认参数
+DEFAULT_ATR_STOP_MULT = 1.5     # 止损距离 = ATR × 1.5
+DEFAULT_ATR_TP_MULT = 3.0       # 止盈距离 = ATR × 3.0（盈亏比 2:1）
+DEFAULT_MIN_STOP_PCT = 0.005    # 止损距离下限 0.5%（防止极低波动下 SL 贴得过近被秒扫）
+DEFAULT_MAX_STOP_PCT = 0.08     # 止损距离上限 8%（防止高波动币种仓位失控）
 
 # 入场区间宽度常量
 ENTRY_SPREAD_MIN = 0.01    # 最窄区间（置信度 100% 时）
 ENTRY_SPREAD_MAX = 0.05    # 最宽区间（置信度 0% 时）
 
-# 市场价格提供者类型：接收 symbol，返回当前市场价格
+# 测试路径的标准化基准价（仅在未注入任何 provider 时使用）
+TEST_FALLBACK_PRICE = 100.0
+
+# P0-4：扣费后净盈亏比的最低阈值；低于此值的交易直接拒绝
+DEFAULT_MIN_NET_RR_RATIO = 1.2
+
+# 市场价格提供者类型：接收 symbol，返回当前市场价格（None 或 <=0 表示不可用）
 MarketPriceProvider = Callable[[str], Optional[float]]
 
 # 账户状态提供者类型：无参数调用，返回 AccountState
@@ -72,6 +100,15 @@ class Skill3Strategy(BaseSkill):
         risk_ratio: float = DEFAULT_RISK_RATIO,
         max_hold_hours: float = DEFAULT_MAX_HOLD_HOURS,
         leverage: int = DEFAULT_LEVERAGE,
+        require_market_price: bool = False,
+        atr_stop_mult: float = DEFAULT_ATR_STOP_MULT,
+        atr_tp_mult: float = DEFAULT_ATR_TP_MULT,
+        min_stop_pct: float = DEFAULT_MIN_STOP_PCT,
+        max_stop_pct: float = DEFAULT_MAX_STOP_PCT,
+        fee_market: str = "crypto",
+        fee_order_type: str = "taker",
+        fee_vip_discount: float = 0.0,
+        min_net_rr_ratio: float = DEFAULT_MIN_NET_RR_RATIO,
     ) -> None:
         """
         初始化 Skill-3。
@@ -82,11 +119,23 @@ class Skill3Strategy(BaseSkill):
             output_schema: 输出 JSON Schema
             risk_controller: 风控拦截层实例
             account_state_provider: 账户状态提供回调（返回 AccountState）
-            market_price_provider: 市场价格提供回调（接收 symbol，返回当前价格），
-                                   为 None 时使用 100.0 作为标准化基准价格
+            market_price_provider: 市场价格提供回调（接收 symbol，返回当前价格）
+                - None 或返回 None/0/负数 时的行为由 require_market_price 决定
             risk_ratio: 账户风险比例，默认 0.02（2%）
             max_hold_hours: 默认持仓时间上限（小时），默认 24
             leverage: 默认杠杆倍数，默认 10
+            require_market_price: 是否要求必须拿到真实市场价（P0-2）
+                - True（生产路径）：provider 返回无效值时跳过该币种
+                - False（测试路径，默认）：回退到 TEST_FALLBACK_PRICE=100.0
+            atr_stop_mult: ATR 止损乘数（止损距离 = atr_pct × atr_stop_mult）
+            atr_tp_mult: ATR 止盈乘数（止盈距离 = atr_pct × atr_tp_mult），
+                atr_tp_mult / atr_stop_mult 即实际盈亏比
+            min_stop_pct: 止损距离相对入场价的下限（防止 SL 贴得过近）
+            max_stop_pct: 止损距离相对入场价的上限（防止高波动币种仓位失控）
+            fee_market: 费率市场类型，"crypto"（默认）或 "astock"
+            fee_order_type: crypto 下单类型，"taker"（默认，更保守）或 "maker"
+            fee_vip_discount: crypto VIP 费率折扣（0-1）
+            min_net_rr_ratio: 扣费后净盈亏比下限（P0-4）；低于此值的交易直接拒绝
         """
         super().__init__(state_store, input_schema, output_schema)
         self.name = "skill3_strategy"
@@ -96,6 +145,28 @@ class Skill3Strategy(BaseSkill):
         self._risk_ratio = risk_ratio
         self._max_hold_hours = max_hold_hours
         self._leverage = leverage
+        self._require_market_price = require_market_price
+        self._atr_stop_mult = atr_stop_mult
+        self._atr_tp_mult = atr_tp_mult
+        self._min_stop_pct = min_stop_pct
+        self._max_stop_pct = max_stop_pct
+        self._fee_market = fee_market
+        self._fee_order_type = fee_order_type
+        self._fee_vip_discount = fee_vip_discount
+        self._min_net_rr_ratio = min_net_rr_ratio
+
+        # 预计算 round-trip 成本占比（每次下单一致，无需每笔重算）
+        try:
+            self._round_trip_cost_pct = calc_round_trip_cost_pct(
+                market=fee_market,
+                order_type=fee_order_type,
+                vip_discount=fee_vip_discount,
+            )
+        except ValueError:
+            log.warning(
+                f"[{self.name}] fee_market={fee_market} 未知，禁用费用建模"
+            )
+            self._round_trip_cost_pct = 0.0
 
     def run(self, input_data: dict) -> dict:
         """
@@ -185,6 +256,7 @@ class Skill3Strategy(BaseSkill):
         symbol = rating.get("symbol", "")
         signal = rating.get("signal", "")
         confidence = rating.get("confidence", 0.0)
+        atr_pct = rating.get("atr_pct")  # Skill-1/Skill-2 透传的 ATR 百分比（可选）
 
         # hold 信号不生成交易计划
         if signal == "hold":
@@ -194,20 +266,39 @@ class Skill3Strategy(BaseSkill):
         # 确定交易方向
         direction = TradeDirection.LONG if signal == "long" else TradeDirection.SHORT
 
-        # 计算入场价格区间（优先使用真实市场价格）
-        entry_price, entry_upper, entry_lower = self._calculate_entry_range(
-            confidence, symbol
-        )
+        # 计算入场价格区间（P0-2：生产路径 fail-fast）
+        entry_range = self._calculate_entry_range(confidence, symbol)
+        if entry_range is None:
+            log.warning(
+                f"[{self.name}] {symbol} 市场价格不可用（require_market_price=True），跳过"
+            )
+            return None
+        entry_price, entry_upper, entry_lower, price_source = entry_range
 
-        # 计算止损和止盈价格
-        stop_loss_price, take_profit_price = self._calculate_sl_tp(
-            entry_price, direction
+        # 计算止损和止盈价格（P0-1：优先使用 ATR 动态）
+        stop_loss_price, take_profit_price, sl_source = self._calculate_sl_tp(
+            entry_price, direction, atr_pct, symbol
         )
 
         # 需求 3.8：数值参数边界校验
         if entry_price <= 0 or stop_loss_price <= 0 or take_profit_price <= 0:
             log.warning(
                 f"[{self.name}] {symbol} 价格参数无效，跳过"
+            )
+            return None
+
+        # P0-4：扣费后净盈亏比守门
+        sl_dist_pct = abs(entry_price - stop_loss_price) / entry_price
+        tp_dist_pct = abs(take_profit_price - entry_price) / entry_price
+        cost_pct = self._round_trip_cost_pct
+        net_sl = sl_dist_pct + cost_pct
+        net_tp = tp_dist_pct - cost_pct
+        net_rr = (net_tp / net_sl) if net_sl > 0 else 0.0
+        if net_tp <= 0 or net_rr < self._min_net_rr_ratio:
+            log.warning(
+                f"[{self.name}] {symbol} 扣费后净盈亏比 {net_rr:.2f} "
+                f"低于阈值 {self._min_net_rr_ratio:.2f}（TP={tp_dist_pct:.4f} "
+                f"SL={sl_dist_pct:.4f} cost={cost_pct:.4f}），跳过"
             )
             return None
 
@@ -272,7 +363,7 @@ class Skill3Strategy(BaseSkill):
             log.warning(f"[{self.name}] {symbol} 头寸规模为零，跳过")
             return None
 
-        return {
+        plan = {
             "symbol": symbol,
             "direction": direction.value,
             "entry_price_upper": round(entry_upper, 8),
@@ -282,15 +373,26 @@ class Skill3Strategy(BaseSkill):
             "take_profit_price": round(take_profit_price, 8),
             "max_hold_hours": self._max_hold_hours,
         }
+        # 审计字段：标注止损/价格来源 + 费率成本估算，便于回测归因（schema 可选字段）
+        plan["stop_loss_source"] = sl_source
+        plan["price_source"] = price_source
+        plan["round_trip_cost_pct"] = round(cost_pct, 6)
+        plan["net_rr_ratio"] = round(net_rr, 4)
+        return plan
 
     def _calculate_entry_range(
         self, confidence: float, symbol: str = ""
-    ) -> tuple[float, float, float]:
+    ) -> Optional[tuple[float, float, float, str]]:
         """
         计算入场价格区间。
 
-        优先从 market_price_provider 获取真实市场价格，
-        若不可用则回退到 100.0 标准化基准价格。
+        行为（P0-2 改造）：
+          - 优先从 market_price_provider 获取真实市场价格
+          - provider 注入且返回正数 → source="market"
+          - provider 未注入 / 返回无效值：
+              - require_market_price=True（生产路径）→ 返回 None，调用方跳过该币种
+              - require_market_price=False（测试路径）→ 回退 TEST_FALLBACK_PRICE，source="test_fallback"
+
         区间宽度与置信度成反比：置信度越高，区间越窄。
 
         参数:
@@ -298,57 +400,94 @@ class Skill3Strategy(BaseSkill):
             symbol: 币种符号（用于获取市场价格）
 
         返回:
-            (基准价格, 区间上限, 区间下限)
+            (基准价格, 区间上限, 区间下限, price_source) 或 None（生产路径且价格不可用）
         """
-        # 优先从市场数据获取真实价格
-        base_price = None
+        base_price: Optional[float] = None
         if self._market_price_provider is not None and symbol:
             try:
-                base_price = self._market_price_provider(symbol)
+                raw = self._market_price_provider(symbol)
+                if raw is not None and raw > 0:
+                    base_price = float(raw)
             except Exception as exc:
                 log.warning(
-                    f"[{self.name}] 获取 {symbol} 市场价格失败: {exc}，"
-                    f"回退到标准化基准价格"
+                    f"[{self.name}] 获取 {symbol} 市场价格失败: {exc}"
                 )
 
-        if base_price is None or base_price <= 0:
-            base_price = 100.0  # 标准化基准价格（回退值）
+        price_source: str
+        if base_price is not None:
+            price_source = "market"
+        else:
+            if self._require_market_price:
+                # P0-2：生产路径禁止魔数回退，返回 None 由上游跳过
+                return None
+            base_price = TEST_FALLBACK_PRICE
+            price_source = "test_fallback"
+            log.debug(
+                f"[{self.name}] {symbol} 使用测试回退价格 {TEST_FALLBACK_PRICE} "
+                f"(require_market_price=False)"
+            )
 
-        # 区间宽度：置信度 100% → ENTRY_SPREAD_MIN，置信度 0% → ENTRY_SPREAD_MAX
         spread_pct = ENTRY_SPREAD_MAX - (confidence / 100.0) * (ENTRY_SPREAD_MAX - ENTRY_SPREAD_MIN)
         spread = base_price * spread_pct
 
         upper = base_price + spread
         lower = base_price - spread
 
-        return base_price, upper, lower
+        return base_price, upper, lower, price_source
 
     def _calculate_sl_tp(
-        self, entry_price: float, direction: TradeDirection
-    ) -> tuple[float, float]:
+        self,
+        entry_price: float,
+        direction: TradeDirection,
+        atr_pct: Optional[float] = None,
+        symbol: str = "",
+    ) -> tuple[float, float, str]:
         """
-        计算止损和止盈价格。
+        计算止损和止盈价格（P0-1：ATR 动态 > 固定百分比）。
 
-        做多：止损 = 入场价 × (1 - STOP_LOSS_PCT)，止盈 = 入场价 × (1 + TAKE_PROFIT_PCT)
-        做空：止损 = 入场价 × (1 + STOP_LOSS_PCT)，止盈 = 入场价 × (1 - TAKE_PROFIT_PCT)
+        优先路径（ATR 动态）：
+            - 止损距离 pct = clip(atr_pct / 100 × atr_stop_mult, min_stop_pct, max_stop_pct)
+            - 止盈距离 pct = 止损距离 × (atr_tp_mult / atr_stop_mult)
+            - 盈亏比 = atr_tp_mult / atr_stop_mult（默认 2:1）
 
-        盈亏比 = TAKE_PROFIT_PCT / STOP_LOSS_PCT = 2:1。
+        回退路径（无 atr_pct）：
+            - 沿用 STOP_LOSS_PCT=3% / TAKE_PROFIT_PCT=6%
+            - 打 warning 提示 ATR 缺失
 
-        参数:
-            entry_price: 入场价格
-            direction: 交易方向
+        做多：止损 = 入场价 × (1 - sl_pct)，止盈 = 入场价 × (1 + tp_pct)
+        做空：止损 = 入场价 × (1 + sl_pct)，止盈 = 入场价 × (1 - tp_pct)
 
         返回:
-            (止损价格, 止盈价格)
+            (止损价格, 止盈价格, 来源标记) 来源 ∈ {"atr", "fixed"}
         """
-        if direction == TradeDirection.LONG:
-            stop_loss = entry_price * (1 - STOP_LOSS_PCT)
-            take_profit = entry_price * (1 + TAKE_PROFIT_PCT)
+        if atr_pct is not None and atr_pct > 0:
+            atr_ratio = float(atr_pct) / 100.0
+            raw_sl_pct = atr_ratio * self._atr_stop_mult
+            sl_pct = max(self._min_stop_pct, min(self._max_stop_pct, raw_sl_pct))
+            tp_pct = sl_pct * (self._atr_tp_mult / self._atr_stop_mult)
+            source = "atr"
+            log.debug(
+                f"[{self.name}] {symbol} ATR 止损: atr_pct={atr_pct:.2f}%, "
+                f"sl={sl_pct:.4f}, tp={tp_pct:.4f}"
+            )
         else:
-            stop_loss = entry_price * (1 + STOP_LOSS_PCT)
-            take_profit = entry_price * (1 - TAKE_PROFIT_PCT)
+            sl_pct = STOP_LOSS_PCT
+            tp_pct = TAKE_PROFIT_PCT
+            source = "fixed"
+            log.warning(
+                f"[{self.name}] {symbol} 缺少 ATR 信息，止损回退到固定 "
+                f"{STOP_LOSS_PCT*100:.1f}%/{TAKE_PROFIT_PCT*100:.1f}% — "
+                f"建议上游透传 atr_pct 以启用波动率自适应止损"
+            )
 
-        return stop_loss, take_profit
+        if direction == TradeDirection.LONG:
+            stop_loss = entry_price * (1 - sl_pct)
+            take_profit = entry_price * (1 + tp_pct)
+        else:
+            stop_loss = entry_price * (1 + sl_pct)
+            take_profit = entry_price * (1 - tp_pct)
+
+        return stop_loss, take_profit, source
 
     def _try_adjust_position(
         self,

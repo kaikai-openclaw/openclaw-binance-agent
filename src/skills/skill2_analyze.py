@@ -160,12 +160,19 @@ class Skill2Analyze(BaseSkill):
                 "heat_score": candidate.get("heat_score", 0),
                 "source_url": candidate.get("source_url", ""),
                 "collected_at": candidate.get("collected_at", ""),
+                "atr_pct": candidate.get("atr_pct"),
+                "adx": candidate.get("adx"),
+                "signal_direction": candidate.get("signal_direction"),
             }
 
             try:
                 result = self._trading_agents.analyze(symbol, market_data)
                 rating = self._extract_rating(symbol, result)
                 if rating is not None:
+                    # 透传上游 ATR 到 rating（P0-1：Skill-3 用它算动态止损）
+                    atr_pct = candidate.get("atr_pct")
+                    if atr_pct is not None:
+                        rating["atr_pct"] = atr_pct
                     all_ratings.append(rating)
             except TimeoutError:
                 # 需求 2.6：超时跳过，记录日志
@@ -255,10 +262,14 @@ class Skill2Analyze(BaseSkill):
             return None
         confidence = max(0.0, min(100.0, float(confidence)))
 
-        return {
+        rating_out = {
             "symbol": symbol,
             "rating_score": rating_score,
             "signal": signal,
             "confidence": confidence,
             "comment": result.get("comment", ""),
         }
+        # 若分析器回传 atr_pct，优先使用；否则调用方会从 candidate 透传
+        if "atr_pct" in result and result["atr_pct"] is not None:
+            rating_out["atr_pct"] = result["atr_pct"]
+        return rating_out

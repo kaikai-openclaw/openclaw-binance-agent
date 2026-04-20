@@ -85,16 +85,30 @@ def make_account_provider(fapi_client: BinanceFapiClient, paper_mode: bool):
 
 
 def make_market_price_provider(public_client: BinancePublicClient):
-    """创建市场价格提供回调。"""
-    _cache = {}
+    """创建市场价格提供回调。
 
-    def provider(symbol: str) -> float:
+    P0-2 改造：价格不可用时返回 None（而不是 0.0），
+    让 Skill-3 在 require_market_price=True 下正确跳过该币种，
+    避免用 0 或 100 魔数算出失真的止损/头寸。
+    """
+    _cache: dict = {}
+
+    def provider(symbol: str):
         if symbol in _cache:
             return _cache[symbol]
-        tickers = public_client.get_tickers_24hr()
-        for t in tickers:
-            _cache[t["symbol"]] = float(t.get("lastPrice", 0))
-        return _cache.get(symbol, 0.0)
+        try:
+            tickers = public_client.get_tickers_24hr()
+            for t in tickers:
+                last = t.get("lastPrice", 0)
+                try:
+                    last = float(last)
+                except (TypeError, ValueError):
+                    last = 0.0
+                _cache[t["symbol"]] = last if last > 0 else None
+        except Exception as exc:
+            log.warning(f"拉取 ticker 失败: {exc}")
+            return None
+        return _cache.get(symbol)
     return provider
 
 
@@ -191,6 +205,7 @@ def main():
             account_state_provider=account_provider,
             market_price_provider=market_price_provider,
             risk_ratio=risk_ratio,
+            require_market_price=True,  # P0-2：生产路径禁止 100.0 魔数回退
         )
         s3_input_id = state_store.save("skill3_input", {"input_state_id": s2_id})
         s3_id = skill3.execute(s3_input_id)

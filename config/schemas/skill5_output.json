@@ -38,6 +38,16 @@
       "properties": {
         "win_rate": { "type": "number", "minimum": 0, "maximum": 100 },
         "avg_pnl_ratio": { "type": "number" },
+        "net_win_rate": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "扣除手续费与滑点后的净胜率（P0-4）"
+        },
+        "net_avg_pnl_amount": {
+          "type": "number",
+          "description": "扣除手续费与滑点后的平均净盈亏金额（P0-4）"
+        },
         "trade_count": { "type": "integer", "minimum": 0 },
         "adjustment_applied": { "type": "boolean" },
         "adjustment_detail": { "type": "string" }

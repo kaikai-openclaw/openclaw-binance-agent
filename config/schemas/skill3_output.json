@@ -52,6 +52,25 @@
             "type": "number",
             "exclusiveMinimum": 0,
             "description": "持仓时间上限（小时）"
+          },
+          "stop_loss_source": {
+            "type": "string",
+            "enum": ["atr", "fixed"],
+            "description": "止损来源：ATR 动态 或 固定百分比回退"
+          },
+          "price_source": {
+            "type": "string",
+            "enum": ["market", "test_fallback"],
+            "description": "入场基准价来源：真实市场价 或 测试标准化价"
+          },
+          "round_trip_cost_pct": {
+            "type": "number",
+            "minimum": 0,
+            "description": "预估 round-trip 成本占名义金额比例（手续费+滑点）"
+          },
+          "net_rr_ratio": {
+            "type": "number",
+            "description": "扣费后净盈亏比 = (TP - cost) / (SL + cost)"
           }
         },
         "required": [

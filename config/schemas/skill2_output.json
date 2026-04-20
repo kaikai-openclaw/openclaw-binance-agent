@@ -36,6 +36,10 @@
           "comment": {
             "type": "string",
             "description": "TradingAgents 分析摘要点评"
+          },
+          "atr_pct": {
+            "type": ["number", "null"],
+            "description": "Skill-1 透传的 ATR 百分比，供 Skill-3 动态止损使用"
           }
         },
         "required": [

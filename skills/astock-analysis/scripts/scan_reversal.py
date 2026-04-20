@@ -35,6 +35,7 @@ def main():
     parser.add_argument("--scan", action="store_true", help="全市场扫描")
     parser.add_argument("--min-score", type=int, default=40, help="最低评分（默认 40）")
     parser.add_argument("--max", type=int, default=20, help="最大输出数量")
+    parser.add_argument("--exclude-kcb", action="store_true", help="排除科创板（688）")
     args = parser.parse_args()
 
     if not args.symbols and not args.scan:
@@ -53,6 +54,7 @@ def main():
             "trigger_time": datetime.now(timezone.utc).isoformat(),
             "min_score": args.min_score,
             "max_candidates": args.max,
+            "exclude_kcb": args.exclude_kcb,
         }
         if args.symbols:
             syms = [s.strip().upper().replace("SH","").replace("SZ","").replace("BJ","").replace(".","")

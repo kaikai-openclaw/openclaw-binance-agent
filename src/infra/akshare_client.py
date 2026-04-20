@@ -67,13 +67,21 @@ class AkshareClient:
 
     内置本地 K 线缓存：get_klines() 优先查本地 SQLite，
     命中则零网络请求；未命中或数据不足时联网拉取并自动回写缓存。
+
+    实时行情缓存：get_spot_all() 结果在 spot_ttl 秒内复用内存缓存，
+    避免同一天多次扫描重复拉取全市场行情。
     """
 
-    def __init__(self, cache_db_path: str = "data/kline_cache.db") -> None:
+    def __init__(self, cache_db_path: str = "data/kline_cache.db",
+                 spot_ttl: int = 300) -> None:
         self._ak = _ensure_akshare()
         # 延迟导入，避免循环依赖
         from src.infra.kline_cache import KlineCache
         self._cache = KlineCache(cache_db_path)
+        # 实时行情内存缓存
+        self._spot_ttl = spot_ttl  # 默认 5 分钟
+        self._spot_cache: List[Dict[str, Any]] = []
+        self._spot_cache_ts: float = 0.0
 
     def _retry(self, fn, desc: str = "akshare"):
         last_err = None
@@ -100,8 +108,20 @@ class AkshareClient:
     # 实时行情：腾讯 → 新浪 → 东方财富
     # ══════════════════════════════════════════════════════
 
-    def get_spot_all(self) -> List[Dict[str, Any]]:
-        """获取沪深 A 股全量实时行情。优先级：腾讯 → 新浪 → 东方财富。"""
+    def get_spot_all(self, force_refresh: bool = False) -> List[Dict[str, Any]]:
+        """获取沪深 A 股全量实时行情。优先级：腾讯 → 新浪 → 东方财富。
+
+        内置内存缓存，spot_ttl 秒内重复调用直接返回缓存。
+        force_refresh=True 可强制刷新。
+        """
+        now = time.time()
+        if (not force_refresh
+                and self._spot_cache
+                and (now - self._spot_cache_ts) < self._spot_ttl):
+            log.info("[AkshareClient] 实时行情命中缓存(%d只, %.0fs前)",
+                     len(self._spot_cache), now - self._spot_cache_ts)
+            return self._spot_cache
+
         for name, fn in [
             ("腾讯", self._get_spot_tencent),
             ("新浪", self._get_spot_sina),
@@ -111,10 +131,19 @@ class AkshareClient:
                 result = fn()
                 if result:
                     log.info("[AkshareClient] 实时行情(%s): %d 只", name, len(result))
+                    self._spot_cache = result
+                    self._spot_cache_ts = time.time()
                     return result
             except Exception as e:
                 log.warning("[AkshareClient] 实时行情(%s)失败: %s", name, e)
-        log.warning("[AkshareClient] 所有实时行情接口均不可用")
+
+        # 所有接口失败，降级返回过期缓存
+        if self._spot_cache:
+            log.warning("[AkshareClient] 所有实时行情接口不可用，降级返回过期缓存(%d只)",
+                        len(self._spot_cache))
+            return self._spot_cache
+
+        log.warning("[AkshareClient] 所有实时行情接口均不可用，无缓存可用")
         return []
 
     def _get_spot_tencent(self) -> List[Dict[str, Any]]:

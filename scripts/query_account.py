@@ -79,9 +79,9 @@ try:
         if algo_orders:
             print(f"\n条件单: {len(algo_orders)} 笔")
             for order in algo_orders:
-                print(f"  {order['symbol']} {order['side']} {order['type']} "
+                print(f"  {order.get('symbol', 'N/A')} {order.get('side', 'N/A')} {order.get('type', 'N/A')} "
                       f"触发价: {order.get('triggerPrice', 'N/A')} "
-                      f"[{order['algoStatus']}]")
+                      f"[{order.get('algoStatus', 'N/A')}]")
 
     # 汇总
     print("\n📈 账户汇总")

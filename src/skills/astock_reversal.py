@@ -103,6 +103,7 @@ class AStockReversalSkill(BaseSkill):
         min_score = input_data.get("min_score", DEFAULT_MIN_SCORE)
         max_cands = input_data.get("max_candidates", DEFAULT_MAX_CANDIDATES)
         target_symbols = input_data.get("target_symbols")
+        exclude_kcb = input_data.get("exclude_kcb", False)
 
         pipeline_run_id = str(uuid.uuid4())
 
@@ -115,6 +116,12 @@ class AStockReversalSkill(BaseSkill):
                 pool = self._client.get_spot_by_hist(target_symbols)
         else:
             pool = _base_filter(all_tickers, min_amount, min_price)
+
+        # 排除科创板（688 开头）
+        if exclude_kcb and not target_symbols:
+            before = len(pool)
+            pool = [p for p in pool if not p["symbol"].startswith("688")]
+            log.info("[reversal] 排除科创板: %d → %d", before, len(pool))
 
         log.info("[reversal] Step1: %d/%d 通过基础过滤", len(pool), total_count)
 

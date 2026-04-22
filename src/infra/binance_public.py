@@ -25,6 +25,25 @@ _BACKOFF = [1, 2, 4, 8, 16]
 _MAX_RETRIES = 5
 _TIMEOUT = 15
 
+# K 线周期 → 毫秒映射（用于 get_klines_cached 的时效校验）
+# 1w/1M 因 UTC 对齐规则特殊（周一起始 / 月份不定长），这里不放入表内，
+# 命中时直接退化为"每次联网"策略，保证正确性。
+_INTERVAL_MS_MAP: Dict[str, int] = {
+    "1m": 60_000,
+    "3m": 180_000,
+    "5m": 300_000,
+    "15m": 900_000,
+    "30m": 1_800_000,
+    "1h": 3_600_000,
+    "2h": 7_200_000,
+    "4h": 14_400_000,
+    "6h": 21_600_000,
+    "8h": 28_800_000,
+    "12h": 43_200_000,
+    "1d": 86_400_000,
+    "3d": 259_200_000,
+}
+
 
 class BinancePublicClient:
     """
@@ -105,21 +124,38 @@ class BinancePublicClient:
     def get_klines_cached(
         self, symbol: str, interval: str = "4h", limit: int = 100,
     ) -> List[list]:
-        """带本地缓存的 K 线获取。
+        """带本地缓存 + 时效校验的 K 线获取。
 
-        优先查本地 SQLite 缓存，命中则零网络请求。
-        缓存不足时联网拉取并回写缓存。
-        无缓存实例时退化为普通 get_klines。
+        刷新策略（保证扫描拿到的一定是最新数据）：
+          1. 计算当前 UTC 时间所属 K 线周期的 open_time（current_candle_open）。
+          2. 若缓存中 max(open_time) < current_candle_open → 缓存陈旧 → 联网拉最新 limit 根并回写。
+          3. 若缓存已覆盖到当前正在形成的那根 K 线，且条数足够 → 直接用缓存。
+          4. 周期不在 _INTERVAL_MS_MAP 中（1w / 1M 等）→ 退化为"每次联网"。
+          5. 无缓存实例 → 退化为普通 get_klines。
         """
         if not self._kline_cache:
             return self.get_klines(symbol, interval, limit)
 
-        # 先查缓存
-        cached = self._kline_cache.query_as_lists(symbol, interval, limit)
-        if len(cached) >= limit:
-            return cached[-limit:]
+        interval_ms = _INTERVAL_MS_MAP.get(interval)
+        if interval_ms is None:
+            klines = self.get_klines(symbol, interval, limit)
+            if klines:
+                self._kline_cache.upsert_from_raw(symbol, interval, klines)
+            return klines
 
-        # 缓存不足，联网拉取
+        now_ms = int(time.time() * 1000)
+        current_candle_open = (now_ms // interval_ms) * interval_ms
+
+        time_range = self._kline_cache.get_time_range(symbol, interval)
+        max_cached_open = time_range[1] if time_range else None
+        fresh = (max_cached_open is not None
+                 and max_cached_open >= current_candle_open)
+
+        if fresh:
+            cached = self._kline_cache.query_as_lists(symbol, interval, limit)
+            if len(cached) >= limit:
+                return cached[-limit:]
+
         klines = self.get_klines(symbol, interval, limit)
         if klines:
             self._kline_cache.upsert_from_raw(symbol, interval, klines)

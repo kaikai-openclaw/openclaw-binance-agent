@@ -515,11 +515,12 @@ def _base_filter(tickers, min_amount, min_price):
         if close is None or close <= 0 or close < min_price:
             continue
         amount = t.get("amount")
-        if amount is None or amount < min_amount:
+        # amount=0 表示接口未返回真实数据（腾讯接口常返回0），此时放行
+        if amount is not None and amount != 0 and amount < min_amount:
             continue
-        # 排除一字板
+        # 排除一字板（需 amount>0，排除盘前数据 equal to yesterday close）
         h, l, o = t.get("high"), t.get("low"), t.get("open")
-        if h is not None and l is not None and o is not None and h == l == o and h > 0:
+        if amount and h is not None and l is not None and o is not None and h == l == o and h > 0:
             continue
         result.append({**t, "symbol": symbol})
     return result

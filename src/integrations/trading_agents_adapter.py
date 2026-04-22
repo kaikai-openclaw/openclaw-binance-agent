@@ -108,12 +108,18 @@ def _call_fast_llm(prompt: str, model: Optional[str] = None) -> str:
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
 
+        # 注意：reasoning/thinking 模型（MiniMax-M2/M2.7、DeepSeek-R1 等）
+        # 的输出会先写 <think>...</think> 推理块再给答案，占用 tokens。
+        # 默认 max_tokens 常为 1024，对 reasoning 模型会导致答案被截断在思考
+        # 块内（表现为解析 JSON 失败），因此统一提升到 2048。
         resp = requests.post(
             f"{base_url}/chat/completions",
             headers=headers,
             json={"model": model,
-                  "messages": [{"role": "user", "content": prompt}]},
-            timeout=60,
+                  "messages": [{"role": "user", "content": prompt}],
+                  "max_tokens": 2048,
+                  "temperature": 0.3},
+            timeout=90,
         )
         resp.raise_for_status()
         return resp.json()["choices"][0]["message"]["content"]
@@ -124,10 +130,21 @@ def _call_fast_llm(prompt: str, model: Optional[str] = None) -> str:
         if not google_key:
             raise ValueError("快速模式需要 GOOGLE_API_KEY，但未设置")
         from google.genai import Client
+        from google.genai import types as genai_types
         client = Client(api_key=google_key)
+        # 加 config 防止 thinking 占满输出、提升 JSON 稳定性：
+        #   - max_output_tokens=2048：与 OpenAI 兼容分支对称，避免截断
+        #   - temperature=0.3：降低随机性，让 JSON 格式更稳定
+        # 注意 thinking_config 只在部分 gemini 模型支持，gemini-3.1-pro-preview
+        # 的 thinking summaries 不会出现在 response.text，但保守起见不额外配置，
+        # 依赖 _extract_json 的 <think> 清洗作为防线。
         response = client.models.generate_content(
             model=model,
             contents=[{"role": "user", "parts": [{"text": prompt}]}],
+            config=genai_types.GenerateContentConfig(
+                max_output_tokens=2048,
+                temperature=0.3,
+            ),
         )
         return response.text
 
@@ -156,11 +173,23 @@ def _extract_json(text: str) -> dict:
     - JSON 前后有解释文字
     - markdown code fence 包裹
     - 多行格式化 JSON
+    - reasoning 模型的 <think>...</think> 推理块（含未闭合情况）
     """
-    # 先去掉 markdown code fence
+    original = text
+
+    # 1. 剥离已闭合的 <think>...</think> 块（含多行）
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE)
+
+    # 2. 未闭合的 <think> 块：从 <think> 位置起整段删除
+    # （发生于 reasoning 模型思考过长占满 max_tokens 被截断）
+    m = re.search(r"<think>", text, flags=re.IGNORECASE)
+    if m:
+        text = text[:m.start()]
+
+    # 3. 去掉 markdown code fence
     text = re.sub(r"```(?:json)?\s*", "", text)
 
-    # 匹配第一个 { ... } 块（支持嵌套）
+    # 4. 扫描第一个平衡的 { ... } 块（支持嵌套）
     depth = 0
     start = -1
     for i, ch in enumerate(text):
@@ -173,7 +202,14 @@ def _extract_json(text: str) -> dict:
             if depth == 0 and start >= 0:
                 return json.loads(text[start:i + 1])
 
-    raise ValueError(f"未找到有效 JSON 对象: {text[:200]}")
+    # 区分错误原因，给出可操作的错误信息
+    if "<think>" in original.lower():
+        raise ValueError(
+            "LLM 响应被截断在 <think> 思考块内，未输出 JSON。"
+            "建议提高 max_tokens 或切换到非 reasoning 模型。原始前 200 字: "
+            f"{original[:200]}"
+        )
+    raise ValueError(f"未找到有效 JSON 对象: {original[:200]}")
 
 
 def _clean_llm_text(text: str) -> str:
@@ -242,8 +278,9 @@ def create_fast_analyzer() -> callable:
 
         try:
             raw = _call_fast_llm(prompt)
-            result = _extract_json(raw)
-            result["comment"] = f"[快速模式] {_clean_llm_text(raw)[:300]}"
+            cleaned = _clean_llm_text(raw)
+            result = _extract_json(cleaned)
+            result["comment"] = f"[快速模式] {cleaned[:300]}"
             log.info(f"[FastAnalyzer] {symbol} 分析完成，耗时 {time.time()-t0:.1f}s: {result}")
             return result
         except Exception as e:

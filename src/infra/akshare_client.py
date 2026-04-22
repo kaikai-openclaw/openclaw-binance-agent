@@ -62,6 +62,23 @@ def _safe_float(val) -> Optional[float]:
         return None
 
 
+def _expected_latest_trade_date(now: Optional[datetime] = None) -> str:
+    """启发式估算"当前应有的最新交易日"（YYYY-MM-DD）。
+
+    规则：
+      - 17:00（含）后视为今天的 K 线已可用（数据源收盘后更新缓冲）
+      - 17:00 前以"昨天"为基准
+      - 周末回退到上一个工作日
+      - 不识别节假日：首日扫描会判定为陈旧 → 多一次联网请求 →
+        联网返回的最新仍是节前日 → 不会用错数据，只是多消耗一次请求
+    """
+    now = now or datetime.now()
+    ref = now if now.hour >= 17 else now - timedelta(days=1)
+    while ref.weekday() >= 5:  # 5=Sat, 6=Sun
+        ref -= timedelta(days=1)
+    return ref.strftime("%Y-%m-%d")
+
+
 class AkshareClient:
     """A 股公开数据客户端，供 Skill-1A 注入使用。
 
@@ -131,6 +148,8 @@ class AkshareClient:
                 result = fn()
                 if result:
                     log.info("[AkshareClient] 实时行情(%s): %d 只", name, len(result))
+                    # 盘前/休市时数据源 amount 会全为 0，用本地日线缓存补齐
+                    result = self._enrich_spot_with_cache(result)
                     self._spot_cache = result
                     self._spot_cache_ts = time.time()
                     return result
@@ -145,6 +164,74 @@ class AkshareClient:
 
         log.warning("[AkshareClient] 所有实时行情接口均不可用，无缓存可用")
         return []
+
+    def _enrich_spot_with_cache(
+        self, spots: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """非交易时段（盘前/集合竞价期/休市）spot 接口的 amount 字段要么为 0、
+        要么是竞价期极小金额，会导致 min_amount 过滤把全部股票排除。
+
+        策略：
+          1. 判定"是否为非交易时段"：amount 为 0 的股票 ≥ 全部的 50% → 是
+             （A 股 5000+ 支股票在交易时段几乎都不会成交额为 0，竞价期也只有
+             少部分活跃股有零星量能，所以此阈值够用）
+          2. 一旦判定为非交易时段，**强制覆盖所有 spot 的量能字段**为缓存
+             中最近一根日线（昨日收盘）数据——不只是覆盖为 0 的，避免竞价期
+             的异常小量能绕过补齐。
+          3. close / change_pct / pe / total_mv 保留 spot 实时值（盘前接口
+             已给出合理的 close ≈ 昨收）。
+          4. 缓存 amount=0（历史写入 bug）时用 close×volume 做兜底估算，
+             启发式识别 volume 单位（<100 万元判为"手"单位 → ×100 修正）。
+          5. 缓存没有某股票数据的保持 spot 原样（不劣化原有行为）。
+        """
+        if not spots:
+            return spots
+        # 判定非交易时段：amount 异常小 (< 1000 万元) 的股票占比 > 50%
+        # A 股正常交易时段 5000+ 只股票里 amount<1000万的通常 <20%（仅 ST 和
+        # 冷门小盘股），而集合竞价/盘前/休市几乎所有股票 amount 都远低于 1000 万。
+        low_count = sum(1 for s in spots if (s.get("amount") or 0) < 10_000_000)
+        if low_count < max(1, len(spots) * 0.5):
+            return spots  # 正常交易时段
+
+        enriched_count = 0
+        missing_cache = 0
+        for s in spots:
+            code = s.get("symbol", "")
+            if not code:
+                continue
+            try:
+                rows = self._cache.query_last_dicts(code, "qfq", 1)
+            except Exception:
+                rows = []
+            if not rows:
+                missing_cache += 1
+                continue
+            last = rows[0]
+            amount = last.get("amount") or 0
+            vol = last.get("volume") or 0
+            if amount <= 0 and vol > 0:
+                close_price = s.get("close") or last.get("close") or 0
+                if close_price > 0:
+                    est = close_price * vol
+                    # 启发式识别 volume 单位：正常 A 股日成交额 ≥ 1 亿元，
+                    # 若估算 < 1 亿则大概率 volume 是"手"单位 → ×100 修正为"股"单位
+                    if est < 100_000_000:
+                        est *= 100
+                    amount = est
+            # 非交易时段：强制用昨日量能覆盖（包括竞价期的异常小值）
+            s["amount"] = amount
+            s["volume"] = vol or s.get("volume") or 0
+            s["high"] = last.get("high") or s.get("close")
+            s["low"] = last.get("low") or s.get("close")
+            s["open"] = last.get("open") or s.get("close")
+            enriched_count += 1
+
+        log.info(
+            "[AkshareClient] 非交易时段量能补齐: spot总数=%d, 异常小amount(<1000万)=%d, "
+            "已补齐=%d, 缓存无数据=%d",
+            len(spots), low_count, enriched_count, missing_cache,
+        )
+        return spots
 
     def _get_spot_tencent(self) -> List[Dict[str, Any]]:
         """腾讯 qt.gtimg.cn 批量实时行情。"""
@@ -240,33 +327,39 @@ class AkshareClient:
     # ══════════════════════════════════════════════════════
 
     def get_klines(self, symbol: str, period: str = "daily", limit: int = 100) -> List[List]:
-        """获取日线 K 线（前复权）。
+        """获取日线 K 线（前复权），带本地缓存 + 时效校验。
 
-        优先查本地缓存，缓存行数 >= limit 直接返回；
-        否则联网拉取，回写缓存后返回。
+        刷新策略（保证扫描拿到的一定是最新数据）：
+          1. 估算当前应有的最新交易日（_expected_latest_trade_date）
+          2. 若缓存中最大 date < 期望日期 → 判定陈旧 → 联网拉取并回写
+          3. 若缓存最新 date ≥ 期望日期且条数 ≥ limit → 走缓存（零网络）
+          4. 联网失败时仍降级返回已有缓存（保留容错）
         """
         code = _normalize_symbol(symbol)
         adjust = "qfq"  # 当前固定前复权
 
-        # ── 缓存优先 ──
         cached = self._cache.query_as_rows(code, adjust, limit)
-        if len(cached) >= limit:
-            log.debug("[AkshareClient] K线缓存命中: %s, %d行", code, len(cached))
+        expected = _expected_latest_trade_date()
+        # cached 行格式: [date, open, high, low, close, volume]，cached[-1][0] 即最新日期
+        fresh = bool(cached) and str(cached[-1][0]) >= expected
+
+        if fresh and len(cached) >= limit:
+            log.debug("[AkshareClient] K线缓存命中(新鲜): %s, %d行, max=%s",
+                      code, len(cached), cached[-1][0])
             return cached
 
-        # ── 缓存不足，联网拉取 ──
         df = self._get_klines_any(code, limit)
         if df is not None and not df.empty:
             rows = self._df_to_rows(df, limit)
-            # 回写缓存
             if rows:
                 self._cache.upsert_from_list_rows(code, adjust, rows)
-                log.info("[AkshareClient] K线缓存更新: %s, %d行", code, len(rows))
+                log.info("[AkshareClient] K线缓存更新: %s, %d行 (期望≥%s, 实际max=%s)",
+                         code, len(rows), expected, rows[-1][0])
             return rows
 
-        # ── 联网失败，降级返回已有缓存（即使不足 limit）──
         if cached:
-            log.warning("[AkshareClient] K线联网失败，降级返回缓存: %s, %d行", code, len(cached))
+            log.warning("[AkshareClient] K线联网失败，降级返回缓存: %s, %d行 (max=%s, 期望≥%s)",
+                        code, len(cached), cached[-1][0], expected)
             return cached
 
         return []
@@ -287,7 +380,13 @@ class AkshareClient:
         return None
 
     def _klines_tx(self, code: str, limit: int):
-        """腾讯日线。"""
+        """腾讯日线。
+
+        接口返回列: [date, open, close, high, low, amount]
+        其中 amount 字段单位是"手"（1 手 = 100 股），不是真实成交额。
+        本方法统一换算为股数填入 volume 列；腾讯不提供真实成交额，
+        amount 列置 0（下游补齐或更换数据源时再填充）。
+        """
         exchange = _symbol_exchange(code).lower()
         end = datetime.now()
         start = end - timedelta(days=int(limit * 2))
@@ -299,7 +398,9 @@ class AkshareClient:
                 adjust="qfq",
             ), f"klines_tx({code})")
         if df is not None and "volume" not in df.columns and "amount" in df.columns:
-            df = df.rename(columns={"amount": "volume"})
+            df = df.copy()
+            df["volume"] = df["amount"] * 100  # 手 → 股
+            df["amount"] = 0.0  # 腾讯不提供真实成交额
         return df
 
     def _klines_sina(self, code: str, limit: int):
@@ -322,7 +423,8 @@ class AkshareClient:
             f"klines_em({code})")
         if df is not None:
             col_map = {"日期": "date", "开盘": "open", "收盘": "close",
-                       "最高": "high", "最低": "low", "成交量": "volume"}
+                       "最高": "high", "最低": "low", "成交量": "volume",
+                       "成交额": "amount"}
             df = df.rename(columns=col_map)
         return df
 
@@ -416,7 +518,13 @@ class AkshareClient:
 
     @staticmethod
     def _df_to_rows(df, limit: int) -> List[List]:
+        """DataFrame → [[date, open, high, low, close, volume, amount], ...]
+
+        第 7 列 amount 是成交额（元）。腾讯日线源不提供真实 amount
+        （它只给成交量"手"），对应列会是 0。新浪/东财日线源提供真实 amount。
+        """
         df = df.tail(limit)
         return [[str(r.get("date", "")), float(r.get("open", 0)), float(r.get("high", 0)),
-                 float(r.get("low", 0)), float(r.get("close", 0)), float(r.get("volume", 0))]
+                 float(r.get("low", 0)), float(r.get("close", 0)),
+                 float(r.get("volume", 0)), float(r.get("amount", 0) or 0)]
                 for _, r in df.iterrows()]

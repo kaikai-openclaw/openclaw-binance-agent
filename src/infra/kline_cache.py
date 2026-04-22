@@ -83,6 +83,30 @@ class KlineCache:
         rows.reverse()
         return [list(r) for r in rows]
 
+    def query_last_dicts(
+        self, symbol: str, adjust: str, limit: int,
+    ) -> List[Dict[str, Any]]:
+        """查询最近 limit 条数据（含 amount 字段），正序返回 dict 列表。
+
+        用于实时行情 spot 在非交易时段（盘前/休市）的 amount 字段补齐。
+        """
+        cursor = self._conn.execute(
+            "SELECT date, open, high, low, close, volume, amount "
+            "FROM kline_cache "
+            "WHERE symbol = ? AND adjust = ? "
+            "ORDER BY date DESC LIMIT ?",
+            (symbol, adjust, limit),
+        )
+        rows = cursor.fetchall()
+        rows.reverse()
+        return [
+            {
+                "date": r[0], "open": r[1], "high": r[2], "low": r[3],
+                "close": r[4], "volume": int(r[5]), "amount": r[6],
+            }
+            for r in rows
+        ]
+
     def get_row_count(self, symbol: str, adjust: str) -> int:
         """返回缓存中该股票的总行数。"""
         cursor = self._conn.execute(
@@ -130,14 +154,23 @@ class KlineCache:
     def upsert_from_list_rows(
         self, symbol: str, adjust: str, rows: List[List],
     ) -> int:
-        """从 [[date, open, high, low, close, volume], ...] 格式批量写入。"""
+        """从 [[date, open, high, low, close, volume, amount?], ...] 格式批量写入。
+
+        第 7 列 amount 可选，兼容老调用：只传 6 列时 amount 会被写为 0。
+        """
         if not rows:
             return 0
         self._conn.executemany(
             "INSERT OR REPLACE INTO kline_cache "
             "(symbol, adjust, date, open, high, low, close, volume, amount) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)",
-            [(symbol, adjust, r[0], r[1], r[2], r[3], r[4], r[5]) for r in rows if len(r) >= 6],
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    symbol, adjust, r[0], r[1], r[2], r[3], r[4], r[5],
+                    float(r[6]) if len(r) >= 7 else 0.0,
+                )
+                for r in rows if len(r) >= 6
+            ],
         )
         self._conn.commit()
         return len(rows)

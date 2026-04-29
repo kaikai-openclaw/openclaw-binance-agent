@@ -220,6 +220,38 @@ class TestRequestWithRetry:
 
         assert result == {"ok": True}
 
+    @patch("time.sleep", return_value=None)
+    def test_retry_resigns_timestamp_and_sets_recv_window(self, mock_sleep):
+        """每次重试都应重新签名，并携带 recvWindow。"""
+        client, rl = self._make_client()
+
+        resp_ok = MagicMock()
+        resp_ok.status_code = 200
+        resp_ok.json.return_value = {"ok": True}
+        resp_ok.raise_for_status = MagicMock()
+
+        with patch("time.time", side_effect=[1000.0, 1001.0]):
+            with patch.object(
+                client._session, "request",
+                side_effect=[
+                    requests.exceptions.Timeout("timeout"),
+                    resp_ok,
+                ],
+            ) as mock_req:
+                result = client._request_with_retry(
+                    "GET", "/fapi/v1/test", {"symbol": "BTCUSDT"}
+                )
+
+        assert result == {"ok": True}
+        assert mock_req.call_count == 2
+        first_params = mock_req.call_args_list[0].kwargs["params"]
+        second_params = mock_req.call_args_list[1].kwargs["params"]
+        assert first_params["timestamp"] == 1000000
+        assert second_params["timestamp"] == 1001000
+        assert first_params["recvWindow"] == client.DEFAULT_RECV_WINDOW
+        assert second_params["recvWindow"] == client.DEFAULT_RECV_WINDOW
+        assert first_params["signature"] != second_params["signature"]
+
 
 # ============================================================
 # 公开 API 方法测试

@@ -134,9 +134,10 @@ def main():
     public_client = BinancePublicClient(rate_limiter=rate_limiter)
     fapi_client = BinanceFapiClient(api_key=api_key, api_secret=api_secret, rate_limiter=rate_limiter)
 
-    paper_mode = args.paper
+    if args.paper:
+        risk_controller.enable_paper_mode("cli_paper_flag")
+    paper_mode = risk_controller.is_paper_mode()
     if paper_mode:
-        risk_controller._paper_mode = True
         print("🟡 模拟盘模式已启用")
 
     account_provider = make_account_provider(fapi_client, paper_mode)

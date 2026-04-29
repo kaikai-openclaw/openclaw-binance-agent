@@ -121,6 +121,7 @@ class BinanceFapiClient:
     REQUEST_TIMEOUT = 10  # 请求超时（秒）
     MAX_RETRIES = 5
     BACKOFF_SEQUENCE = [1, 2, 4, 8, 16]  # 指数退避序列（秒）
+    DEFAULT_RECV_WINDOW = 5000  # Binance 签名请求的接收窗口（毫秒）
 
     def __init__(
         self,
@@ -157,15 +158,17 @@ class BinanceFapiClient:
 
     def _sign(self, params: dict) -> dict:
         """对请求参数进行 HMAC-SHA256 签名。"""
-        params["timestamp"] = int(time.time() * 1000)
-        query_string = urlencode(params)
+        signed_params = dict(params)
+        signed_params.setdefault("recvWindow", self.DEFAULT_RECV_WINDOW)
+        signed_params["timestamp"] = int(time.time() * 1000)
+        query_string = urlencode(signed_params)
         signature = hmac.new(
             self.api_secret.encode("utf-8"),
             query_string.encode("utf-8"),
             hashlib.sha256,
         ).hexdigest()
-        params["signature"] = signature
-        return params
+        signed_params["signature"] = signature
+        return signed_params
 
     def _request_with_retry(self, method: str, path: str, params: Optional[dict] = None) -> dict:
         """
@@ -178,12 +181,13 @@ class BinanceFapiClient:
         - 重试耗尽 → 抛出 MaxRetryExceededError
         """
         url = f"{self.base_url}{path}"
-        signed_params = self._sign(params or {})
+        request_params = dict(params or {})
 
         for attempt in range(self.MAX_RETRIES):
             try:
                 # 限流：获取令牌
                 self.rate_limiter.acquire()
+                signed_params = self._sign(request_params)
 
                 response = self._session.request(
                     method=method,

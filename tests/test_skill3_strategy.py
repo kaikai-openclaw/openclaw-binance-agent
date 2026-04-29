@@ -255,6 +255,44 @@ class TestNormalExecution:
         assert plan["stop_loss_price"] > plan["entry_price_upper"]
         assert plan["take_profit_price"] < plan["entry_price_lower"]
 
+    def test_excessive_atr_volatility_is_skipped(self, state_store):
+        """ATR 推导止损超过上限时，应跳过高波动币而不是硬截断进场。"""
+        upstream = _make_upstream_data([
+            {
+                "symbol": "MEMEUSDT",
+                "rating_score": 9,
+                "signal": "long",
+                "confidence": 90.0,
+                "atr_pct": 10.0,  # raw_sl = 10% * 1.5 = 15%，超过默认 8% 上限
+            },
+        ])
+        state_id = state_store.save("skill2_analyze", upstream)
+
+        skill = _make_skill(state_store)
+        result = skill.run({"input_state_id": state_id})
+
+        assert result["trade_plans"] == []
+        assert result["pipeline_status"] == PipelineStatus.NO_OPPORTUNITY.value
+
+    def test_atr_within_volatility_limit_generates_plan(self, state_store):
+        """ATR 推导止损未超过上限时，仍应生成 ATR 动态止损计划。"""
+        upstream = _make_upstream_data([
+            {
+                "symbol": "BTCUSDT",
+                "rating_score": 8,
+                "signal": "long",
+                "confidence": 80.0,
+                "atr_pct": 2.0,  # raw_sl = 3%，未超过默认 8% 上限
+            },
+        ])
+        state_id = state_store.save("skill2_analyze", upstream)
+
+        skill = _make_skill(state_store)
+        result = skill.run({"input_state_id": state_id})
+
+        assert len(result["trade_plans"]) == 1
+        assert result["trade_plans"][0]["stop_loss_source"] == "atr"
+
 
 # ══════════════════════════════════════════════════════════
 # 2. 空评级列表场景

@@ -289,6 +289,39 @@ class TestNormalExecution:
         mock_binance.place_take_profit_market_order.assert_called_once()
         mock_binance.place_market_order.assert_not_called()
 
+    def test_non_blocking_mode_closes_when_protection_fails(
+        self, state_store, mock_binance, mock_risk_controller
+    ):
+        """非阻塞模式下，入场成交但保护单全失败时应立即平仓。"""
+        mock_binance.get_position_risk.return_value = _make_position_risk(
+            mark_price=100.0, position_amt=10.0, entry_price=100.0
+        )
+        mock_binance.place_stop_market_order.side_effect = Exception("SL 异常")
+        mock_binance.place_take_profit_market_order.side_effect = Exception("TP 异常")
+        mock_binance.place_market_order.return_value = _make_order_result(
+            side="SELL", price=100.0, quantity=10.0, status="FILLED"
+        )
+        upstream = _make_upstream_data([_make_trade_plan()])
+        state_id = state_store.save("skill3_strategy", upstream)
+
+        skill = _make_skill(
+            state_store,
+            mock_binance,
+            mock_risk_controller,
+            monitor_until_close=False,
+            entry_confirm_timeout=0,
+        )
+        result = skill.run({"input_state_id": state_id})
+
+        r = result["execution_results"][0]
+        assert r["status"] == "filled"
+        assert r["reason"] == "protection_failed_closed"
+        mock_binance.place_market_order.assert_called_once_with(
+            symbol="BTCUSDT",
+            side="SELL",
+            quantity=10.0,
+        )
+
     def test_non_blocking_mode_cancels_unfilled_entry(
         self, state_store, mock_binance, mock_risk_controller
     ):

@@ -56,6 +56,14 @@ class RiskController:
         ON stop_loss_cooldowns(recorded_at DESC)
     """
 
+    _CREATE_RUNTIME_STATE_TABLE_SQL = """
+        CREATE TABLE IF NOT EXISTS risk_runtime_state (
+            key        TEXT PRIMARY KEY,
+            value      TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """
+
     def __init__(self, db_path: Optional[str] = None) -> None:
         """
         初始化 RiskController。
@@ -64,7 +72,7 @@ class RiskController:
             db_path: SQLite 数据库路径。为 None 时使用内存列表（兼容旧行为/测试）。
                      传入路径时止损冷却记录持久化到 SQLite。
         """
-        # 模拟盘模式标志
+        # 模拟盘模式标志；db_path 模式会从 risk_runtime_state 恢复。
         self._paper_mode: bool = False
 
         # 持久化模式
@@ -82,7 +90,9 @@ class RiskController:
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute(self._CREATE_COOLDOWN_TABLE_SQL)
             self._conn.execute(self._CREATE_COOLDOWN_INDEX_SQL)
+            self._conn.execute(self._CREATE_RUNTIME_STATE_TABLE_SQL)
             self._conn.commit()
+            self._paper_mode = self._load_paper_mode()
 
     def validate_order(
         self, order: OrderRequest, account: AccountState
@@ -189,7 +199,7 @@ class RiskController:
         )
 
         # 步骤 4：切换至 Paper_Trading_Mode
-        self._paper_mode = True
+        self.enable_paper_mode("daily_loss_degradation")
 
         log.warning(
             f"风控降级完成: 日亏损 {loss_ratio:.2%}，当前模式=Paper_Trading"
@@ -198,6 +208,18 @@ class RiskController:
     def is_paper_mode(self) -> bool:
         """返回当前是否处于模拟盘模式。"""
         return self._paper_mode
+
+    def enable_paper_mode(self, reason: str = "manual") -> None:
+        """切换到模拟盘模式，并在持久化模式下保存运行时状态。"""
+        self._paper_mode = True
+        self._persist_runtime_state("paper_mode", "true", reason)
+        log.warning(f"Paper Mode 已启用: reason={reason}")
+
+    def disable_paper_mode(self, reason: str = "manual") -> None:
+        """显式恢复实盘模式；仅供人工确认后调用。"""
+        self._paper_mode = False
+        self._persist_runtime_state("paper_mode", "false", reason)
+        log.warning(f"Paper Mode 已关闭: reason={reason}")
 
     def record_stop_loss(self, symbol: str, direction: str) -> None:
         """
@@ -291,6 +313,32 @@ class RiskController:
                     return True
 
         return False
+
+    def _load_paper_mode(self) -> bool:
+        """从 SQLite 运行时状态恢复 Paper Mode。"""
+        if self._conn is None:
+            return self._paper_mode
+        cursor = self._conn.execute(
+            "SELECT value FROM risk_runtime_state WHERE key = ?",
+            ("paper_mode",),
+        )
+        row = cursor.fetchone()
+        return row is not None and row[0].lower() == "true"
+
+    def _persist_runtime_state(self, key: str, value: str, reason: str) -> None:
+        """保存风控运行时状态；无数据库时保持内存行为。"""
+        if self._conn is None:
+            return
+        updated_at = datetime.now(timezone.utc).isoformat()
+        self._conn.execute(
+            "INSERT INTO risk_runtime_state (key, value, updated_at) "
+            "VALUES (?, ?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET "
+            "value = excluded.value, updated_at = excluded.updated_at",
+            (key, value, updated_at),
+        )
+        self._conn.commit()
+        log.info(f"风控运行时状态已保存: {key}={value}, reason={reason}")
 
     def close(self) -> None:
         """关闭数据库连接（若有）。"""

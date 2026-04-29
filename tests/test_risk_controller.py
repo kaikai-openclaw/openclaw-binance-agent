@@ -236,6 +236,27 @@ class TestRecordStopLossAndPaperMode:
         rc = RiskController()
         assert rc.is_paper_mode() is False
 
+    def test_enable_disable_paper_mode_public_api(self):
+        """Paper Mode 应通过公开 API 切换。"""
+        rc = RiskController()
+        rc.enable_paper_mode("test")
+        assert rc.is_paper_mode() is True
+        rc.disable_paper_mode("test")
+        assert rc.is_paper_mode() is False
+
+    def test_paper_mode_persists_with_sqlite(self, tmp_path):
+        """持久化模式下，Paper Mode 应在重启后恢复。"""
+        db_path = tmp_path / "risk.db"
+        rc = RiskController(db_path=str(db_path))
+        rc.enable_paper_mode("test")
+        rc.close()
+
+        restored = RiskController(db_path=str(db_path))
+        try:
+            assert restored.is_paper_mode() is True
+        finally:
+            restored.close()
+
     def test_record_stop_loss_creates_cooldown(self):
         """记录止损后应创建冷却期。"""
         rc = RiskController()

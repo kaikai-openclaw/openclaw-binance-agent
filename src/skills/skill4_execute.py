@@ -615,13 +615,37 @@ class Skill4Execute(BaseSkill):
             if pos_risk is not None:
                 position_amt = abs(pos_risk.position_amt)
                 if position_amt > 0:
-                    self._place_server_sl_tp(
+                    protection_placed = self._place_server_sl_tp(
                         symbol=symbol,
                         close_side=close_side,
                         quantity=position_amt,
                         stop_loss_price=stop_loss_price,
                         take_profit_price=take_profit_price,
                     )
+                    if not protection_placed:
+                        log.critical(
+                            f"[{self.name}] {symbol} 入场已成交但服务端保护单全部挂载失败，"
+                            f"立即平仓以避免裸仓"
+                        )
+                        close_result = self._close_position(
+                            symbol=symbol,
+                            side=close_side,
+                            quantity=position_amt,
+                            reason="protection_failed",
+                            start_time=start_time,
+                        )
+                        return {
+                            "status": close_result.get(
+                                "status", OrderStatus.EXECUTION_FAILED.value
+                            ),
+                            "reason": (
+                                "protection_failed_closed"
+                                if close_result.get("status") == OrderStatus.FILLED.value
+                                else "protection_failed_close_failed"
+                            ),
+                            "entry_price": pos_risk.entry_price,
+                            "quantity": position_amt,
+                        }
                     return {
                         "status": OrderStatus.OPEN.value,
                         "reason": "entry_filled_protection_placed",

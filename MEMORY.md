@@ -12,7 +12,7 @@
 
 ### 缓存链路
 
-```
+```text
 Skill-1A/1B (get_klines)       → AkshareClient → SQLite 缓存
 TradingAgents (get_stock_data) → SQLite 缓存 → CSV fallback → akshare
 快速分析 (_fetch_astock_quote) → 实时行情 → SQLite 缓存 → AkshareClient
@@ -23,20 +23,23 @@ SkillDataProvider (run)        → SQLite 缓存 → akshare 增量拉取
 
 ### 加密货币
 
-- 评级阈值: 6 分（范围 5-8）
-- 风险比例: 2%（范围 0.5%-3%）
-- 杠杆: 10x
-- 持仓上限: 24 小时
-- 止损: 3%，止盈: 6%（盈亏比 2:1）
+- 评级阈值: 默认 6 分，可由 MemoryStore 自我进化调整。
+- 风险比例: 默认 2%，可由历史交易表现调整。
+- 杠杆: 默认 10x，下单前显式同步 Binance symbol 杠杆。
+- 持仓上限: 默认 24 小时。
+- 止损止盈: 优先 ATR 动态止损止盈；无 ATR 时回退固定百分比。
+- 高波动过滤: ATR 原始止损距离超过 `max_stop_pct` 时跳过交易，不强行截断。
 
 ### A 股超跌反弹（Skill-1B，2026-04-09 重构为双模式）
 
-**短期超跌反弹（ShortTermAStockOversold）— 3~5 天持仓**
+#### 短期超跌反弹（ShortTermAStockOversold）— 3~5 天持仓
+
 - RSI < 25（极端超卖）、BIAS(20) < -8%、连跌 ≥ 3 天、累跌 < -12%（10 天内）
 - A 股独有：跌停板计数（权重 13）、底部放量（权重 13，T+1 恐慌盘释放）
 - 核心逻辑：恐慌抛售 → 超卖极值 → 抛压出尽 → V 型反弹
 
-**长期超跌蓄能（LongTermAStockOversold）— 2~4 周持仓**
+#### 长期超跌蓄能（LongTermAStockOversold）— 2~4 周持仓
+
 - RSI < 35、BIAS(60) < -15%、连跌 ≥ 5 天、累跌 < -25%（30 天内）
 - A 股独有：缩量企稳（权重 13，地量见地价）、60 日乖离率（权重 18）
 - MACD 底背离回看 60 天（权重 18）、距 120 日高点回撤 > 30%（权重 15）
@@ -49,6 +52,11 @@ SkillDataProvider (run)        → SQLite 缓存 → akshare 增量拉取
 - 2026-04-08: 建立 A 股本地 K 线缓存基础设施
 - 2026-04-08: 重设计 Skill-1B 超跌筛选条件，去掉当日预筛
 - 2026-04-08: TradingAgents 接入共享 SQLite 缓存
+- 2026-04-29: 加固 Binance 执行链路：签名重试刷新 timestamp、请求携带 `recvWindow`、下单数量/价格统一十进制格式化。
+- 2026-04-29: 风控状态持久化：`RiskController` 支持 `enable_paper_mode()` / `disable_paper_mode()` 并写入 SQLite runtime state。
+- 2026-04-29: 服务端保护单改为 `closePosition=true`，并在每轮执行开始清理无持仓残留 Algo 条件单。
+- 2026-04-29: 新增 `BinanceTradeSyncer`，从 Binance `userTrades.realizedPnl` 同步服务端触发后的真实平仓成交，幂等写入 MemoryStore。
+- 2026-04-29: 新增超跌定时任务固定报告入口 `skills/binance-trading/scripts/run_oversold_cron.py`，稳定输出扫描、评级、持仓、保护单、账户和风险状态。
 
 ## 网络环境备忘
 
@@ -80,9 +88,39 @@ SkillDataProvider (run)        → SQLite 缓存 → akshare 增量拉取
 - 长期核心信号：BIAS<-15% + MACD底背离(权重15) + 距高点回撤(权重15)
 - 首次扫描：短期 5 候选，长期 11 候选（PIPPINUSDT 评分 47 最高）
 
+### Binance 实盘执行安全（2026-04-29 加固）
+
+- `src/infra/binance_fapi.py`
+  - 所有签名请求重试时重新签名，避免 timestamp 过期。
+  - 默认携带 `recvWindow=5000`。
+  - HTTP 错误会保留 Binance 原始响应正文，便于定位精度、余额、签名问题。
+  - 下单价格和数量通过 `format_decimal_param()` 输出，避免整数精度币种提交 `33216.0`。
+- `src/skills/skill4_execute.py`
+  - 执行前按交易所规则规整 entry price、quantity 和触发价。
+  - 服务端 STOP_MARKET / TAKE_PROFIT_MARKET 使用 `closePosition=true`。
+  - 入场成交但服务端保护单全部失败时立即平仓，避免裸仓。
+  - 每轮开始清理无持仓残留保护条件单，减少反向开仓风险。
+- `src/infra/trade_sync.py`
+  - 同步 Binance `userTrades` 的已实现盈亏成交。
+  - 按订单聚合部分成交。
+  - 使用 `trade_sync_keys` 幂等去重，避免重复写入交易记录。
+
+### 超跌定时任务报告（2026-04-29 建立）
+
+- 固定入口：`skills/binance-trading/scripts/run_oversold_cron.py`
+- Markdown 输出用于 Telegram/定时任务，JSON 输出用于调试和后续自动化。
+- 报告固定包含：
+  - 扫描漏斗和超跌候选。
+  - 所有已分析评级，包括未达标币种的评分、方向、置信度。
+  - 本轮交易计划、开仓、风控拒绝、执行失败。
+  - 服务端已平仓同步数量。
+  - 当前持仓涨跌、浮盈亏、名义价值、保证金、资金占比、杠杆、保证金收益率。
+  - 止损/止盈保护单健康状态，含重复保护单和残留条件单告警。
+  - 账户总资金、可用保证金、持仓资金占比、日亏损和风控阈值。
+
 ### 缓存链路（更新）
 
-```
+```text
 Skill-1 (get_klines)           → BinancePublicClient → Binance fapi（无缓存，原有行为）
 Skill-1 (get_klines_cached)    → BinanceKlineCache → Binance fapi（缓存优先）
 预加载 (get_klines_range)      → Binance fapi → BinanceKlineCache（自动分页+回写）
@@ -91,8 +129,8 @@ fetch_data.py                  → BinanceKlineCache → BinancePublicClient（C
 
 ## 待办
 
-- [ ] 用户转入 USDT 后开始加密货币实盘
-- [ ] 先用 Paper Mode 跑几轮验证策略
-- [ ] 定期更新本地 K 线缓存（每日增量）
-- [ ] Skill-1 切换到 get_klines_cached() 以利用本地缓存
-- [ ] 运行一次全市场预加载验证缓存链路
+- [ ] 将当前定时任务配置切换到 `run_oversold_cron.py --fast --format markdown`
+- [ ] 定期检查保护单重复和残留条件单告警
+- [ ] 定期更新 Binance K 线缓存（每日增量）
+- [ ] 继续扩大服务端成交同步的元数据覆盖，例如真实持仓时长和策略来源
+- [ ] 评估是否将 `check_account.py` 也改造成结构化 JSON + Markdown 双输出

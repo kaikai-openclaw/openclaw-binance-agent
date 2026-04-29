@@ -1,79 +1,77 @@
 # 能力概览
 
-我是 BianTrading，量化交易 Agent。覆盖加密货币和 A 股两个市场。
+我是 BianTrading，量化交易 Agent。当前重点是 Binance U 本位合约自动交易，同时保留 A 股量化分析能力。
 
-OpenClaw 从 `skills/` 目录自动加载技能，每个技能独立运作、职责清晰。
+OpenClaw 从 `skills/` 目录自动加载技能。每个 Skill 必须输入输出结构化、可校验、可回放。
 
 ## 技能清单
 
 | 技能 | 目录 | 职责 |
-|------|------|------|
-| 加密货币交易 | `skills/binance-trading/` | Binance U本位合约 5 步交易流水线 |
-| 加密货币数据 | `skills/binance-data/` | 合约 K 线缓存 + 超跌反弹扫描（短期/长期） |
-| A 股分析 | `skills/astock-analysis/` | 量化筛选 + 超跌反弹 + 深度分析 + 交易计划 |
-| A 股数据服务 | `skills/astock-data/` | 本地缓存 + 增量拉取 + 批量预加载 |
+| ------ | ------ | ------ |
+| 加密货币交易 | `skills/binance-trading/` | Binance 5 步流水线、账户检查、超跌定时任务固定报告 |
+| 加密货币数据 | `skills/binance-data/` | Binance K 线缓存、超跌/反转/超买扫描、纯 JSON 输出 |
+| A 股分析 | `skills/astock-analysis/` | 趋势、超跌、反转筛选和 TradingAgents 深度分析 |
+| A 股数据服务 | `skills/astock-data/` | A 股本地缓存、增量拉取、批量预加载 |
 
-## 加密货币交易（binance-trading）
+## Binance 交易流水线
 
-5 步自动化流水线：
-1. 信息收集 — Binance 公开 API 量化筛选候选币种
-2. 深度分析 — TradingAgents 多智能体评级（1-10 分）
-3. 策略制定 — 固定风险模型，头寸/止损/止盈
-4. 自动执行 — Binance fapi 下单 + 持仓监控
-5. 展示进化 — 账户报告 + 策略参数自动调优
+1. 信息收集：公开行情、量化筛选、候选币种生成。
+2. 深度分析：TradingAgents 评级，输出通过评级的 `ratings` 和全部已分析的 `all_ratings`。
+3. 策略制定：ATR 动态止损止盈、波动过大跳过、风险比例和仓位计算。
+4. 自动执行：杠杆同步、价格/数量规整、限价入场、服务端止损止盈保护、残留 Algo 清理。
+5. 展示进化：账户报告、服务端成交同步、历史交易统计、参数自我调整。
 
-风控硬编码：单笔 ≤20%、单币 ≤30%、日亏 ≥5% 切模拟盘、止损后 24h 禁同向开仓
+## Binance 执行安全
 
-## 加密货币数据（binance-data）
+- 单笔保证金 ≤20%，单币种持仓 ≤30%，日亏损 ≥5% 切 Paper Mode。
+- Paper Mode 持久化到 SQLite，重启后仍生效。
+- 止损后同币种同方向 24 小时冷却。
+- 下单数量和价格用 Binance 规则规整并格式化为合法十进制字符串。
+- 签名请求重试时重新签名，携带 `recvWindow`。
+- 服务端保护单使用 `closePosition=true`，避免止盈/止损残留后反向开仓。
+- 非阻塞模式下保护单全部挂载失败时立即平仓。
 
-底层数据基础设施 + 超跌反弹 + 底部反转 + 超买做空分析：
-- 本地 SQLite K 线缓存（538 个 USDT 永续合约，4h + 1d）
-- 缓存优先 + 增量联网拉取，零重复请求
-- 超跌反弹扫描（双模式）：
-  - 短期超跌（4h）：RSI 极端超卖 + 资金费率 + 底部放量
-  - 长期超跌（1d）：BIAS 深度偏离 + MACD 底背离 + 距高点回撤
-- 底部放量反转扫描（双模式）：
-  - 短期反转（4h）：底部放量 + 价格企稳 + 均线拐头 + 资金费率回归
-  - 长期反转（1d）：底部放量 + MACD 金叉/底背离 + 均线拐头 + 距底部理想距离
-- 超买做空扫描（双模式）：
-  - 短期超买（4h）：RSI 极端超买 + 资金费率极端正值 + 量价背离 + 轧空风险排查
-  - 长期超买（1d）：MACD 顶背离 + BIAS 极端偏离 + OI 异常 + 距低点涨幅过大
-- 超跌 = "接飞刀"，反转 = "确认转向"，超买 = "做空见顶"
-- 十维度评分体系，含币圈独有的资金费率、持仓量、轧空风险信号
+## 超跌定时任务
 
-## A 股分析（astock-analysis）
+固定入口：
 
-全链路分析 + 交易计划生成：
-- Skill-1A：趋势选股 v2（均线多头排列 + MACD 持续性 + 突破确认 + 量价配合）
-- Skill-1B：超跌反弹筛选（双模式）：
-  - 短期超跌反弹（3~5 天）：跌停板计数 + 底部放量 + RSI 极端超卖
-  - 长期超跌蓄能（2~4 周）：缩量企稳 + 60 日 BIAS + MACD 底背离
-- 底部放量反转筛选：底部放量 + 价格企稳 + 均线拐头 + MACD 金叉 + 长下影线
-- Skill-2A：TradingAgents 多智能体深度分析（完整报告自动保存）
-- 交易计划生成：入场区间 / 止损止盈 / 仓位管理 / 分批建仓
-- 历史分析报告查询
+```bash
+.venv/bin/python3 skills/binance-trading/scripts/run_oversold_cron.py --fast --format markdown
+```
 
-## A 股数据服务（astock-data）
+报告固定包含：
 
-底层数据基础设施：
-- 本地 SQLite K 线缓存（5000+ 只股票，250 万行）
-- 缓存优先 + 增量联网拉取，零重复请求
-- 批量预加载全市场历史数据
-- 支持前复权/后复权/不复权
+- 扫描漏斗和超跌候选。
+- 所有已分析评级，包括未达标币种。
+- 本轮交易计划、开仓、风控拒绝、执行失败。
+- Binance 服务端已平仓同步数量。
+- 当前持仓涨跌、浮盈亏、名义价值、保证金、资金占比、杠杆、保证金收益率。
+- 止损/止盈保护单健康状态、重复保护单、残留条件单。
+- 账户资金、日亏损和风控阈值。
 
-## 技术栈
+## Binance 数据能力
 
-- Binance fapi 合约接口（公开 + 签名端点）
-- TradingAgents 多智能体框架 + 多 LLM 提供商（Gemini/MiniMax/OpenAI/智谱/Qwen）
-- akshare / 腾讯 / 新浪 / 东方财富（A 股数据）
-- SQLite（K 线缓存 + 状态存储 + 分析报告）
-- JSON Schema draft-07 输入输出校验
+- 本地 SQLite K 线缓存：`data/binance_kline_cache.db`
+- 支持 4h/1d 等周期，缓存优先、增量拉取。
+- 超跌扫描：短期 4h、长期 1d。
+- 底部反转扫描：短期 4h、长期 1d。
+- 超买做空扫描：短期 4h、长期 1d。
+- `scan_oversold.py --json` 输出纯 JSON，供自动化脚本消费。
+
+## A 股能力
+
+- 趋势动量筛选。
+- 短期/长期超跌反弹筛选。
+- 底部放量反转筛选。
+- TradingAgents 深度分析和报告保存。
+- 本地 K 线缓存供 Skill 和 TradingAgents 共享。
 
 ## 数据资产
 
-| 数据库 | 路径 | 内容 |
-|--------|------|------|
-| A 股 K 线缓存 | `data/kline_cache.db` | 5000+ 只股票日线，250 万行 |
-| 币安 K 线缓存 | `data/binance_kline_cache.db` | 538 个合约 4h+1d，64 万行 |
-| 状态存储 | `data/state_store.db` | Skill 输入输出快照 |
-| 分析报告 | `data/reports/` | TradingAgents 完整分析报告（markdown） |
+| 数据库/目录 | 路径 | 内容 |
+| ------ | ------ | ------ |
+| Binance K 线缓存 | `data/binance_kline_cache.db` | USDT 永续合约 K 线 |
+| StateStore | `data/state_store.db` | Skill 输入输出快照 |
+| MemoryStore / 风控状态 | `data/trading_state.db` | 历史交易、同步去重、Paper Mode runtime state |
+| A 股 K 线缓存 | `data/kline_cache.db` | A 股历史 K 线 |
+| 分析报告 | `data/reports/` | TradingAgents markdown 报告 |

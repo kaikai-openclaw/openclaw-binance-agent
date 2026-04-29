@@ -50,7 +50,29 @@
         },
         "trade_count": { "type": "integer", "minimum": 0 },
         "adjustment_applied": { "type": "boolean" },
-        "adjustment_detail": { "type": "string" }
+        "adjustment_detail": { "type": "string" },
+        "strategy_stats": {
+          "type": "object",
+          "description": "按策略标签拆分的独立胜率统计",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "win_rate": { "type": "number", "minimum": 0, "maximum": 100 },
+              "avg_pnl_ratio": { "type": "number" },
+              "trade_count": { "type": "integer", "minimum": 0 },
+              "winning_trades": { "type": "integer", "minimum": 0 },
+              "losing_trades": { "type": "integer", "minimum": 0 }
+            },
+            "required": [
+              "win_rate",
+              "avg_pnl_ratio",
+              "trade_count",
+              "winning_trades",
+              "losing_trades"
+            ],
+            "additionalProperties": false
+          }
+        }
       },
       "required": ["win_rate", "avg_pnl_ratio", "trade_count", "adjustment_applied"]
     }

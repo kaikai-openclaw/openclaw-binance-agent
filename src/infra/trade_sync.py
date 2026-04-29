@@ -180,6 +180,7 @@ class BinanceTradeSyncer:
             rating_score=int(metadata.get("rating_score", 6) or 6),
             position_size_pct=float(metadata.get("position_size_pct", 0.0) or 0.0),
             closed_at=closed_order.closed_at,
+            strategy_tag=str(metadata.get("strategy_tag", "unknown") or "unknown"),
         )
 
 

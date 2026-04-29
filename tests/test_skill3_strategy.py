@@ -142,6 +142,9 @@ class TestNormalExecution:
         assert plan["stop_loss_price"] > 0
         assert plan["take_profit_price"] > 0
         assert plan["max_hold_hours"] == DEFAULT_MAX_HOLD_HOURS
+        assert plan["strategy_tag"] == "crypto_generic"
+        assert plan["trailing_stop"]["activation_price"] > 0
+        assert plan["trailing_stop"]["trail_pct"] > 0
         assert result["pipeline_status"] == "has_trades"
 
     def test_basic_short_trade_plan(self, state_store):

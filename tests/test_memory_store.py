@@ -37,6 +37,7 @@ def _make_trade(
     rating_score: int = 7,
     position_size_pct: float = 10.0,
     closed_at: datetime | None = None,
+    strategy_tag: str = "crypto_oversold_short",
 ) -> TradeRecord:
     """辅助函数：创建交易记录。"""
     if closed_at is None:
@@ -51,6 +52,7 @@ def _make_trade(
         rating_score=rating_score,
         position_size_pct=position_size_pct,
         closed_at=closed_at,
+        strategy_tag=strategy_tag,
     )
 
 
@@ -171,6 +173,21 @@ class TestComputeStats:
         stats = store.compute_stats(trades)
         assert stats.winning_trades == 0
         assert stats.losing_trades == 1
+
+    def test_compute_stats_by_strategy(self, store):
+        """应按 strategy_tag 分别统计胜率。"""
+        trades = [
+            _make_trade(pnl_amount=100.0, strategy_tag="trend"),
+            _make_trade(pnl_amount=-50.0, strategy_tag="trend"),
+            _make_trade(pnl_amount=30.0, strategy_tag="oversold"),
+        ]
+
+        stats = store.compute_stats_by_strategy(trades)
+
+        assert stats["trend"].win_rate == 50.0
+        assert stats["trend"].total_trades == 2
+        assert stats["oversold"].win_rate == 100.0
+        assert stats["oversold"].total_trades == 1
 
 
 class TestReflectionLog:

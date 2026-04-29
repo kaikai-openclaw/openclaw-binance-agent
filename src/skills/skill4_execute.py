@@ -196,6 +196,8 @@ class Skill4Execute(BaseSkill):
         stop_loss_price = plan.get("stop_loss_price", 0)
         take_profit_price = plan.get("take_profit_price", 0)
         max_hold_hours = plan.get("max_hold_hours", 24)
+        strategy_tag = plan.get("strategy_tag", "unknown")
+        trailing_stop = plan.get("trailing_stop") or {}
 
         now_str = datetime.now(timezone.utc).isoformat()
 
@@ -269,6 +271,7 @@ class Skill4Execute(BaseSkill):
                 executed_quantity=quantity,
                 fee=0.0,
                 order_id=f"paper_{uuid.uuid4().hex[:12]}",
+                strategy_tag=strategy_tag,
             )
 
         if not self._ensure_symbol_leverage(symbol):
@@ -321,6 +324,7 @@ class Skill4Execute(BaseSkill):
                 reason=entry_result.get("reason", ""),
                 entry_price=entry_result.get("entry_price", entry_price),
                 position_size_pct=position_size_pct,
+                strategy_tag=strategy_tag,
             )
 
         # 可选旧行为：阻塞轮询直到平仓
@@ -332,6 +336,7 @@ class Skill4Execute(BaseSkill):
             max_hold_hours=max_hold_hours,
             quantity=quantity,
             order_id=order_result.order_id,
+            trailing_stop=trailing_stop,
         )
 
         executed_at = datetime.now(timezone.utc).isoformat()
@@ -361,6 +366,7 @@ class Skill4Execute(BaseSkill):
             ),
             hold_duration_hours=close_result.get("hold_duration_hours", 0.0),
             position_size_pct=position_size_pct,
+            strategy_tag=strategy_tag,
         )
 
     def _monitor_position(
@@ -372,6 +378,7 @@ class Skill4Execute(BaseSkill):
         max_hold_hours: float,
         quantity: float,
         order_id: str,
+        trailing_stop: dict | None = None,
     ) -> dict:
         """
         轮询监控持仓，检查止损/止盈/超时平仓条件。
@@ -406,6 +413,9 @@ class Skill4Execute(BaseSkill):
         position_opened = False
         # 服务端条件单是否已挂载（入场成交后才挂）
         server_sl_tp_placed = False
+        trailing_stop = trailing_stop or {}
+        trailing_active = False
+        best_price = 0.0
 
         while True:
             # 获取持仓风险信息
@@ -464,6 +474,8 @@ class Skill4Execute(BaseSkill):
             # 入场成交检测：首次观测到持仓后挂服务端止损/止盈单
             if position_amt > 0 and not position_opened:
                 position_opened = True
+                # 挂保护单前先清理已有同方向保护条件单，避免 -4130 冲突
+                self._cancel_conflicting_protection_orders(symbol, close_side)
                 server_sl_tp_placed = self._place_server_sl_tp(
                     symbol=symbol,
                     close_side=close_side,
@@ -538,6 +550,25 @@ class Skill4Execute(BaseSkill):
                 self._cancel_algo_orders_safe(symbol)
                 return self._close_position(
                     symbol, close_side, position_amt, "take_profit", start_time
+                )
+
+            trailing_result = self._check_trailing_stop(
+                direction=direction,
+                current_price=current_price,
+                trailing_stop=trailing_stop,
+                trailing_active=trailing_active,
+                best_price=best_price,
+            )
+            trailing_active = trailing_result["active"]
+            best_price = trailing_result["best_price"]
+            if trailing_result["triggered"]:
+                log.info(
+                    f"[{self.name}] {symbol} 触发移动止损: "
+                    f"current={current_price}, trail={trailing_result['trail_price']}"
+                )
+                self._cancel_algo_orders_safe(symbol)
+                return self._close_position(
+                    symbol, close_side, position_amt, "trailing_stop", start_time
                 )
 
             # 需求 4.7：超时检查
@@ -621,6 +652,9 @@ class Skill4Execute(BaseSkill):
             if pos_risk is not None:
                 position_amt = abs(pos_risk.position_amt)
                 if position_amt > 0:
+                    # 入场成交后、挂保护单前：检测并清理已有同方向保护条件单，
+                    # 避免 closePosition=True 重复挂载触发 Binance -4130 冲突
+                    self._cancel_conflicting_protection_orders(symbol, close_side)
                     protection_placed = self._place_server_sl_tp(
                         symbol=symbol,
                         close_side=close_side,
@@ -751,6 +785,42 @@ class Skill4Execute(BaseSkill):
             return current_price >= take_profit_price
         else:
             return current_price <= take_profit_price
+
+    @staticmethod
+    def _check_trailing_stop(
+        direction: TradeDirection,
+        current_price: float,
+        trailing_stop: dict,
+        trailing_active: bool,
+        best_price: float,
+    ) -> dict:
+        activation_price = float(trailing_stop.get("activation_price") or 0)
+        trail_pct = float(trailing_stop.get("trail_pct") or 0)
+        if activation_price <= 0 or trail_pct <= 0 or current_price <= 0:
+            return {
+                "active": trailing_active,
+                "best_price": best_price,
+                "triggered": False,
+                "trail_price": 0.0,
+            }
+
+        if direction == TradeDirection.LONG:
+            active = trailing_active or current_price >= activation_price
+            best = max(best_price or current_price, current_price) if active else best_price
+            trail_price = best * (1 - trail_pct / 100) if active else 0.0
+            triggered = active and current_price <= trail_price
+        else:
+            active = trailing_active or current_price <= activation_price
+            best = min(best_price or current_price, current_price) if active else best_price
+            trail_price = best * (1 + trail_pct / 100) if active else 0.0
+            triggered = active and current_price >= trail_price
+
+        return {
+            "active": active,
+            "best_price": best,
+            "triggered": triggered,
+            "trail_price": trail_price,
+        }
 
     def _close_position(
         self,
@@ -1284,6 +1354,41 @@ class Skill4Execute(BaseSkill):
             rule=rule,
         )
 
+    def _cancel_conflicting_protection_orders(
+        self, symbol: str, close_side: str
+    ) -> None:
+        """
+        在挂载新保护单前，检测并撤销已有的同方向 closePosition 条件单。
+
+        Binance 不允许同一 symbol 同方向同时存在多张 closePosition=True 的
+        STOP_MARKET / TAKE_PROFIT_MARKET 条件单，重复挂载会触发 -4130 错误。
+        本方法在 open_position 成交后、_place_server_sl_tp 调用前执行，
+        确保旧保护单已清理，避免死锁。
+        """
+        try:
+            algo_orders = self._binance_client.get_open_algo_orders(symbol)
+        except Exception as exc:
+            log.warning(
+                f"[{self.name}] {symbol} 查询已有保护条件单失败，跳过冲突检测: {exc}"
+            )
+            return
+
+        conflicting = [
+            o for o in algo_orders
+            if (
+                str(o.get("side", "")).upper() == close_side.upper()
+                and self._looks_like_protection_algo_order(o)
+            )
+        ]
+        if not conflicting:
+            return
+
+        log.warning(
+            f"[{self.name}] {symbol} 检测到 {len(conflicting)} 张已有 "
+            f"{close_side} 方向保护条件单，挂载前先撤销以避免 -4130 冲突"
+        )
+        self._cancel_algo_orders_safe(symbol)
+
     def _cancel_algo_orders_safe(self, symbol: str) -> None:
         """安全清理指定币种的所有 Algo 条件单，防止残留。"""
         try:
@@ -1315,6 +1420,7 @@ class Skill4Execute(BaseSkill):
         pnl_amount: float = 0.0,
         hold_duration_hours: float = 0.0,
         position_size_pct: float = 0.0,
+        strategy_tag: str = "",
     ) -> dict:
         """
         构造单笔执行结果字典。
@@ -1363,4 +1469,6 @@ class Skill4Execute(BaseSkill):
             result["hold_duration_hours"] = hold_duration_hours
         if position_size_pct > 0:
             result["position_size_pct"] = position_size_pct
+        if strategy_tag:
+            result["strategy_tag"] = strategy_tag
         return result

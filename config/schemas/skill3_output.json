@@ -81,6 +81,25 @@
           "net_rr_ratio": {
             "type": "number",
             "description": "扣费后净盈亏比 = (TP - cost) / (SL + cost)"
+          },
+          "strategy_tag": {
+            "type": "string",
+            "description": "策略标签，用于按策略独立统计胜率"
+          },
+          "trailing_stop": {
+            "type": "object",
+            "properties": {
+              "activation_price": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "trail_pct": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              }
+            },
+            "required": ["activation_price", "trail_pct"],
+            "additionalProperties": false
           }
         },
         "required": [

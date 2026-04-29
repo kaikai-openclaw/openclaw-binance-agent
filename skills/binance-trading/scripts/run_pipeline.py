@@ -24,6 +24,7 @@ load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
 
 from src.infra.binance_fapi import BinanceFapiClient
 from src.infra.binance_public import BinancePublicClient
+from src.infra.daily_pnl import calculate_daily_realized_pnl
 from src.infra.exchange_rules import LazyBinanceTradingRuleProvider
 from src.infra.memory_store import MemoryStore
 from src.infra.rate_limiter import RateLimiter
@@ -52,8 +53,14 @@ def load_schema(name: str) -> dict:
         return json.load(f)
 
 
-def make_account_provider(fapi_client: BinanceFapiClient, paper_mode: bool):
+def make_account_provider(
+    fapi_client: BinanceFapiClient,
+    paper_mode: bool,
+    tracked_symbols: set[str] | None = None,
+):
     """创建账户状态提供回调。"""
+    tracked_symbols = tracked_symbols or set()
+
     def provider() -> AccountState:
         try:
             info = fapi_client.get_account_info()
@@ -67,10 +74,16 @@ def make_account_provider(fapi_client: BinanceFapiClient, paper_mode: bool):
                     "entry_price": p.entry_price,
                     "current_price": p.entry_price,  # mark_price 需要额外查询
                 })
+            pnl_symbols = set(tracked_symbols)
+            pnl_symbols.update(p.symbol for p in positions_raw)
+            daily_realized_pnl = calculate_daily_realized_pnl(
+                fapi_client,
+                pnl_symbols,
+            )
             return AccountState(
                 total_balance=info.total_balance,
                 available_margin=info.available_balance,
-                daily_realized_pnl=0.0,  # 需要从交易历史计算
+                daily_realized_pnl=daily_realized_pnl,
                 positions=positions,
                 is_paper_mode=paper_mode,
             )
@@ -141,7 +154,18 @@ def main():
     if paper_mode:
         print("🟡 模拟盘模式已启用")
 
-    account_provider = make_account_provider(fapi_client, paper_mode)
+    tracked_symbols = set()
+    if args.symbols:
+        tracked_symbols.update(
+            s.strip().upper()
+            for s in args.symbols.split(",")
+            if s.strip()
+        )
+    account_provider = make_account_provider(
+        fapi_client,
+        paper_mode,
+        tracked_symbols=tracked_symbols,
+    )
     market_price_provider = make_market_price_provider(public_client)
     trading_rule_provider = LazyBinanceTradingRuleProvider(public_client)
     trade_syncer = BinanceTradeSyncer(fapi_client, memory_store)
@@ -199,6 +223,7 @@ def main():
 
         for r in ratings:
             print(f"   ✅ {r['symbol']}: 评分={r['rating_score']}, 信号={r['signal']}, 置信度={r['confidence']:.0f}%")
+            tracked_symbols.add(r["symbol"])
 
         # ── Skill-3: 策略制定 ──
         print("\n📐 Step 3/5: 策略制定...")

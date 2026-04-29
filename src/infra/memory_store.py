@@ -43,7 +43,8 @@ class MemoryStore:
             hold_duration_hours REAL NOT NULL,
             rating_score    INTEGER NOT NULL,
             position_size_pct REAL NOT NULL,
-            closed_at       TEXT NOT NULL
+            closed_at       TEXT NOT NULL,
+            strategy_tag    TEXT NOT NULL DEFAULT 'unknown'
         )
     """
 
@@ -104,7 +105,20 @@ class MemoryStore:
         cursor.execute(self._CREATE_REFLECTIONS_TABLE_SQL)
         cursor.execute(self._CREATE_REFLECTIONS_INDEX_SQL)
         cursor.execute(self._CREATE_TRADE_SYNC_KEYS_TABLE_SQL)
+        self._ensure_trade_records_strategy_tag(cursor)
         self._conn.commit()
+
+    @staticmethod
+    def _has_column(cursor, table_name: str, column_name: str) -> bool:
+        cursor.execute(f"PRAGMA table_info({table_name})")
+        return any(row[1] == column_name for row in cursor.fetchall())
+
+    def _ensure_trade_records_strategy_tag(self, cursor) -> None:
+        if not self._has_column(cursor, "trade_records", "strategy_tag"):
+            cursor.execute(
+                "ALTER TABLE trade_records "
+                "ADD COLUMN strategy_tag TEXT NOT NULL DEFAULT 'unknown'"
+            )
 
     def record_trade(self, trade: TradeRecord) -> None:
         """
@@ -116,8 +130,8 @@ class MemoryStore:
         self._conn.execute(
             "INSERT INTO trade_records "
             "(symbol, direction, entry_price, exit_price, pnl_amount, "
-            "hold_duration_hours, rating_score, position_size_pct, closed_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "hold_duration_hours, rating_score, position_size_pct, closed_at, strategy_tag) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 trade.symbol,
                 trade.direction.value,
@@ -128,6 +142,7 @@ class MemoryStore:
                 trade.rating_score,
                 trade.position_size_pct,
                 trade.closed_at.isoformat(),
+                trade.strategy_tag,
             ),
         )
         self._conn.commit()
@@ -156,8 +171,8 @@ class MemoryStore:
             trade_cursor = self._conn.execute(
                 "INSERT INTO trade_records "
                 "(symbol, direction, entry_price, exit_price, pnl_amount, "
-                "hold_duration_hours, rating_score, position_size_pct, closed_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "hold_duration_hours, rating_score, position_size_pct, closed_at, strategy_tag) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     trade.symbol,
                     trade.direction.value,
@@ -168,6 +183,7 @@ class MemoryStore:
                     trade.rating_score,
                     trade.position_size_pct,
                     trade.closed_at.isoformat(),
+                    trade.strategy_tag,
                 ),
             )
             self._conn.execute(
@@ -188,7 +204,7 @@ class MemoryStore:
         """
         cursor = self._conn.execute(
             "SELECT symbol, direction, entry_price, exit_price, pnl_amount, "
-            "hold_duration_hours, rating_score, position_size_pct, closed_at "
+            "hold_duration_hours, rating_score, position_size_pct, closed_at, strategy_tag "
             "FROM trade_records ORDER BY closed_at DESC LIMIT ?",
             (limit,),
         )
@@ -204,9 +220,23 @@ class MemoryStore:
                 rating_score=row[6],
                 position_size_pct=row[7],
                 closed_at=datetime.fromisoformat(row[8]),
+                strategy_tag=row[9],
             )
             for row in rows
         ]
+
+    def compute_stats_by_strategy(
+        self,
+        trades: List[TradeRecord],
+    ) -> dict[str, StrategyStats]:
+        """按策略标签分别计算胜率和平均盈亏。"""
+        grouped: dict[str, List[TradeRecord]] = {}
+        for trade in trades:
+            grouped.setdefault(trade.strategy_tag or "unknown", []).append(trade)
+        return {
+            strategy_tag: self.compute_stats(strategy_trades)
+            for strategy_tag, strategy_trades in grouped.items()
+        }
 
     def compute_stats(self, trades: List[TradeRecord]) -> StrategyStats:
         """

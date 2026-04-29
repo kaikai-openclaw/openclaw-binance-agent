@@ -40,6 +40,10 @@
           "atr_pct": {
             "type": ["number", "null"],
             "description": "Skill-1 透传的 ATR 百分比，供 Skill-3 动态止损使用"
+          },
+          "strategy_tag": {
+            "type": "string",
+            "description": "上游策略标签，用于独立胜率统计"
           }
         },
         "required": [
@@ -86,6 +90,10 @@
           "atr_pct": {
             "type": ["number", "null"],
             "description": "Skill-1 透传的 ATR 百分比，供 Skill-3 动态止损使用"
+          },
+          "strategy_tag": {
+            "type": "string",
+            "description": "上游策略标签，用于独立胜率统计"
           }
         },
         "required": [

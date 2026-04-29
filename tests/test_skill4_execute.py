@@ -38,6 +38,28 @@ from src.models.types import (
 from src.skills.skill4_execute import Skill4Execute
 
 
+def test_trailing_stop_triggers_after_activation_for_long():
+    state = Skill4Execute._check_trailing_stop(
+        direction=TradeDirection.LONG,
+        current_price=105.0,
+        trailing_stop={"activation_price": 104.0, "trail_pct": 2.0},
+        trailing_active=False,
+        best_price=0.0,
+    )
+    assert state["active"] is True
+    assert state["triggered"] is False
+
+    state = Skill4Execute._check_trailing_stop(
+        direction=TradeDirection.LONG,
+        current_price=102.8,
+        trailing_stop={"activation_price": 104.0, "trail_pct": 2.0},
+        trailing_active=state["active"],
+        best_price=state["best_price"],
+    )
+    assert state["triggered"] is True
+
+
+
 # ── 加载 Schema ──────────────────────────────────────────
 
 def _load_schema(name: str) -> dict:

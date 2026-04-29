@@ -244,6 +244,7 @@ class Skill5Evolve(BaseSkill):
             hold_duration = result.get("hold_duration_hours", 0.0)
             rating_score = result.get("rating_score", 6)
             position_size_pct = result.get("position_size_pct", 0.0)
+            strategy_tag = result.get("strategy_tag", "unknown")
 
             trade_record = TradeRecord(
                 symbol=symbol,
@@ -255,6 +256,7 @@ class Skill5Evolve(BaseSkill):
                 rating_score=rating_score,
                 position_size_pct=position_size_pct,
                 closed_at=datetime.now(timezone.utc),
+                strategy_tag=strategy_tag,
             )
 
             try:
@@ -288,6 +290,7 @@ class Skill5Evolve(BaseSkill):
                 "rating_score": result.get("rating_score", 6),
                 "position_size_pct": result.get("position_size_pct", 0.0),
                 "hold_duration_hours": result.get("hold_duration_hours", 0.0),
+                "strategy_tag": result.get("strategy_tag", "unknown"),
             }
 
         for pos in account.positions or []:
@@ -326,6 +329,7 @@ class Skill5Evolve(BaseSkill):
 
         # 需求 5.7: 交易记录不足 10 笔时跳过
         if trade_count < 10:
+            strategy_stats = self._strategy_stats_payload(recent_trades)
             log.info(
                 f"[{self.name}] 交易记录不足 10 笔 "
                 f"({trade_count} 笔)，跳过进化计算"
@@ -343,10 +347,12 @@ class Skill5Evolve(BaseSkill):
                 ),
                 "current_rating_threshold": DEFAULT_RATING_THRESHOLD,
                 "current_risk_ratio": DEFAULT_RISK_RATIO,
+                "strategy_stats": strategy_stats,
             }
 
         # 需求 5.4: 计算策略统计
         stats = self._memory_store.compute_stats(recent_trades)
+        strategy_stats = self._strategy_stats_payload(recent_trades)
 
         # 从上一轮反思日志读取当前参数（闭合反馈环）
         latest_reflection = self._memory_store.get_latest_reflection()
@@ -405,6 +411,20 @@ class Skill5Evolve(BaseSkill):
                 reflection.suggested_risk_ratio
                 if reflection else current_risk
             ),
+            "strategy_stats": strategy_stats,
+        }
+
+    def _strategy_stats_payload(self, trades: List[TradeRecord]) -> dict:
+        stats_by_strategy = self._memory_store.compute_stats_by_strategy(trades)
+        return {
+            strategy_tag: {
+                "win_rate": round(stats.win_rate, 2),
+                "avg_pnl_ratio": round(stats.avg_pnl_ratio, 4),
+                "trade_count": stats.total_trades,
+                "winning_trades": stats.winning_trades,
+                "losing_trades": stats.losing_trades,
+            }
+            for strategy_tag, stats in stats_by_strategy.items()
         }
 
     def _compute_net_stats(

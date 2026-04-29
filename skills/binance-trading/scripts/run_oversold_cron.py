@@ -27,6 +27,7 @@ load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
 from src.infra.binance_fapi import BinanceFapiClient
 from src.infra.binance_kline_cache import BinanceKlineCache
 from src.infra.binance_public import BinancePublicClient
+from src.infra.daily_pnl import calculate_daily_realized_pnl
 from src.infra.exchange_rules import LazyBinanceTradingRuleProvider
 from src.infra.memory_store import MemoryStore
 from src.infra.rate_limiter import RateLimiter
@@ -79,8 +80,10 @@ def safe_int(value: Any, default: int = 0) -> int:
 def make_account_provider(
     fapi_client: BinanceFapiClient,
     paper_mode: bool,
+    tracked_symbols: Optional[set[str]] = None,
 ) -> AccountState:
     """创建供 Skill-3/5 使用的账户状态快照。"""
+    tracked_symbols = tracked_symbols or set()
     info = fapi_client.get_account_info()
     positions = []
     for p in fapi_client.get_positions():
@@ -94,10 +97,15 @@ def make_account_provider(
             "current_price": mark_price if mark_price > 0 else p.entry_price,
             "unrealized_pnl": p.unrealized_pnl,
         })
+        tracked_symbols.add(p.symbol)
+    daily_realized_pnl = calculate_daily_realized_pnl(
+        fapi_client,
+        tracked_symbols,
+    )
     return AccountState(
         total_balance=info.total_balance,
         available_margin=info.available_balance,
-        daily_realized_pnl=0.0,
+        daily_realized_pnl=daily_realized_pnl,
         positions=positions,
         is_paper_mode=paper_mode,
     )
@@ -268,12 +276,18 @@ def build_account_summary(account: Any, positions: list[dict], paper_mode: bool)
     total_balance = safe_float(getattr(account, "total_balance", 0))
     total_margin = sum(p["initial_margin"] for p in positions)
     total_notional = sum(p["notional_value"] for p in positions)
+    daily_realized_pnl = safe_float(getattr(account, "daily_realized_pnl", 0))
+    daily_loss_pct = (
+        abs(min(daily_realized_pnl, 0.0)) / total_balance * 100
+        if total_balance > 0
+        else 0.0
+    )
     return {
         "total_balance": total_balance,
         "available_margin": safe_float(getattr(account, "available_balance", 0)),
         "total_unrealized_pnl": safe_float(getattr(account, "total_unrealized_pnl", 0)),
-        "daily_realized_pnl": 0.0,
-        "daily_loss_pct": 0.0,
+        "daily_realized_pnl": daily_realized_pnl,
+        "daily_loss_pct": round(daily_loss_pct, 4),
         "position_count": len(positions),
         "total_position_margin": round(total_margin, 8),
         "total_position_margin_pct": round(
@@ -337,6 +351,8 @@ def render_markdown(report: dict) -> str:
         f"Paper Mode: {str(account['paper_mode']).lower()}",
         "",
         "扫描结果:",
+        f"- 市场状态: {scan.get('market_regime', {}).get('status', 'unknown')} "
+        f"({scan.get('market_regime', {}).get('reason', '')})",
         f"- 全部交易对: {scan['filter_summary'].get('total_tickers', 0)}",
         f"- 基础过滤后: {scan['filter_summary'].get('after_base_filter', 0)}",
         f"- 超跌候选: {scan['filter_summary'].get('after_oversold_filter', 0)}",
@@ -514,7 +530,12 @@ def run_report(args: argparse.Namespace) -> dict:
         s5_data: dict = {}
         synced_closed_count = 0
 
-        account_provider = lambda: make_account_provider(fapi_client, paper_mode)
+        tracked_symbols = set(scan_symbols)
+        account_provider = lambda: make_account_provider(
+            fapi_client,
+            paper_mode,
+            tracked_symbols=tracked_symbols,
+        )
         market_price_provider = make_market_price_provider(public_client)
         trading_rule_provider = LazyBinanceTradingRuleProvider(public_client)
 
@@ -546,6 +567,10 @@ def run_report(args: argparse.Namespace) -> dict:
             s2_data = state_store.load(s2_id)
 
             if s2_data.get("ratings"):
+                tracked_symbols.update(
+                    rating.get("symbol", "")
+                    for rating in s2_data.get("ratings", [])
+                )
                 skill3 = Skill3Strategy(
                     state_store=state_store,
                     input_schema=load_schema("skill3_input.json"),
@@ -574,6 +599,10 @@ def run_report(args: argparse.Namespace) -> dict:
                 s4_input_id = state_store.save("skill4_input", {"input_state_id": s3_id})
                 s4_id = skill4.execute(s4_input_id)
                 s4_data = state_store.load(s4_id)
+                tracked_symbols.update(
+                    result.get("symbol", "")
+                    for result in s4_data.get("execution_results", [])
+                )
 
                 syncer = BinanceTradeSyncer(fapi_client, memory_store)
                 sync_symbols = set(scan_symbols)
@@ -597,6 +626,7 @@ def run_report(args: argparse.Namespace) -> dict:
                 s5_id = skill5.execute(s5_input_id)
                 s5_data = state_store.load(s5_id)
 
+        account_state = account_provider()
         account_info = fapi_client.get_account_info()
         raw_positions = fapi_client.get_positions()
         positions = build_position_snapshots(
@@ -612,6 +642,7 @@ def run_report(args: argparse.Namespace) -> dict:
             s4_data.get("execution_results", []),
             rating_threshold,
         )
+        account_info.daily_realized_pnl = account_state.daily_realized_pnl
         account_summary = build_account_summary(account_info, positions, paper_mode)
 
         finished_at = utc_now()
@@ -627,6 +658,7 @@ def run_report(args: argparse.Namespace) -> dict:
                 "filter_summary": scan_data.get("filter_summary", {}),
                 "candidates": scan_data.get("candidates", []),
                 "pipeline_run_id": scan_data.get("pipeline_run_id", ""),
+                "market_regime": scan_data.get("market_regime", {}),
             },
             "analysis": {
                 "rating_threshold": rating_threshold,

@@ -115,6 +115,7 @@ class TradeRecord:
     rating_score: int              # 评级分
     position_size_pct: float       # 头寸规模百分比
     closed_at: datetime            # 平仓时间戳
+    strategy_tag: str = "unknown"  # 策略标签，用于独立归因统计
 
 
 @dataclass

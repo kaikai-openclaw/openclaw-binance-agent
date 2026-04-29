@@ -173,6 +173,9 @@ class Skill2Analyze(BaseSkill):
                     atr_pct = candidate.get("atr_pct")
                     if atr_pct is not None:
                         rating["atr_pct"] = atr_pct
+                    strategy_tag = candidate.get("strategy_tag")
+                    if strategy_tag:
+                        rating["strategy_tag"] = strategy_tag
                     all_ratings.append(rating)
             except TimeoutError:
                 # 需求 2.6：超时跳过，记录日志

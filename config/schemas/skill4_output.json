@@ -78,6 +78,10 @@
             "exclusiveMinimum": 0,
             "maximum": 20,
             "description": "头寸规模百分比"
+          },
+          "strategy_tag": {
+            "type": "string",
+            "description": "策略标签，用于按策略独立统计胜率"
           }
         },
         "required": [

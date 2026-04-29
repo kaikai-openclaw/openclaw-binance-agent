@@ -38,10 +38,19 @@ from src.skills.skill1_collect import (
     KLINE_LIMIT,
     CORRELATION_THRESHOLD,
     RSI_PERIOD,
+    EMA_FAST,
+    EMA_SLOW,
     ATR_PERIOD,
 )
 
 log = logging.getLogger(__name__)
+
+
+def _safe_float(value) -> Optional[float]:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 # ══════════════════════════════════════════════════════════
 # 共享常量
@@ -112,6 +121,18 @@ LT_W_VOLUME = 5         # 底部放量
 DEFAULT_MIN_QUOTE_VOLUME = 10_000_000
 DEFAULT_MIN_OVERSOLD_SCORE = 25
 DEFAULT_MAX_CANDIDATES = 20
+DEFAULT_MAX_SPREAD_PCT = 0.25
+DEFAULT_MAX_ABS_FUNDING_RATE = 0.01
+
+MARKET_REGIME_SYMBOL = "BTCUSDT"
+MARKET_REGIME_INTERVAL = "4h"
+MARKET_REGIME_KLINE_LIMIT = 80
+MARKET_REGIME_PANIC_DROP_PCT = -8.0
+MARKET_REGIME_DOWNTREND_LOOKBACK = 12
+SYMBOL_TREND_INTERVAL = "6h"
+SYMBOL_TREND_KLINE_LIMIT = 80
+SYMBOL_TREND_RECENT_DROP_PCT = -10.0
+SYMBOL_TREND_RECENT_LOOKBACK = 8
 
 
 # ══════════════════════════════════════════════════════════
@@ -201,6 +222,139 @@ class _CryptoOversoldBase(BaseSkill):
             return self._client.get_klines_cached(symbol, interval, limit)
         return self._client.get_klines(symbol, interval, limit)
 
+    @staticmethod
+    def _quality_filter_reason(
+        ticker: dict,
+        funding_rate: Optional[float],
+        max_spread_pct: float,
+        max_abs_funding_rate: float,
+    ) -> Optional[str]:
+        bid = _safe_float(ticker.get("bidPrice"))
+        ask = _safe_float(ticker.get("askPrice"))
+        if bid and ask and bid > 0 and ask > bid:
+            mid = (bid + ask) / 2
+            spread_pct = (ask - bid) / mid * 100
+            if spread_pct > max_spread_pct:
+                return f"spread_too_wide:{spread_pct:.4f}%"
+
+        if funding_rate is not None and abs(funding_rate) > max_abs_funding_rate:
+            return f"funding_rate_too_extreme:{funding_rate:.6f}"
+        return None
+
+    def _symbol_trend_filter_reason(self, symbol: str, input_data: dict) -> Optional[str]:
+        if input_data.get("ignore_symbol_trend_filter"):
+            return None
+
+        try:
+            klines = self._fetch_klines(
+                symbol,
+                input_data.get("symbol_trend_interval", SYMBOL_TREND_INTERVAL),
+                input_data.get("symbol_trend_kline_limit", SYMBOL_TREND_KLINE_LIMIT),
+            )
+        except Exception as exc:
+            log.warning("[%s] %s 趋势过滤数据获取失败: %s", self.name, symbol, exc)
+            return "symbol_trend_unknown"
+
+        if not klines or len(klines) < 60:
+            return "symbol_trend_insufficient_klines"
+
+        closes = [float(k[4]) for k in klines]
+        ema_fast_series = calc_ema(closes, EMA_FAST)
+        ema_slow_series = calc_ema(closes, EMA_SLOW)
+        ema_fast = ema_fast_series[-1] if ema_fast_series else None
+        ema_slow = ema_slow_series[-1] if ema_slow_series else None
+        last_close = closes[-1]
+        lookback = input_data.get(
+            "symbol_trend_recent_lookback",
+            SYMBOL_TREND_RECENT_LOOKBACK,
+        )
+        recent_return_pct = (
+            (last_close - closes[-lookback]) / closes[-lookback] * 100
+            if len(closes) > lookback and closes[-lookback] > 0
+            else 0.0
+        )
+        downtrend = (
+            ema_fast is not None
+            and ema_slow is not None
+            and last_close < ema_fast < ema_slow
+        )
+        waterfall = recent_return_pct <= input_data.get(
+            "symbol_trend_recent_drop_pct",
+            SYMBOL_TREND_RECENT_DROP_PCT,
+        )
+        if downtrend and waterfall:
+            return f"symbol_6h_waterfall:{recent_return_pct:.2f}%"
+        return None
+
+    def _get_market_regime(self, input_data: dict) -> dict:
+        """
+        判断当前市场是否适合做超跌反弹。
+
+        超跌均值回归只适合非单边瀑布环境。若 BTCUSDT 处于 4h 级别
+        明确下跌趋势或短期暴跌，本轮直接阻断，避免系统性接刀。
+        """
+        if input_data.get("ignore_market_regime"):
+            return {"status": "enabled", "reason": "ignore_market_regime=true"}
+
+        symbol = input_data.get("market_regime_symbol", MARKET_REGIME_SYMBOL)
+        try:
+            klines = self._fetch_klines(
+                symbol,
+                input_data.get("market_regime_interval", MARKET_REGIME_INTERVAL),
+                input_data.get("market_regime_kline_limit", MARKET_REGIME_KLINE_LIMIT),
+            )
+        except Exception as exc:
+            log.warning("[%s] 市场状态获取失败: %s", self.name, exc)
+            return {"status": "unknown", "reason": f"fetch_failed:{exc}"}
+
+        if not klines or len(klines) < 60:
+            return {"status": "unknown", "reason": "insufficient_market_klines"}
+
+        closes = [float(k[4]) for k in klines]
+        last_close = closes[-1]
+        ema_fast_series = calc_ema(closes, EMA_FAST)
+        ema_slow_series = calc_ema(closes, EMA_SLOW)
+        ema_fast = ema_fast_series[-1] if ema_fast_series else None
+        ema_slow = ema_slow_series[-1] if ema_slow_series else None
+        lookback = input_data.get(
+            "market_regime_downtrend_lookback",
+            MARKET_REGIME_DOWNTREND_LOOKBACK,
+        )
+        recent_return_pct = (
+            (last_close - closes[-lookback]) / closes[-lookback] * 100
+            if len(closes) > lookback and closes[-lookback] > 0
+            else 0.0
+        )
+        panic_drop_pct = input_data.get(
+            "market_regime_panic_drop_pct",
+            MARKET_REGIME_PANIC_DROP_PCT,
+        )
+        downtrend = (
+            ema_fast is not None
+            and ema_slow is not None
+            and last_close < ema_fast < ema_slow
+        )
+        panic_drop = recent_return_pct <= panic_drop_pct
+        if downtrend or panic_drop:
+            reasons = []
+            if downtrend:
+                reasons.append("BTC 4h close<EMA_FAST<EMA_SLOW")
+            if panic_drop:
+                reasons.append(f"BTC recent_return={recent_return_pct:.2f}%")
+            return {
+                "status": "blocked",
+                "reason": "; ".join(reasons),
+                "symbol": symbol,
+                "recent_return_pct": round(recent_return_pct, 4),
+            }
+
+        return {
+            "status": "enabled",
+            "reason": "market_regime_ok",
+            "symbol": symbol,
+            "recent_return_pct": round(recent_return_pct, 4),
+        }
+
     def _run_scan(
         self, input_data: dict, interval: str, min_klines: int,
         rsi_thresh: float, bias_thresh: float, consec_thresh: int,
@@ -211,6 +365,11 @@ class _CryptoOversoldBase(BaseSkill):
         min_qv = input_data.get("min_quote_volume", DEFAULT_MIN_QUOTE_VOLUME)
         min_score = input_data.get("min_oversold_score", DEFAULT_MIN_OVERSOLD_SCORE)
         max_cands = input_data.get("max_candidates", DEFAULT_MAX_CANDIDATES)
+        max_spread_pct = input_data.get("max_spread_pct", DEFAULT_MAX_SPREAD_PCT)
+        max_abs_funding_rate = input_data.get(
+            "max_abs_funding_rate",
+            DEFAULT_MAX_ABS_FUNDING_RATE,
+        )
         target_symbols = input_data.get("target_symbols")
         # 允许输入覆盖默认阈值
         rsi_thresh = input_data.get("rsi_threshold", rsi_thresh)
@@ -222,6 +381,25 @@ class _CryptoOversoldBase(BaseSkill):
         total_count = len(tickers)
         funding_map = self._build_funding_map()
         tradable = self._get_tradable_symbols()
+        market_regime = self._get_market_regime(input_data)
+        if market_regime.get("status") == "blocked":
+            log.warning(
+                "[%s] 市场状态阻断超跌交易: %s",
+                self.name,
+                market_regime.get("reason", ""),
+            )
+            return {
+                "state_id": str(uuid.uuid4()),
+                "candidates": [],
+                "pipeline_run_id": pipeline_run_id,
+                "filter_summary": {
+                    "total_tickers": total_count,
+                    "after_base_filter": 0,
+                    "after_oversold_filter": 0,
+                    "output_count": 0,
+                },
+                "market_regime": market_regime,
+            }
 
         if target_symbols:
             pool = self._build_target_pool(tickers, target_symbols)
@@ -236,6 +414,22 @@ class _CryptoOversoldBase(BaseSkill):
         for item in pool:
             symbol = item["symbol"]
             try:
+                fr = funding_map.get(symbol)
+                quality_reason = self._quality_filter_reason(
+                    item,
+                    fr,
+                    max_spread_pct,
+                    max_abs_funding_rate,
+                )
+                if quality_reason:
+                    log.info("[%s] %s 交易对象质量过滤: %s", self.name, symbol, quality_reason)
+                    continue
+
+                trend_reason = self._symbol_trend_filter_reason(symbol, input_data)
+                if trend_reason:
+                    log.info("[%s] %s 趋势过滤: %s", self.name, symbol, trend_reason)
+                    continue
+
                 # 拉取足够的 K 线：至少覆盖回撤回看窗口
                 kline_need = max(KLINE_LIMIT, dd_lookback + 20)
                 klines = self._fetch_klines(symbol, interval, kline_need)
@@ -246,8 +440,6 @@ class _CryptoOversoldBase(BaseSkill):
                 highs = [float(k[2]) for k in klines]
                 lows = [float(k[3]) for k in klines]
                 volumes = [float(k[5]) for k in klines]
-                fr = funding_map.get(symbol)
-
                 result = calc_oversold_score(
                     closes, highs, lows, volumes,
                     rsi_thresh, bias_thresh, consec_thresh,
@@ -283,6 +475,7 @@ class _CryptoOversoldBase(BaseSkill):
                     "oversold_score": result["oversold_score"],
                     "signal_details": result["signal_details"],
                     "atr_pct": atr_pct,
+                    "strategy_tag": self.name,
                     "collected_at": datetime.now(timezone.utc).isoformat(),
                 })
             except Exception as exc:
@@ -298,6 +491,7 @@ class _CryptoOversoldBase(BaseSkill):
             "state_id": str(uuid.uuid4()),
             "candidates": candidates,
             "pipeline_run_id": pipeline_run_id,
+            "market_regime": market_regime,
             "filter_summary": {
                 "total_tickers": total_count,
                 "after_base_filter": len(pool),

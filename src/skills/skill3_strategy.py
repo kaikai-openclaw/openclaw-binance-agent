@@ -64,7 +64,7 @@ TAKE_PROFIT_PCT = 0.06     # 止盈幅度 6%（盈亏比 2:1）
 DEFAULT_ATR_STOP_MULT = 1.5     # 止损距离 = ATR × 1.5
 DEFAULT_ATR_TP_MULT = 3.0       # 止盈距离 = ATR × 3.0（盈亏比 2:1）
 DEFAULT_MIN_STOP_PCT = 0.005    # 止损距离下限 0.5%（防止极低波动下 SL 贴得过近被秒扫）
-DEFAULT_MAX_STOP_PCT = 0.08     # 止损距离上限 8%（防止高波动币种仓位失控）
+DEFAULT_MAX_STOP_PCT = 0.12     # 止损距离上限 12%（放宽以适应高波动山寨币）
 
 # 入场区间宽度常量
 ENTRY_SPREAD_MIN = 0.01    # 最窄区间（置信度 100% 时）
@@ -75,6 +75,7 @@ TEST_FALLBACK_PRICE = 100.0
 
 # P0-4：扣费后净盈亏比的最低阈值；低于此值的交易直接拒绝
 DEFAULT_MIN_NET_RR_RATIO = 1.2
+DEFAULT_TRAILING_STOP_RATIO = 0.5
 
 # 市场价格提供者类型：接收 symbol，返回当前市场价格（None 或 <=0 表示不可用）
 MarketPriceProvider = Callable[[str], Optional[float]]
@@ -424,6 +425,23 @@ class Skill3Strategy(BaseSkill):
         plan["price_source"] = price_source
         plan["round_trip_cost_pct"] = round(cost_pct, 6)
         plan["net_rr_ratio"] = round(net_rr, 4)
+        plan["strategy_tag"] = rating.get("strategy_tag") or "crypto_generic"
+        
+        # 优化的高波动率追踪止盈逻辑 (Trailing Stop 强化)
+        is_high_vol = atr_pct is not None and atr_pct >= 5.0
+        # 激活距离：大盘币（常规波动）为 1.0 倍止损距离；山寨币（高波动）为 1.5 倍止损距离，让利润多奔跑一会儿
+        activation_multiplier = 1.5 if is_high_vol else 1.0
+        activation_dist = abs(entry_price - stop_loss_price) * activation_multiplier
+        
+        if direction == TradeDirection.LONG:
+            activation_price = entry_price + activation_dist
+        else:
+            activation_price = entry_price - activation_dist
+
+        plan["trailing_stop"] = {
+            "activation_price": round(activation_price, 8),
+            "trail_pct": round(sl_dist_pct * DEFAULT_TRAILING_STOP_RATIO * 100, 4),
+        }
         return plan
 
     def _calculate_entry_range(
@@ -508,13 +526,14 @@ class Skill3Strategy(BaseSkill):
         """
         if atr_pct is not None and atr_pct > 0:
             atr_ratio = float(atr_pct) / 100.0
-            raw_sl_pct = atr_ratio * self._atr_stop_mult
+            stop_mult, tp_mult = self._get_dynamic_multipliers(float(atr_pct))
+            raw_sl_pct = atr_ratio * stop_mult
             sl_pct = max(self._min_stop_pct, min(self._max_stop_pct, raw_sl_pct))
-            tp_pct = sl_pct * (self._atr_tp_mult / self._atr_stop_mult)
+            tp_pct = sl_pct * (tp_mult / stop_mult)
             source = "atr"
             log.debug(
                 f"[{self.name}] {symbol} ATR 止损: atr_pct={atr_pct:.2f}%, "
-                f"sl={sl_pct:.4f}, tp={tp_pct:.4f}"
+                f"mult={stop_mult:.1f}, sl={sl_pct:.4f}, tp={tp_pct:.4f}"
             )
         else:
             sl_pct = STOP_LOSS_PCT
@@ -549,7 +568,8 @@ class Skill3Strategy(BaseSkill):
         if atr_pct is None or atr_pct <= 0:
             return False
 
-        raw_sl_pct = (float(atr_pct) / 100.0) * self._atr_stop_mult
+        stop_mult, _ = self._get_dynamic_multipliers(float(atr_pct))
+        raw_sl_pct = (float(atr_pct) / 100.0) * stop_mult
         if raw_sl_pct <= self._max_stop_pct:
             return False
 
@@ -559,6 +579,13 @@ class Skill3Strategy(BaseSkill):
             f"max_stop={self._max_stop_pct:.2%}"
         )
         return True
+
+    def _get_dynamic_multipliers(self, atr_pct: float) -> tuple[float, float]:
+        """对于高波动币种（ATR > 5%），动态放宽止损乘数以防止被插针扫损"""
+        if atr_pct >= 5.0:
+            # 止盈乘数放大至 6.0，实质上弱化硬性止盈，主要依靠追踪止损(Trailing Stop)让利润奔跑
+            return max(self._atr_stop_mult, 2.0), max(self._atr_tp_mult, 6.0)
+        return self._atr_stop_mult, self._atr_tp_mult
 
     def _normalize_quantity_for_exchange(
         self,

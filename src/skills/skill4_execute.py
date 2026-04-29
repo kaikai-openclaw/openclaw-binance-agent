@@ -189,6 +189,9 @@ class Skill4Execute(BaseSkill):
         entry_price = (
             plan.get("entry_price_upper", 0) + plan.get("entry_price_lower", 0)
         ) / 2
+        normalized_entry_price = self._normalize_price_for_exchange(symbol, entry_price)
+        if normalized_entry_price is not None:
+            entry_price = normalized_entry_price
         position_size_pct = plan.get("position_size_pct", 0)
         stop_loss_price = plan.get("stop_loss_price", 0)
         take_profit_price = plan.get("take_profit_price", 0)

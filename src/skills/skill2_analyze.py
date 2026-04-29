@@ -203,6 +203,7 @@ class Skill2Analyze(BaseSkill):
         output = {
             "state_id": str(uuid.uuid4()),
             "ratings": filtered_ratings,
+            "all_ratings": all_ratings,
             "filtered_count": filtered_count,
             "failed_symbols": failed_symbols,
             "analysis_summary": (

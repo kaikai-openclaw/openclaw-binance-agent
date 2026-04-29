@@ -88,7 +88,8 @@ def main():
                 s.strip().upper() for s in args.symbols.split(",") if s.strip()
             ]
 
-        print(f"📡 {mode_label} — 正在扫描超跌反弹候选...")
+        if not args.json:
+            print(f"📡 {mode_label} — 正在扫描超跌反弹候选...")
         result = skill.run(input_data)
 
         if args.json:

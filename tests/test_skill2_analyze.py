@@ -213,6 +213,9 @@ class TestRatingFilter:
 
         assert len(result["ratings"]) == 1
         assert result["ratings"][0]["symbol"] == "BTCUSDT"
+        assert [r["symbol"] for r in result["all_ratings"]] == [
+            "BTCUSDT", "ETHUSDT", "SOLUSDT"
+        ]
         assert result["filtered_count"] == 2
 
     def test_threshold_boundary_included(self, state_store):
@@ -275,6 +278,7 @@ class TestRatingFilter:
         result = skill.run({"input_state_id": state_id})
 
         assert result["ratings"] == []
+        assert [r["rating_score"] for r in result["all_ratings"]] == [3, 4]
         assert result["filtered_count"] == 2
 
 

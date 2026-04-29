@@ -816,6 +816,78 @@ class TestEmptyPlans:
         assert result["execution_results"] == []
         assert result["is_paper_mode"] is False
 
+    def test_orphan_algo_orders_are_cleaned_without_position(
+        self, state_store, mock_binance, mock_risk_controller
+    ):
+        """无持仓币种残留保护条件单时，应清理，避免后续反向开仓。"""
+        mock_binance.get_open_algo_orders.return_value = [
+            {
+                "symbol": "BTCUSDT",
+                "type": "TAKE_PROFIT_MARKET",
+                "side": "SELL",
+                "triggerPrice": "106",
+            }
+        ]
+        upstream = _make_upstream_data([])
+        state_id = state_store.save("skill3_strategy", upstream)
+
+        skill = _make_skill(
+            state_store,
+            mock_binance,
+            mock_risk_controller,
+            account=_make_account(positions=[]),
+        )
+        skill.run({"input_state_id": state_id})
+
+        mock_binance.cancel_all_algo_orders.assert_called_once_with(symbol="BTCUSDT")
+
+    def test_active_position_algo_orders_are_not_cleaned_as_orphans(
+        self, state_store, mock_binance, mock_risk_controller
+    ):
+        """当前仍有持仓的币种，其保护条件单不应被孤儿清理逻辑撤销。"""
+        account = _make_account(
+            positions=[{
+                "symbol": "BTCUSDT",
+                "direction": "long",
+                "quantity": 0.001,
+                "entry_price": 76750.0,
+            }]
+        )
+        mock_binance.get_position_risk.return_value = _make_position_risk(
+            symbol="BTCUSDT",
+            position_amt=0.001,
+            entry_price=76750.0,
+            mark_price=76500.0,
+        )
+        mock_binance.get_open_algo_orders.return_value = [
+            {
+                "symbol": "BTCUSDT",
+                "type": "STOP_MARKET",
+                "side": "SELL",
+                "triggerPrice": "74447.5",
+                "closePosition": True,
+            },
+            {
+                "symbol": "BTCUSDT",
+                "type": "TAKE_PROFIT_MARKET",
+                "side": "SELL",
+                "triggerPrice": "81355.0",
+                "closePosition": True,
+            },
+        ]
+        upstream = _make_upstream_data([])
+        state_id = state_store.save("skill3_strategy", upstream)
+
+        skill = _make_skill(
+            state_store,
+            mock_binance,
+            mock_risk_controller,
+            account=account,
+        )
+        skill.run({"input_state_id": state_id})
+
+        mock_binance.cancel_all_algo_orders.assert_not_called()
+
     def test_existing_position_gets_server_side_protection(
         self, state_store, mock_binance, mock_risk_controller
     ):
@@ -854,12 +926,14 @@ class TestEmptyPlans:
             side="SELL",
             quantity=0.001,
             stop_price=74447.5,
+            close_position=True,
         )
         mock_binance.place_take_profit_market_order.assert_called_once_with(
             symbol="BTCUSDT",
             side="SELL",
             quantity=0.001,
             stop_price=81355.0,
+            close_position=True,
         )
 
     def test_existing_position_with_algo_orders_is_not_duplicated(
@@ -1014,12 +1088,14 @@ class TestEmptyPlans:
             side="SELL",
             quantity=0.001,
             stop_price=74447.5,
+            close_position=True,
         )
         mock_binance.place_take_profit_market_order.assert_called_once_with(
             symbol="BTCUSDT",
             side="SELL",
             quantity=0.001,
             stop_price=81355.0,
+            close_position=True,
         )
 
     def test_existing_position_with_wrong_algo_prices_is_replaced(
@@ -1065,12 +1141,14 @@ class TestEmptyPlans:
             side="SELL",
             quantity=0.001,
             stop_price=74447.5,
+            close_position=True,
         )
         mock_binance.place_take_profit_market_order.assert_called_once_with(
             symbol="BTCUSDT",
             side="SELL",
             quantity=0.001,
             stop_price=81355.0,
+            close_position=True,
         )
 
 
@@ -1190,11 +1268,13 @@ class TestServerSideSlTp:
 
         # 应挂止损单，数量 = 实际持仓 10.0
         mock_binance.place_stop_market_order.assert_called_once_with(
-            symbol="BTCUSDT", side="SELL", quantity=10.0, stop_price=97.0
+            symbol="BTCUSDT", side="SELL", quantity=10.0, stop_price=97.0,
+            close_position=True
         )
         # 应挂止盈单
         mock_binance.place_take_profit_market_order.assert_called_once_with(
-            symbol="BTCUSDT", side="SELL", quantity=10.0, stop_price=106.0
+            symbol="BTCUSDT", side="SELL", quantity=10.0, stop_price=106.0,
+            close_position=True
         )
 
     def test_sl_tp_uses_actual_position_amt(
@@ -1261,12 +1341,14 @@ class TestServerSideSlTp:
             side="SELL",
             quantity=989.0,
             stop_price=0.09239,
+            close_position=True,
         )
         mock_binance.place_take_profit_market_order.assert_called_once_with(
             symbol="ZKPUSDT",
             side="SELL",
             quantity=989.0,
             stop_price=0.10097,
+            close_position=True,
         )
 
     def test_algo_orders_cleaned_on_stop_loss(
@@ -1371,8 +1453,10 @@ class TestServerSideSlTp:
         skill.run({"input_state_id": state_id})
 
         mock_binance.place_stop_market_order.assert_called_once_with(
-            symbol="BTCUSDT", side="BUY", quantity=10.0, stop_price=103.0
+            symbol="BTCUSDT", side="BUY", quantity=10.0, stop_price=103.0,
+            close_position=True
         )
         mock_binance.place_take_profit_market_order.assert_called_once_with(
-            symbol="BTCUSDT", side="BUY", quantity=10.0, stop_price=94.0
+            symbol="BTCUSDT", side="BUY", quantity=10.0, stop_price=94.0,
+            close_position=True
         )

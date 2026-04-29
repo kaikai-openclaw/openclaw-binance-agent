@@ -10,6 +10,7 @@ import logging
 import os
 import threading
 import time
+from decimal import Decimal
 from urllib.parse import urlencode
 
 from typing import Dict, List, Optional, Set
@@ -47,6 +48,27 @@ def calculate_backoff(attempt: int) -> int:
     sequence = [1, 2, 4, 8, 16]
     index = min(attempt, len(sequence) - 1)
     return sequence[index]
+
+
+def format_decimal_param(value: float | int | str | Decimal) -> str:
+    """
+    将下单价格/数量格式化为 Binance 友好的十进制字符串。
+
+    避免把整数数量 33216.0 序列化成 "33216.0"，导致
+    quantityPrecision=0 的交易对被 Binance 拒绝。
+    """
+    decimal_value = Decimal(str(value))
+    if decimal_value == decimal_value.to_integral_value():
+        return str(decimal_value.quantize(Decimal("1")))
+    return format(decimal_value.normalize(), "f")
+
+
+def _extract_response_detail(response) -> str:
+    """提取 Binance 错误响应正文，便于定位精度/余额等 400 问题。"""
+    try:
+        return response.text[:500]
+    except Exception:
+        return ""
 
 
 # ============================================================
@@ -182,6 +204,7 @@ class BinanceFapiClient:
         """
         url = f"{self.base_url}{path}"
         request_params = dict(params or {})
+        last_error_detail = ""
 
         for attempt in range(self.MAX_RETRIES):
             try:
@@ -212,7 +235,16 @@ class BinanceFapiClient:
                     raise IPBannedError("IP 被 Binance 封禁（HTTP 418）")
 
                 # 其他错误状态码
-                response.raise_for_status()
+                try:
+                    response.raise_for_status()
+                except requests.exceptions.HTTPError as exc:
+                    detail = _extract_response_detail(response)
+                    if detail:
+                        raise requests.exceptions.HTTPError(
+                            f"{exc}; Binance response: {detail}",
+                            response=response,
+                        ) from exc
+                    raise
 
                 # 检测网络恢复：之前有网络故障，现在请求成功
                 with self._network_lock:
@@ -232,6 +264,7 @@ class BinanceFapiClient:
                 # 标记网络故障（线程安全）
                 with self._network_lock:
                     self._network_was_down = True
+                last_error_detail = str(e)
                 backoff = calculate_backoff(attempt)
                 log.warning(
                     f"请求 {path} 失败（{type(e).__name__}），"
@@ -242,16 +275,21 @@ class BinanceFapiClient:
             except requests.exceptions.HTTPError as e:
                 # 非 429/418 的 HTTP 错误，也进行退避重试
                 backoff = calculate_backoff(attempt)
+                detail = str(e)
+                last_error_detail = detail
+                status_code = e.response.status_code if e.response is not None else "unknown"
                 log.warning(
-                    f"请求 {path} HTTP 错误（{e.response.status_code}），"
+                    f"请求 {path} HTTP 错误（{status_code}），"
+                    f"详情={detail}，"
                     f"第 {attempt + 1} 次重试，等待 {backoff}s"
                 )
                 time.sleep(backoff)
 
         # 重试耗尽
         log.error(f"API 请求 {path} 重试 {self.MAX_RETRIES} 次后仍失败")
+        detail_suffix = f": {last_error_detail}" if last_error_detail else ""
         raise MaxRetryExceededError(
-            f"API 请求 {path} 重试 {self.MAX_RETRIES} 次后仍失败"
+            f"API 请求 {path} 重试 {self.MAX_RETRIES} 次后仍失败{detail_suffix}"
         )
 
     # ------------------------------------------------------------------
@@ -287,8 +325,8 @@ class BinanceFapiClient:
             "side": side,
             "type": "LIMIT",
             "timeInForce": "GTC",
-            "price": str(price),
-            "quantity": str(quantity),
+            "price": format_decimal_param(price),
+            "quantity": format_decimal_param(quantity),
         }
         data = self._request_with_retry("POST", "/fapi/v1/order", params)
         return OrderResult(
@@ -315,7 +353,7 @@ class BinanceFapiClient:
             "symbol": symbol,
             "side": side,
             "type": "MARKET",
-            "quantity": str(quantity),
+            "quantity": format_decimal_param(quantity),
         }
         data = self._request_with_retry("POST", "/fapi/v1/order", params)
         return OrderResult(
@@ -349,12 +387,12 @@ class BinanceFapiClient:
             "symbol": symbol,
             "side": side,
             "type": "STOP_MARKET",
-            "triggerPrice": str(stop_price),
+            "triggerPrice": format_decimal_param(stop_price),
         }
         if close_position:
             params["closePosition"] = "true"
         else:
-            params["quantity"] = str(quantity)
+            params["quantity"] = format_decimal_param(quantity)
         data = self._request_with_retry("POST", "/fapi/v1/algoOrder", params)
         return OrderResult(
             order_id=str(data.get("algoId", "")),
@@ -387,12 +425,12 @@ class BinanceFapiClient:
             "symbol": symbol,
             "side": side,
             "type": "TAKE_PROFIT_MARKET",
-            "triggerPrice": str(stop_price),
+            "triggerPrice": format_decimal_param(stop_price),
         }
         if close_position:
             params["closePosition"] = "true"
         else:
-            params["quantity"] = str(quantity)
+            params["quantity"] = format_decimal_param(quantity)
         data = self._request_with_retry("POST", "/fapi/v1/algoOrder", params)
         return OrderResult(
             order_id=str(data.get("algoId", "")),
@@ -426,9 +464,9 @@ class BinanceFapiClient:
             "side": side,
             "type": "STOP",
             "timeInForce": "GTC",
-            "price": str(price),
-            "quantity": str(quantity),
-            "triggerPrice": str(stop_price),
+            "price": format_decimal_param(price),
+            "quantity": format_decimal_param(quantity),
+            "triggerPrice": format_decimal_param(stop_price),
         }
         data = self._request_with_retry("POST", "/fapi/v1/algoOrder", params)
         return OrderResult(
@@ -463,9 +501,9 @@ class BinanceFapiClient:
             "side": side,
             "type": "TAKE_PROFIT",
             "timeInForce": "GTC",
-            "price": str(price),
-            "quantity": str(quantity),
-            "triggerPrice": str(stop_price),
+            "price": format_decimal_param(price),
+            "quantity": format_decimal_param(quantity),
+            "triggerPrice": format_decimal_param(stop_price),
         }
         data = self._request_with_retry("POST", "/fapi/v1/algoOrder", params)
         return OrderResult(
@@ -527,6 +565,30 @@ class BinanceFapiClient:
             total_unrealized_pnl=float(data.get("totalUnrealizedProfit", 0)),
             raw=data,
         )
+
+    def get_user_trades(
+        self,
+        symbol: str,
+        start_time: Optional[int] = None,
+        end_time: Optional[int] = None,
+        limit: int = 1000,
+    ) -> List[dict]:
+        """
+        获取指定交易对的账户成交历史。
+
+        用于同步 Binance 服务端条件单触发后的真实平仓成交，供本地
+        MemoryStore 和策略进化使用。
+        """
+        params: dict = {
+            "symbol": symbol,
+            "limit": limit,
+        }
+        if start_time is not None:
+            params["startTime"] = start_time
+        if end_time is not None:
+            params["endTime"] = end_time
+        data = self._request_with_retry("GET", "/fapi/v1/userTrades", params)
+        return data if isinstance(data, list) else []
 
     def cancel_all_orders(self, symbol: Optional[str] = None) -> int:
         """

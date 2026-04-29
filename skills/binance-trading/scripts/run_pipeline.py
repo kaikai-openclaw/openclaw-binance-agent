@@ -29,6 +29,7 @@ from src.infra.memory_store import MemoryStore
 from src.infra.rate_limiter import RateLimiter
 from src.infra.risk_controller import RiskController
 from src.infra.state_store import StateStore
+from src.infra.trade_sync import BinanceTradeSyncer
 from src.integrations.trading_agents_adapter import (
     create_trading_agents_analyzer,
 )
@@ -143,6 +144,7 @@ def main():
     account_provider = make_account_provider(fapi_client, paper_mode)
     market_price_provider = make_market_price_provider(public_client)
     trading_rule_provider = LazyBinanceTradingRuleProvider(public_client)
+    trade_syncer = BinanceTradeSyncer(fapi_client, memory_store)
 
     # 从进化记忆读取调优参数
     rating_threshold, risk_ratio = memory_store.get_evolved_params()
@@ -252,6 +254,7 @@ def main():
             output_schema=load_schema("skill5_output.json"),
             memory_store=memory_store,
             account_state_provider=account_provider,
+            trade_syncer=trade_syncer,
         )
         s5_input_id = state_store.save("skill5_input", {"input_state_id": s4_id})
         s5_id = skill5.execute(s5_input_id)

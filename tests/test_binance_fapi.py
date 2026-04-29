@@ -24,6 +24,7 @@ from src.infra.binance_fapi import (
     AccountInfo,
     PositionRisk,
     calculate_backoff,
+    format_decimal_param,
 )
 from src.infra.rate_limiter import RateLimiter
 
@@ -252,6 +253,35 @@ class TestRequestWithRetry:
         assert second_params["recvWindow"] == client.DEFAULT_RECV_WINDOW
         assert first_params["signature"] != second_params["signature"]
 
+    @patch("time.sleep", return_value=None)
+    def test_http_error_includes_binance_response_body(self, mock_sleep):
+        """HTTP 错误耗尽重试后应保留 Binance 原始错误正文。"""
+        client, rl = self._make_client()
+        mock_resp = MagicMock()
+        mock_resp.status_code = 400
+        mock_resp.text = '{"code":-1111,"msg":"Precision is over the maximum defined"}'
+        http_error = requests.exceptions.HTTPError("400 Client Error", response=mock_resp)
+        mock_resp.raise_for_status.side_effect = http_error
+
+        with patch.object(client._session, "request", return_value=mock_resp):
+            with pytest.raises(MaxRetryExceededError) as exc:
+                client._request_with_retry("POST", "/fapi/v1/order")
+
+        assert "Precision is over the maximum defined" in str(exc.value)
+
+
+class TestFormatDecimalParam:
+    """Binance 下单参数十进制格式化测试。"""
+
+    def test_integer_float_drops_decimal_point(self):
+        """PUMPUSDT 等整数数量交易对应发送 33216 而不是 33216.0。"""
+        assert format_decimal_param(33216.0) == "33216"
+
+    def test_fractional_value_keeps_required_decimals(self):
+        """非整数数量保留有效小数并去掉尾随 0。"""
+        assert format_decimal_param(0.1000) == "0.1"
+        assert format_decimal_param("0.0012300") == "0.00123"
+
 
 # ============================================================
 # 公开 API 方法测试
@@ -287,6 +317,40 @@ class TestSetLeverage:
         assert kwargs["data"]["leverage"] == 10
 
 
+class TestGetUserTrades:
+    """get_user_trades 测试。"""
+
+    @patch("time.sleep", return_value=None)
+    def test_get_user_trades_uses_user_trades_endpoint(self, mock_sleep):
+        """账户成交历史应调用 Binance userTrades 端点。"""
+        rl = MagicMock(spec=RateLimiter)
+        client = BinanceFapiClient("key", "secret", rate_limiter=rl)
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = [
+            {"symbol": "BTCUSDT", "id": 1, "realizedPnl": "12.5"}
+        ]
+        mock_resp.raise_for_status = MagicMock()
+
+        with patch.object(client._session, "request", return_value=mock_resp) as req:
+            result = client.get_user_trades(
+                "BTCUSDT",
+                start_time=1000,
+                end_time=2000,
+                limit=500,
+            )
+
+        assert result == [{"symbol": "BTCUSDT", "id": 1, "realizedPnl": "12.5"}]
+        _, kwargs = req.call_args
+        assert kwargs["method"] == "GET"
+        assert kwargs["url"].endswith("/fapi/v1/userTrades")
+        assert kwargs["params"]["symbol"] == "BTCUSDT"
+        assert kwargs["params"]["startTime"] == 1000
+        assert kwargs["params"]["endTime"] == 2000
+        assert kwargs["params"]["limit"] == 500
+
+
 class TestPlaceLimitOrder:
     """place_limit_order 测试。"""
 
@@ -319,6 +383,32 @@ class TestPlaceLimitOrder:
         assert result.quantity == 0.1
         assert result.status == "NEW"
 
+    @patch("time.sleep", return_value=None)
+    def test_place_limit_order_formats_integer_quantity_for_pumpusdt(self, mock_sleep):
+        """整数精度交易对下单时 quantity 不能带 .0。"""
+        rl = MagicMock(spec=RateLimiter)
+        client = BinanceFapiClient("key", "secret", rate_limiter=rl)
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "orderId": 99003,
+            "symbol": "PUMPUSDT",
+            "side": "BUY",
+            "price": "0.004516",
+            "origQty": "33216",
+            "status": "NEW",
+        }
+        mock_resp.raise_for_status = MagicMock()
+
+        with patch.object(client._session, "request", return_value=mock_resp) as req:
+            client.place_limit_order("PUMPUSDT", "BUY", 0.0045160, 33216.0)
+
+        data = req.call_args.kwargs["data"]
+        assert data["symbol"] == "PUMPUSDT"
+        assert data["quantity"] == "33216"
+        assert data["price"] == "0.004516"
+
 
 class TestPlaceMarketOrder:
     """place_market_order 测试。"""
@@ -348,6 +438,30 @@ class TestPlaceMarketOrder:
         assert result.order_id == "99002"
         assert result.price == 3000.50
         assert result.status == "FILLED"
+
+    @patch("time.sleep", return_value=None)
+    def test_place_market_order_formats_integer_quantity(self, mock_sleep):
+        """市价平仓数量也应按 Binance 十进制格式发送。"""
+        rl = MagicMock(spec=RateLimiter)
+        client = BinanceFapiClient("key", "secret", rate_limiter=rl)
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "orderId": 99004,
+            "symbol": "PUMPUSDT",
+            "side": "SELL",
+            "avgPrice": "0.004600",
+            "origQty": "33216",
+            "status": "FILLED",
+        }
+        mock_resp.raise_for_status = MagicMock()
+
+        with patch.object(client._session, "request", return_value=mock_resp) as req:
+            client.place_market_order("PUMPUSDT", "SELL", 33216.0)
+
+        data = req.call_args.kwargs["data"]
+        assert data["quantity"] == "33216"
 
 
 class TestGetPositions:

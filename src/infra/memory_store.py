@@ -72,6 +72,14 @@ class MemoryStore:
         ON reflection_logs(created_at DESC)
     """
 
+    _CREATE_TRADE_SYNC_KEYS_TABLE_SQL = """
+        CREATE TABLE IF NOT EXISTS trade_sync_keys (
+            sync_key        TEXT PRIMARY KEY,
+            trade_record_id INTEGER,
+            created_at      TEXT NOT NULL
+        )
+    """
+
     def __init__(self, db_path: str = "data/memory_store.db") -> None:
         """
         初始化 MemoryStore，创建数据库连接并确保表结构存在。
@@ -95,6 +103,7 @@ class MemoryStore:
         cursor.execute(self._CREATE_TRADES_INDEX_SQL)
         cursor.execute(self._CREATE_REFLECTIONS_TABLE_SQL)
         cursor.execute(self._CREATE_REFLECTIONS_INDEX_SQL)
+        cursor.execute(self._CREATE_TRADE_SYNC_KEYS_TABLE_SQL)
         self._conn.commit()
 
     def record_trade(self, trade: TradeRecord) -> None:
@@ -122,6 +131,50 @@ class MemoryStore:
             ),
         )
         self._conn.commit()
+
+    def record_trade_once(self, trade: TradeRecord, sync_key: str) -> bool:
+        """
+        幂等存储一笔外部同步来的已平仓交易。
+
+        参数:
+            trade: 交易记录数据对象
+            sync_key: 外部成交的唯一键，如 binance_user_trade:BTCUSDT:123
+
+        返回:
+            True 表示本次新写入，False 表示该 sync_key 已同步过。
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        with self._conn:
+            cursor = self._conn.execute(
+                "INSERT OR IGNORE INTO trade_sync_keys "
+                "(sync_key, trade_record_id, created_at) VALUES (?, ?, ?)",
+                (sync_key, None, now),
+            )
+            if cursor.rowcount == 0:
+                return False
+
+            trade_cursor = self._conn.execute(
+                "INSERT INTO trade_records "
+                "(symbol, direction, entry_price, exit_price, pnl_amount, "
+                "hold_duration_hours, rating_score, position_size_pct, closed_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    trade.symbol,
+                    trade.direction.value,
+                    trade.entry_price,
+                    trade.exit_price,
+                    trade.pnl_amount,
+                    trade.hold_duration_hours,
+                    trade.rating_score,
+                    trade.position_size_pct,
+                    trade.closed_at.isoformat(),
+                ),
+            )
+            self._conn.execute(
+                "UPDATE trade_sync_keys SET trade_record_id = ? WHERE sync_key = ?",
+                (trade_cursor.lastrowid, sync_key),
+            )
+            return True
 
     def get_recent_trades(self, limit: int = 50) -> List[TradeRecord]:
         """

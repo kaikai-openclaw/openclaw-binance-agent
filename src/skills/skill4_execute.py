@@ -146,6 +146,9 @@ class Skill4Execute(BaseSkill):
                 account, binance_client=self._binance_client
             )
 
+        # 清理服务端触发后遗留的孤儿条件单，避免下一次触发反向开仓。
+        self._cleanup_orphan_algo_orders(account)
+
         # 对已经存在的实盘持仓补齐交易所侧保护，避免无 SL/TP 裸奔。
         self._protect_existing_positions(account)
 
@@ -824,7 +827,8 @@ class Skill4Execute(BaseSkill):
         """
         在 Binance 服务端挂止损 + 止盈条件单（双重保护）。
 
-        仅在入场成交后调用，使用实际持仓数量，避免数量不匹配。
+        仅在入场成交后调用，使用 closePosition=True 让 Binance 按当前仓位
+        全平，避免另一侧残留保护单在仓位已平后反向开仓。
         任一条件单挂载失败不影响另一张，本地轮询作为兜底。
 
         返回:
@@ -850,10 +854,11 @@ class Skill4Execute(BaseSkill):
                 side=close_side,
                 quantity=quantity,
                 stop_price=stop_loss_price,
+                close_position=True,
             )
             log.info(
                 f"[{self.name}] {symbol} 服务端止损单已挂载: "
-                f"triggerPrice={stop_loss_price}, qty={quantity}, "
+                f"triggerPrice={stop_loss_price}, closePosition=true, "
                 f"algoId={sl_result.order_id}"
             )
             success = True
@@ -870,10 +875,11 @@ class Skill4Execute(BaseSkill):
                 side=close_side,
                 quantity=quantity,
                 stop_price=take_profit_price,
+                close_position=True,
             )
             log.info(
                 f"[{self.name}] {symbol} 服务端止盈单已挂载: "
-                f"triggerPrice={take_profit_price}, qty={quantity}, "
+                f"triggerPrice={take_profit_price}, closePosition=true, "
                 f"algoId={tp_result.order_id}"
             )
             success = True
@@ -929,6 +935,7 @@ class Skill4Execute(BaseSkill):
                     f"当前价={current_price}, 止损价={stop_loss_price}"
                 )
                 self._risk_controller.record_stop_loss(symbol, direction.value)
+                self._cancel_algo_orders_safe(symbol)
                 self._close_position(
                     symbol, close_side, quantity, "existing_stop_loss", time.monotonic()
                 )
@@ -939,6 +946,7 @@ class Skill4Execute(BaseSkill):
                     f"[{self.name}] {symbol} 已有持仓触发保护性止盈: "
                     f"当前价={current_price}, 止盈价={take_profit_price}"
                 )
+                self._cancel_algo_orders_safe(symbol)
                 self._close_position(
                     symbol, close_side, quantity, "existing_take_profit", time.monotonic()
                 )
@@ -998,6 +1006,51 @@ class Skill4Execute(BaseSkill):
                 place_sl=not has_sl,
                 place_tp=not has_tp,
             )
+
+    def _cleanup_orphan_algo_orders(self, account: AccountState) -> None:
+        """
+        清理无对应持仓的服务端保护条件单。
+
+        非阻塞生产路径下，止损/止盈由 Binance 服务端触发；另一侧条件单
+        可能在本地进程未监控时残留。每轮执行开始时按当前持仓扫描一次，
+        对无持仓币种的保护单整组撤销，避免后续触发反向开仓。
+        """
+        if self._risk_controller.is_paper_mode() or account.is_paper_mode:
+            return
+
+        active_symbols = self._active_position_symbols(account)
+        try:
+            algo_orders = self._binance_client.get_open_algo_orders()
+        except Exception as exc:
+            log.warning(f"[{self.name}] 查询全量 Algo 条件单失败: {exc}")
+            return
+
+        orphan_symbols: set[str] = set()
+        for order in algo_orders:
+            symbol = str(order.get("symbol", ""))
+            if not symbol or symbol in active_symbols:
+                continue
+            if self._looks_like_protection_algo_order(order):
+                orphan_symbols.add(symbol)
+
+        for symbol in sorted(orphan_symbols):
+            log.warning(f"[{self.name}] {symbol} 无持仓但存在保护条件单，清理残留")
+            self._cancel_algo_orders_safe(symbol)
+
+    @staticmethod
+    def _active_position_symbols(account: AccountState) -> set[str]:
+        """从账户状态提取当前有持仓的 symbol。"""
+        symbols: set[str] = set()
+        for pos in account.positions or []:
+            if isinstance(pos, dict):
+                symbol = str(pos.get("symbol", ""))
+                quantity = abs(float(pos.get("quantity", 0) or 0))
+            else:
+                symbol = str(getattr(pos, "symbol", ""))
+                quantity = abs(float(getattr(pos, "quantity", 0) or 0))
+            if symbol and quantity > 0:
+                symbols.add(symbol)
+        return symbols
 
     def _ensure_symbol_leverage(self, symbol: str) -> bool:
         """将交易所侧 symbol 杠杆同步为 Skill-4 目标杠杆。"""
@@ -1159,6 +1212,7 @@ class Skill4Execute(BaseSkill):
                     side=close_side,
                     quantity=quantity,
                     stop_price=stop_loss_price,
+                    close_position=True,
                 )
             except Exception as exc:
                 log.warning(f"[{self.name}] {symbol} 补挂已有持仓止损失败: {exc}")
@@ -1170,6 +1224,7 @@ class Skill4Execute(BaseSkill):
                     side=close_side,
                     quantity=quantity,
                     stop_price=take_profit_price,
+                    close_position=True,
                 )
             except Exception as exc:
                 log.warning(f"[{self.name}] {symbol} 补挂已有持仓止盈失败: {exc}")

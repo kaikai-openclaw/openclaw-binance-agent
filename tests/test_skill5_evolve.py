@@ -154,6 +154,7 @@ def _make_skill(
     state_store,
     memory_store,
     account=None,
+    trade_syncer=None,
 ) -> Skill5Evolve:
     """创建 Skill5Evolve 实例。"""
     if account is None:
@@ -165,6 +166,7 @@ def _make_skill(
         output_schema=OUTPUT_SCHEMA,
         memory_store=memory_store,
         account_state_provider=lambda: account,
+        trade_syncer=trade_syncer,
     )
 
 
@@ -215,6 +217,58 @@ class TestNormalExecution:
         skill = _make_skill(state_store, memory_store)
         result = skill.run({})
         uuid.UUID(result["state_id"], version=4)
+
+    def test_syncs_server_closed_trades_before_evolution(
+        self, state_store, memory_store
+    ):
+        """Skill-5 应在计算进化前同步 Binance 服务端平仓成交。"""
+        upstream = {
+            "state_id": str(uuid.uuid4()),
+            "execution_results": [
+                _make_execution_result(
+                    symbol="BTCUSDT",
+                    status="open",
+                    rating_score=8,
+                    position_size_pct=12.0,
+                )
+            ],
+            "is_paper_mode": False,
+        }
+        sid = state_store.save("skill4_execute", upstream)
+        trade_syncer = MagicMock()
+        trade_syncer.sync_closed_trades.return_value = 1
+
+        skill = _make_skill(
+            state_store,
+            memory_store,
+            trade_syncer=trade_syncer,
+        )
+        skill.run({"input_state_id": sid})
+
+        trade_syncer.sync_closed_trades.assert_called_once()
+        kwargs = trade_syncer.sync_closed_trades.call_args.kwargs
+        assert kwargs["symbols"] == {"BTCUSDT"}
+        assert kwargs["metadata_by_symbol"]["BTCUSDT"]["rating_score"] == 8
+        assert kwargs["metadata_by_symbol"]["BTCUSDT"]["position_size_pct"] == 12.0
+
+    def test_sync_symbols_include_current_positions(
+        self, state_store, memory_store
+    ):
+        """没有本轮执行结果时，也应尝试同步当前持仓币种。"""
+        account = _make_account(positions=[_make_position(symbol="ETHUSDT")])
+        trade_syncer = MagicMock()
+        trade_syncer.sync_closed_trades.return_value = 0
+
+        skill = _make_skill(
+            state_store,
+            memory_store,
+            account=account,
+            trade_syncer=trade_syncer,
+        )
+        skill.run({})
+
+        kwargs = trade_syncer.sync_closed_trades.call_args.kwargs
+        assert kwargs["symbols"] == {"ETHUSDT"}
 
 
 # ══════════════════════════════════════════════════════════

@@ -108,6 +108,16 @@ class TestRecordAndGetTrades:
         assert trades[0].direction == TradeDirection.SHORT
         assert trades[0].pnl_amount == -100.0
 
+    def test_record_trade_once_is_idempotent(self, store):
+        """相同 sync_key 的外部成交只应写入一次。"""
+        trade = _make_trade()
+
+        assert store.record_trade_once(trade, "binance_user_order:BTCUSDT:1") is True
+        assert store.record_trade_once(trade, "binance_user_order:BTCUSDT:1") is False
+
+        trades = store.get_recent_trades(limit=10)
+        assert len(trades) == 1
+
 
 class TestComputeStats:
     """测试 compute_stats() 策略统计计算。"""

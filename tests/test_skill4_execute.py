@@ -869,6 +869,126 @@ class TestEmptyPlans:
         mock_binance.place_stop_market_order.assert_not_called()
         mock_binance.place_take_profit_market_order.assert_not_called()
 
+    def test_existing_position_with_algo_service_orders_is_not_duplicated(
+        self, state_store, mock_binance, mock_risk_controller
+    ):
+        """Binance Algo Service 省略 type 字段时，也不应重复补挂。"""
+        account = _make_account(
+            positions=[{
+                "symbol": "BTCUSDT",
+                "direction": "long",
+                "quantity": 0.001,
+                "entry_price": 76750.0,
+            }]
+        )
+        mock_binance.get_position_risk.return_value = _make_position_risk(
+            symbol="BTCUSDT",
+            position_amt=0.001,
+            entry_price=76750.0,
+            mark_price=76500.0,
+        )
+        mock_binance.get_open_algo_orders.return_value = [
+            {
+                "algoId": 4000001192781510,
+                "algoType": "CONDITIONAL",
+                "orderType": "STOP_MARKET",
+                "side": "SELL",
+                "symbol": "BTCUSDT",
+                "triggerPrice": "74447.5",
+                "quantity": "0.0",
+                "closePosition": True,
+                "algoStatus": "NEW",
+            },
+            {
+                "algoId": 4000001192781532,
+                "algoType": "CONDITIONAL",
+                "orderType": "TAKE_PROFIT_MARKET",
+                "side": "SELL",
+                "symbol": "BTCUSDT",
+                "triggerPrice": "81355.0",
+                "quantity": "0.0",
+                "closePosition": True,
+                "algoStatus": "NEW",
+            },
+        ]
+        upstream = _make_upstream_data([])
+        state_id = state_store.save("skill3_strategy", upstream)
+
+        skill = _make_skill(
+            state_store,
+            mock_binance,
+            mock_risk_controller,
+            account=account,
+        )
+        skill.run({"input_state_id": state_id})
+
+        mock_binance.cancel_all_algo_orders.assert_not_called()
+        mock_binance.place_stop_market_order.assert_not_called()
+        mock_binance.place_take_profit_market_order.assert_not_called()
+
+    def test_existing_position_with_duplicate_algo_service_orders_is_replaced(
+        self, state_store, mock_binance, mock_risk_controller
+    ):
+        """同一保护价出现多张 Algo 条件单时，应清理后重挂单组保护。"""
+        account = _make_account(
+            positions=[{
+                "symbol": "BTCUSDT",
+                "direction": "long",
+                "quantity": 0.001,
+                "entry_price": 76750.0,
+            }]
+        )
+        mock_binance.get_position_risk.return_value = _make_position_risk(
+            symbol="BTCUSDT",
+            position_amt=0.001,
+            entry_price=76750.0,
+            mark_price=76500.0,
+        )
+        mock_binance.get_open_algo_orders.return_value = [
+            {
+                "algoType": "CONDITIONAL",
+                "side": "SELL",
+                "triggerPrice": "74447.5",
+                "quantity": "0.001",
+            },
+            {
+                "algoType": "CONDITIONAL",
+                "side": "SELL",
+                "triggerPrice": "74447.5",
+                "quantity": "0.001",
+            },
+            {
+                "algoType": "CONDITIONAL",
+                "side": "SELL",
+                "triggerPrice": "81355.0",
+                "quantity": "0.001",
+            },
+        ]
+        upstream = _make_upstream_data([])
+        state_id = state_store.save("skill3_strategy", upstream)
+
+        skill = _make_skill(
+            state_store,
+            mock_binance,
+            mock_risk_controller,
+            account=account,
+        )
+        skill.run({"input_state_id": state_id})
+
+        mock_binance.cancel_all_algo_orders.assert_called_with(symbol="BTCUSDT")
+        mock_binance.place_stop_market_order.assert_called_once_with(
+            symbol="BTCUSDT",
+            side="SELL",
+            quantity=0.001,
+            stop_price=74447.5,
+        )
+        mock_binance.place_take_profit_market_order.assert_called_once_with(
+            symbol="BTCUSDT",
+            side="SELL",
+            quantity=0.001,
+            stop_price=81355.0,
+        )
+
     def test_existing_position_with_wrong_algo_prices_is_replaced(
         self, state_store, mock_binance, mock_risk_controller
     ):
@@ -1067,6 +1187,54 @@ class TestServerSideSlTp:
         mock_binance.place_stop_market_order.assert_called_once()
         call_args = mock_binance.place_stop_market_order.call_args
         assert call_args.kwargs.get("quantity") == 8.5 or call_args[1].get("quantity") == 8.5
+
+    def test_sl_tp_trigger_prices_are_rounded_by_tick_size(
+        self, state_store, mock_binance, mock_risk_controller
+    ):
+        """服务端保护单触发价应按 PRICE_FILTER.tickSize 规整后提交。"""
+        rule = SymbolTradingRule(
+            symbol="ZKPUSDT",
+            step_size=Decimal("1"),
+            min_qty=Decimal("1"),
+            min_notional=Decimal("5"),
+            tick_size=Decimal("0.0000100"),
+        )
+        mock_binance.get_position_risk.return_value = _make_position_risk(
+            symbol="ZKPUSDT",
+            mark_price=0.095,
+            position_amt=989.0,
+            entry_price=0.0952514054601,
+        )
+
+        plan = _make_trade_plan(
+            symbol="ZKPUSDT",
+            stop_loss_price=0.09239386,
+            take_profit_price=0.10096649,
+        )
+        upstream = _make_upstream_data([plan])
+        state_id = state_store.save("skill3_strategy", upstream)
+
+        skill = _make_skill(
+            state_store,
+            mock_binance,
+            mock_risk_controller,
+            trading_rule_provider=lambda symbol: rule if symbol == "ZKPUSDT" else None,
+            monitor_until_close=False,
+        )
+        skill.run({"input_state_id": state_id})
+
+        mock_binance.place_stop_market_order.assert_called_once_with(
+            symbol="ZKPUSDT",
+            side="SELL",
+            quantity=989.0,
+            stop_price=0.09239,
+        )
+        mock_binance.place_take_profit_market_order.assert_called_once_with(
+            symbol="ZKPUSDT",
+            side="SELL",
+            quantity=989.0,
+            stop_price=0.10097,
+        )
 
     def test_algo_orders_cleaned_on_stop_loss(
         self, state_store, mock_binance, mock_risk_controller

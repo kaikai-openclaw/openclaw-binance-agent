@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from decimal import Decimal, ROUND_DOWN
+from decimal import Decimal, ROUND_DOWN, ROUND_HALF_UP
 from typing import Any, Callable, Dict, Optional
 
 log = logging.getLogger(__name__)
@@ -25,6 +25,7 @@ class SymbolTradingRule:
     step_size: Decimal
     min_qty: Decimal
     min_notional: Decimal
+    tick_size: Decimal = Decimal("0")
 
 
 TradingRuleProvider = Callable[[str], Optional[SymbolTradingRule]]
@@ -46,6 +47,7 @@ def parse_symbol_trading_rule(symbol_info: Dict[str, Any]) -> Optional[SymbolTra
     lot_size = None
     market_lot_size = None
     notional_filter = None
+    price_filter = None
 
     for f in filters:
         filter_type = f.get("filterType")
@@ -55,6 +57,8 @@ def parse_symbol_trading_rule(symbol_info: Dict[str, Any]) -> Optional[SymbolTra
             market_lot_size = f
         elif filter_type in {"MIN_NOTIONAL", "NOTIONAL"}:
             notional_filter = f
+        elif filter_type == "PRICE_FILTER":
+            price_filter = f
 
     qty_filter = lot_size or market_lot_size
     if qty_filter is None:
@@ -71,12 +75,16 @@ def parse_symbol_trading_rule(symbol_info: Dict[str, Any]) -> Optional[SymbolTra
             _to_decimal(notional_filter.get("minNotional"), "0"),
             DEFAULT_MIN_NOTIONAL_USDT,
         )
+    tick_size = Decimal("0")
+    if price_filter is not None:
+        tick_size = _to_decimal(price_filter.get("tickSize"), "0")
 
     return SymbolTradingRule(
         symbol=symbol,
         step_size=step_size,
         min_qty=min_qty,
         min_notional=min_notional,
+        tick_size=tick_size,
     )
 
 
@@ -120,6 +128,13 @@ def floor_quantity_to_step(quantity: float, step_size: Decimal) -> Decimal:
     return steps * step_size
 
 
+def round_price_to_tick(price: float, tick_size: Decimal) -> Decimal:
+    """按 tickSize 规整触发价，避免 Binance PRICE_FILTER 拒单。"""
+    raw_price = Decimal(str(price))
+    ticks = (raw_price / tick_size).to_integral_value(rounding=ROUND_HALF_UP)
+    return ticks * tick_size
+
+
 def normalize_order_quantity(
     *,
     symbol: str,
@@ -156,6 +171,32 @@ def normalize_order_quantity(
             symbol,
             notional,
             min_notional,
+        )
+        return None
+
+    return float(adjusted)
+
+
+def normalize_order_price(
+    *,
+    symbol: str,
+    price: float,
+    rule: SymbolTradingRule,
+) -> Optional[float]:
+    """将价格按 PRICE_FILTER.tickSize 规整。"""
+    if price <= 0:
+        return None
+    if rule.tick_size <= 0:
+        return price
+
+    adjusted = round_price_to_tick(price, rule.tick_size)
+    if adjusted <= 0:
+        log.warning(
+            "%s 价格 %.12g 按 tickSize=%s 规整后为 %s，跳过",
+            symbol,
+            price,
+            rule.tick_size,
+            adjusted,
         )
         return None
 

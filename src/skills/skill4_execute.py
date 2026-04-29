@@ -21,6 +21,7 @@ from src.infra.binance_fapi import BinanceFapiClient
 from src.infra.exchange_rules import (
     TradingRuleProvider,
     normalize_order_quantity,
+    normalize_order_price,
 )
 from src.infra.risk_controller import RiskController
 from src.infra.state_store import StateStore
@@ -92,7 +93,7 @@ class Skill4Execute(BaseSkill):
             poll_interval: 持仓监控轮询间隔（秒），默认 30，测试时可设为 0
             leverage: 默认杠杆倍数
             trading_rule_provider: Binance 交易规则提供者；提供时执行前按 LOT_SIZE
-                兜底规整 quantity，并校验最小名义金额（至少 5 USDT）
+                兜底规整 quantity，并按 PRICE_FILTER.tickSize 规整触发价
             monitor_until_close: 是否在本轮阻塞监控到平仓；定时任务默认 False，
                 由下一轮任务继续管理已有持仓
             entry_confirm_timeout: 非阻塞模式下等待入场成交的最长秒数
@@ -806,6 +807,17 @@ class Skill4Execute(BaseSkill):
             True 表示至少一张条件单挂载成功
         """
         success = False
+        stop_loss_price = self._normalize_price_for_exchange(
+            symbol,
+            stop_loss_price,
+        )
+        take_profit_price = self._normalize_price_for_exchange(
+            symbol,
+            take_profit_price,
+        )
+        if stop_loss_price is None or take_profit_price is None:
+            log.warning(f"[{self.name}] {symbol} 服务端保护单价格规整失败，跳过挂载")
+            return False
 
         # 挂止损单 (STOP_MARKET)
         try:
@@ -914,22 +926,34 @@ class Skill4Execute(BaseSkill):
                 log.warning(f"[{self.name}] {symbol} 查询 Algo 条件单失败: {exc}")
                 algo_orders = []
 
-            has_sl = self._has_valid_algo_order(
+            valid_sl_count = self._valid_algo_order_count(
                 algo_orders,
                 close_side,
                 "STOP_MARKET",
                 stop_loss_price,
+                quantity,
             )
-            has_tp = self._has_valid_algo_order(
+            valid_tp_count = self._valid_algo_order_count(
                 algo_orders,
                 close_side,
                 "TAKE_PROFIT_MARKET",
                 take_profit_price,
+                quantity,
             )
-            if has_sl and has_tp:
+            protection_order_count = self._protection_algo_order_count(
+                algo_orders,
+                close_side,
+            )
+            if (
+                valid_sl_count == 1
+                and valid_tp_count == 1
+                and protection_order_count == 2
+            ):
                 continue
 
-            if self._has_protection_algo_order(algo_orders, close_side):
+            has_sl = valid_sl_count > 0
+            has_tp = valid_tp_count > 0
+            if protection_order_count > 0:
                 log.warning(
                     f"[{self.name}] {symbol} 已有保护单触发价不匹配，撤销后重挂"
                 )
@@ -979,32 +1003,67 @@ class Skill4Execute(BaseSkill):
             entry_price * (1 - EXISTING_POSITION_TAKE_PROFIT_PCT),
         )
 
-    def _has_valid_algo_order(
+    def _valid_algo_order_count(
         self,
         orders: list,
         side: str,
         order_type: str,
         expected_trigger_price: float,
-    ) -> bool:
+        expected_quantity: float,
+    ) -> int:
+        count = 0
         for order in orders:
             if (
                 str(order.get("side", "")).upper() == side
-                and str(order.get("type", "")).upper() == order_type
+                and self._algo_order_type_matches(order, order_type)
                 and self._trigger_price_matches(order, expected_trigger_price)
+                and self._quantity_matches(order, expected_quantity)
             ):
-                return True
-        return False
+                count += 1
+        return count
+
+    def _protection_algo_order_count(self, orders: list, side: str) -> int:
+        count = 0
+        for order in orders:
+            if (
+                str(order.get("side", "")).upper() == side
+                and self._looks_like_protection_algo_order(order)
+            ):
+                count += 1
+        return count
 
     @staticmethod
-    def _has_protection_algo_order(orders: list, side: str) -> bool:
+    def _algo_order_type_matches(order: dict, expected_type: str) -> bool:
+        raw_type = (
+            order.get("type")
+            or order.get("origType")
+            or order.get("orderType")
+        )
+        if raw_type:
+            return str(raw_type).upper() == expected_type
+
+        # Binance Algo Service open-order responses may omit STOP_MARKET /
+        # TAKE_PROFIT_MARKET and only expose algoType plus triggerPrice.
+        return (
+            str(order.get("algoType", "")).upper() == "CONDITIONAL"
+            and bool(order.get("triggerPrice") or order.get("stopPrice"))
+        )
+
+    @staticmethod
+    def _looks_like_protection_algo_order(order: dict) -> bool:
         protection_types = {"STOP_MARKET", "TAKE_PROFIT_MARKET"}
-        for order in orders:
-            if (
-                str(order.get("side", "")).upper() == side
-                and str(order.get("type", "")).upper() in protection_types
-            ):
-                return True
-        return False
+        raw_type = (
+            order.get("type")
+            or order.get("origType")
+            or order.get("orderType")
+        )
+        if raw_type:
+            return str(raw_type).upper() in protection_types
+
+        return (
+            str(order.get("algoType", "")).upper() == "CONDITIONAL"
+            and bool(order.get("triggerPrice") or order.get("stopPrice"))
+        )
 
     @staticmethod
     def _trigger_price_matches(order: dict, expected_price: float) -> bool:
@@ -1024,6 +1083,29 @@ class Skill4Execute(BaseSkill):
         diff_pct = abs(actual_price - expected_price) / expected_price
         return diff_pct <= PROTECTION_PRICE_TOLERANCE_PCT
 
+    @staticmethod
+    def _quantity_matches(order: dict, expected_quantity: float) -> bool:
+        # closePosition 条件单由交易所按当前仓位全平，返回 quantity=0。
+        # 这类保护单天然匹配当前持仓数量，不能按 quantity 字段判为不匹配。
+        if order.get("closePosition") is True:
+            return True
+
+        raw_quantity = (
+            order.get("quantity")
+            or order.get("origQty")
+            or order.get("origQuantity")
+        )
+        if raw_quantity in (None, ""):
+            return True
+        try:
+            actual_quantity = abs(float(raw_quantity))
+        except (TypeError, ValueError):
+            return False
+        if expected_quantity <= 0:
+            return False
+        diff_pct = abs(actual_quantity - expected_quantity) / expected_quantity
+        return diff_pct <= PROTECTION_PRICE_TOLERANCE_PCT
+
     def _place_missing_existing_protection(
         self,
         symbol: str,
@@ -1034,6 +1116,18 @@ class Skill4Execute(BaseSkill):
         place_sl: bool,
         place_tp: bool,
     ) -> None:
+        stop_loss_price = self._normalize_price_for_exchange(
+            symbol,
+            stop_loss_price,
+        )
+        take_profit_price = self._normalize_price_for_exchange(
+            symbol,
+            take_profit_price,
+        )
+        if stop_loss_price is None or take_profit_price is None:
+            log.warning(f"[{self.name}] {symbol} 补挂保护单价格规整失败，跳过")
+            return
+
         if place_sl:
             try:
                 self._binance_client.place_stop_market_order(
@@ -1079,6 +1173,31 @@ class Skill4Execute(BaseSkill):
         return normalize_order_quantity(
             symbol=symbol,
             quantity=quantity,
+            price=price,
+            rule=rule,
+        )
+
+    def _normalize_price_for_exchange(
+        self,
+        symbol: str,
+        price: float,
+    ) -> Optional[float]:
+        """执行前按 Binance PRICE_FILTER.tickSize 规整价格。"""
+        if self._trading_rule_provider is None:
+            return price
+
+        try:
+            rule = self._trading_rule_provider(symbol)
+        except Exception as exc:
+            log.warning(f"[{self.name}] 获取 {symbol} 交易规则失败: {exc}")
+            return None
+
+        if rule is None:
+            log.warning(f"[{self.name}] {symbol} 缺少交易规则，拒绝执行")
+            return None
+
+        return normalize_order_price(
+            symbol=symbol,
             price=price,
             rule=rule,
         )

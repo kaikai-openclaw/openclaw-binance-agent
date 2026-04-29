@@ -4,6 +4,7 @@ from src.infra.exchange_rules import (
     BinanceTradingRules,
     SymbolTradingRule,
     normalize_order_quantity,
+    normalize_order_price,
 )
 
 
@@ -48,6 +49,7 @@ def test_parse_rules_from_exchange_info_uses_lot_size_and_notional():
         "symbols": [{
             "symbol": "DAMUSDT",
             "filters": [
+                {"filterType": "PRICE_FILTER", "tickSize": "0.0000100"},
                 {"filterType": "LOT_SIZE", "minQty": "1", "stepSize": "1"},
                 {"filterType": "MIN_NOTIONAL", "minNotional": "5"},
             ],
@@ -59,3 +61,25 @@ def test_parse_rules_from_exchange_info_uses_lot_size_and_notional():
     assert rule is not None
     assert rule.step_size == Decimal("1")
     assert rule.min_notional == Decimal("5")
+    assert rule.tick_size == Decimal("0.0000100")
+
+
+def test_price_is_rounded_to_tick_size():
+    rule = SymbolTradingRule(
+        symbol="ZKPUSDT",
+        step_size=Decimal("1"),
+        min_qty=Decimal("1"),
+        min_notional=Decimal("5"),
+        tick_size=Decimal("0.0000100"),
+    )
+
+    assert normalize_order_price(
+        symbol="ZKPUSDT",
+        price=0.10096649,
+        rule=rule,
+    ) == 0.10097
+    assert normalize_order_price(
+        symbol="ZKPUSDT",
+        price=0.09239386,
+        rule=rule,
+    ) == 0.09239

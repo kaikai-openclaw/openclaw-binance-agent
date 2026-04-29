@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.infra.state_store import StateStore
 from src.infra.binance_fapi import BinanceFapiClient
 from src.infra.binance_public import BinancePublicClient
+from src.infra.exchange_rules import LazyBinanceTradingRuleProvider
 from src.infra.rate_limiter import RateLimiter
 from src.infra.risk_controller import RiskController
 from src.models.types import AccountState
@@ -51,6 +52,7 @@ fapi_client = BinanceFapiClient(
 )
 
 public_client = BinancePublicClient(rate_limiter=RateLimiter())
+trading_rule_provider = LazyBinanceTradingRuleProvider(public_client)
 
 # 获取账户状态
 account_info = fapi_client.get_account_info()
@@ -85,6 +87,7 @@ skill3 = Skill3Strategy(
     risk_controller=risk_controller,
     account_state_provider=get_account_state,
     market_price_provider=get_market_price,
+    trading_rule_provider=trading_rule_provider,
     risk_ratio=0.02,  # 2% 风险
     leverage=10,       # 10x 杠杆
 )

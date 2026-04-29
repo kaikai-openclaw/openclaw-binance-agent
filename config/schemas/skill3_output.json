@@ -38,6 +38,16 @@
             "maximum": 20,
             "description": "头寸规模百分比"
           },
+          "quantity": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "按交易所 LOT_SIZE 规整后的计划下单数量"
+          },
+          "notional_value": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "计划名义金额（quantity × 入场基准价）"
+          },
           "stop_loss_price": {
             "type": "number",
             "exclusiveMinimum": 0,

@@ -19,10 +19,12 @@ Skill-3 交易策略制定 单元测试。
 import json
 import os
 import uuid
+from decimal import Decimal
 from unittest.mock import MagicMock
 
 import pytest
 
+from src.infra.exchange_rules import SymbolTradingRule
 from src.infra.risk_controller import RiskController
 from src.infra.state_store import StateStore
 from src.models.types import (
@@ -92,6 +94,7 @@ def _make_skill(
     risk_ratio=DEFAULT_RISK_RATIO,
     max_hold_hours=DEFAULT_MAX_HOLD_HOURS,
     leverage=DEFAULT_LEVERAGE,
+    trading_rule_provider=None,
 ) -> Skill3Strategy:
     """创建 Skill3Strategy 实例的辅助函数。"""
     if risk_controller is None:
@@ -108,6 +111,7 @@ def _make_skill(
         risk_ratio=risk_ratio,
         max_hold_hours=max_hold_hours,
         leverage=leverage,
+        trading_rule_provider=trading_rule_provider,
     )
 
 
@@ -172,6 +176,55 @@ class TestNormalExecution:
         """Skill 名称应为 skill3_strategy。"""
         skill = _make_skill(state_store)
         assert skill.name == "skill3_strategy"
+
+    def test_quantity_is_floored_by_lot_size(self, state_store):
+        """stepSize=1 的币种应输出整数 quantity。"""
+        upstream = _make_upstream_data([
+            {"symbol": "APEUSDT", "rating_score": 8, "signal": "long", "confidence": 80.0},
+        ])
+        state_id = state_store.save("skill2_analyze", upstream)
+        account = _make_account(total_balance=1234.0, available_margin=1000.0)
+        rule = SymbolTradingRule(
+            symbol="APEUSDT",
+            step_size=Decimal("1"),
+            min_qty=Decimal("1"),
+            min_notional=Decimal("5"),
+        )
+
+        skill = _make_skill(
+            state_store,
+            account=account,
+            trading_rule_provider=lambda symbol: rule if symbol == "APEUSDT" else None,
+        )
+        result = skill.run({"input_state_id": state_id})
+
+        plan = result["trade_plans"][0]
+        assert plan["quantity"] == 2.0
+        assert plan["notional_value"] == 200.0
+
+    def test_quantity_below_min_notional_is_rejected(self, state_store):
+        """规整后名义金额低于 5 USDT 时不应生成交易计划。"""
+        upstream = _make_upstream_data([
+            {"symbol": "PULUSDT", "rating_score": 8, "signal": "long", "confidence": 80.0},
+        ])
+        state_id = state_store.save("skill2_analyze", upstream)
+        account = _make_account(total_balance=20.0, available_margin=20.0)
+        rule = SymbolTradingRule(
+            symbol="PULUSDT",
+            step_size=Decimal("0.001"),
+            min_qty=Decimal("0.001"),
+            min_notional=Decimal("5"),
+        )
+
+        skill = _make_skill(
+            state_store,
+            account=account,
+            trading_rule_provider=lambda symbol: rule if symbol == "PULUSDT" else None,
+        )
+        result = skill.run({"input_state_id": state_id})
+
+        assert result["trade_plans"] == []
+        assert result["pipeline_status"] == PipelineStatus.NO_OPPORTUNITY.value
 
     def test_long_sl_tp_direction(self, state_store):
         """做多方向：止损 < 入场价，止盈 > 入场价。"""

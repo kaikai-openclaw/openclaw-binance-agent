@@ -15,9 +15,13 @@ import logging
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Callable, List
+from typing import Callable, List, Optional
 
 from src.infra.binance_fapi import BinanceFapiClient
+from src.infra.exchange_rules import (
+    TradingRuleProvider,
+    normalize_order_quantity,
+)
 from src.infra.risk_controller import RiskController
 from src.infra.state_store import StateStore
 from src.models.types import (
@@ -35,6 +39,17 @@ DEFAULT_POLL_INTERVAL = 30
 
 # 默认杠杆倍数
 DEFAULT_LEVERAGE = 10
+
+# 已有持仓缺少策略计划时的保护性止损/止盈（与 Skill-3 固定回退保持一致）
+EXISTING_POSITION_STOP_LOSS_PCT = 0.03
+EXISTING_POSITION_TAKE_PROFIT_PCT = 0.06
+
+# 已有保护单触发价允许的相对误差，超过则撤单重挂
+PROTECTION_PRICE_TOLERANCE_PCT = 0.001
+
+# 开仓后短暂确认成交；超时未成交则撤单，避免后续裸仓成交
+DEFAULT_ENTRY_CONFIRM_TIMEOUT = 15.0
+ENTRY_CONFIRM_POLL_INTERVAL = 2.0
 
 # 账户状态提供者类型
 AccountStateProvider = Callable[[], AccountState]
@@ -60,6 +75,9 @@ class Skill4Execute(BaseSkill):
         account_state_provider: AccountStateProvider,
         poll_interval: float = DEFAULT_POLL_INTERVAL,
         leverage: int = DEFAULT_LEVERAGE,
+        trading_rule_provider: Optional[TradingRuleProvider] = None,
+        monitor_until_close: bool = False,
+        entry_confirm_timeout: float = DEFAULT_ENTRY_CONFIRM_TIMEOUT,
     ) -> None:
         """
         初始化 Skill-4。
@@ -73,6 +91,11 @@ class Skill4Execute(BaseSkill):
             account_state_provider: 账户状态提供回调
             poll_interval: 持仓监控轮询间隔（秒），默认 30，测试时可设为 0
             leverage: 默认杠杆倍数
+            trading_rule_provider: Binance 交易规则提供者；提供时执行前按 LOT_SIZE
+                兜底规整 quantity，并校验最小名义金额（至少 5 USDT）
+            monitor_until_close: 是否在本轮阻塞监控到平仓；定时任务默认 False，
+                由下一轮任务继续管理已有持仓
+            entry_confirm_timeout: 非阻塞模式下等待入场成交的最长秒数
         """
         super().__init__(state_store, input_schema, output_schema)
         self.name = "skill4_execute"
@@ -81,6 +104,9 @@ class Skill4Execute(BaseSkill):
         self._account_state_provider = account_state_provider
         self._poll_interval = poll_interval
         self._leverage = leverage
+        self._trading_rule_provider = trading_rule_provider
+        self._monitor_until_close = monitor_until_close
+        self._entry_confirm_timeout = entry_confirm_timeout
 
     def run(self, input_data: dict) -> dict:
         """
@@ -118,6 +144,9 @@ class Skill4Execute(BaseSkill):
             self._risk_controller.execute_degradation(
                 account, binance_client=self._binance_client
             )
+
+        # 对已经存在的实盘持仓补齐交易所侧保护，避免无 SL/TP 裸奔。
+        self._protect_existing_positions(account)
 
         # 步骤 3：逐笔执行交易计划
         for plan in trade_plans:
@@ -166,8 +195,10 @@ class Skill4Execute(BaseSkill):
         # 获取账户状态
         account = self._account_state_provider()
 
-        # 计算下单数量
-        quantity = (account.total_balance * position_size_pct / 100) / entry_price
+        # 优先使用 Skill-3 已按交易所规则规整的 quantity；兼容旧状态则回退到百分比计算。
+        quantity = plan.get("quantity") or (
+            account.total_balance * position_size_pct / 100
+        ) / entry_price
         if quantity <= 0:
             return self._make_result(
                 symbol=symbol,
@@ -176,6 +207,26 @@ class Skill4Execute(BaseSkill):
                 executed_at=now_str,
                 reason="数量计算为零",
             )
+
+        normalized_quantity = self._normalize_quantity_for_exchange(
+            symbol=symbol,
+            quantity=quantity,
+            price=entry_price,
+        )
+        if normalized_quantity is None:
+            return self._make_result(
+                symbol=symbol,
+                direction=direction_str,
+                status=OrderStatus.REJECTED_BY_RISK.value,
+                executed_at=now_str,
+                reason="数量不满足 Binance LOT_SIZE 或最小名义金额要求",
+            )
+        if normalized_quantity != quantity:
+            log.info(
+                f"[{self.name}] {symbol} quantity 执行前规整: "
+                f"{quantity:.12g} -> {normalized_quantity:.12g}"
+            )
+            quantity = normalized_quantity
 
         # 需求 4.2：风控校验
         order_request = OrderRequest(
@@ -213,6 +264,15 @@ class Skill4Execute(BaseSkill):
                 order_id=f"paper_{uuid.uuid4().hex[:12]}",
             )
 
+        if not self._ensure_symbol_leverage(symbol):
+            return self._make_result(
+                symbol=symbol,
+                direction=direction_str,
+                status=OrderStatus.EXECUTION_FAILED.value,
+                executed_at=now_str,
+                reason=f"设置 {symbol} 杠杆为 {self._leverage}x 失败",
+            )
+
         # 需求 4.3：提交限价订单
         side = "BUY" if direction == TradeDirection.LONG else "SELL"
         try:
@@ -232,7 +292,31 @@ class Skill4Execute(BaseSkill):
                 reason=str(exc),
             )
 
-        # 需求 4.4：轮询持仓监控
+        if not self._monitor_until_close:
+            entry_result = self._confirm_entry_and_place_protection(
+                symbol=symbol,
+                direction=direction,
+                close_side="SELL" if direction == TradeDirection.LONG else "BUY",
+                stop_loss_price=stop_loss_price,
+                take_profit_price=take_profit_price,
+                planned_quantity=quantity,
+                order_id=order_result.order_id,
+            )
+            return self._make_result(
+                symbol=symbol,
+                direction=direction_str,
+                status=entry_result.get("status", OrderStatus.EXECUTION_FAILED.value),
+                executed_at=datetime.now(timezone.utc).isoformat(),
+                executed_price=entry_result.get("entry_price", entry_price),
+                executed_quantity=entry_result.get("quantity", 0.0),
+                fee=0.0,
+                order_id=order_result.order_id,
+                reason=entry_result.get("reason", ""),
+                entry_price=entry_result.get("entry_price", entry_price),
+                position_size_pct=position_size_pct,
+            )
+
+        # 可选旧行为：阻塞轮询直到平仓
         close_result = self._monitor_position(
             symbol=symbol,
             direction=direction,
@@ -317,10 +401,6 @@ class Skill4Execute(BaseSkill):
         server_sl_tp_placed = False
 
         while True:
-            # 轮询间隔
-            if self._poll_interval > 0:
-                time.sleep(self._poll_interval)
-
             # 获取持仓风险信息
             try:
                 pos_risk = self._binance_client.get_position_risk(symbol)
@@ -367,6 +447,8 @@ class Skill4Execute(BaseSkill):
                     return self._close_position(
                         symbol, close_side, quantity, "timeout", start_time
                     )
+                if self._poll_interval > 0:
+                    time.sleep(self._poll_interval)
                 continue
 
             current_price = pos_risk.mark_price
@@ -412,6 +494,8 @@ class Skill4Execute(BaseSkill):
                             reason="entry_not_filled_timeout",
                             start_time=start_time,
                         )
+                    if self._poll_interval > 0:
+                        time.sleep(self._poll_interval)
                     continue
 
                 # 入场单已不在挂单且从未持仓，视为入场失败（被撤单/拒单/失效）
@@ -498,6 +582,75 @@ class Skill4Execute(BaseSkill):
                     "daily_loss_degradation",
                     start_time,
                 )
+
+            # 首轮立即检查，后续再按 poll_interval 等待，缩短成交后的裸仓窗口。
+            if self._poll_interval > 0:
+                time.sleep(self._poll_interval)
+
+    def _confirm_entry_and_place_protection(
+        self,
+        symbol: str,
+        direction: TradeDirection,
+        close_side: str,
+        stop_loss_price: float,
+        take_profit_price: float,
+        planned_quantity: float,
+        order_id: str,
+    ) -> dict:
+        """
+        非阻塞执行模式：短暂确认入场成交，挂好服务端保护后返回。
+
+        若限价单在短时间内未成交，则主动撤单，避免本轮结束后订单才成交而
+        暴露无保护仓位。
+        """
+        start_time = time.monotonic()
+        while True:
+            try:
+                pos_risk = self._binance_client.get_position_risk(symbol)
+            except Exception as exc:
+                log.warning(f"[{self.name}] {symbol} 确认入场成交失败: {exc}")
+                pos_risk = None
+
+            if pos_risk is not None:
+                position_amt = abs(pos_risk.position_amt)
+                if position_amt > 0:
+                    self._place_server_sl_tp(
+                        symbol=symbol,
+                        close_side=close_side,
+                        quantity=position_amt,
+                        stop_loss_price=stop_loss_price,
+                        take_profit_price=take_profit_price,
+                    )
+                    return {
+                        "status": OrderStatus.OPEN.value,
+                        "reason": "entry_filled_protection_placed",
+                        "entry_price": pos_risk.entry_price,
+                        "quantity": position_amt,
+                    }
+
+            elapsed = time.monotonic() - start_time
+            if elapsed >= self._entry_confirm_timeout:
+                if self._is_order_open(symbol, order_id):
+                    self._cancel_entry_order(symbol)
+                    return {
+                        "status": OrderStatus.EXECUTION_FAILED.value,
+                        "reason": "entry_not_filled_quick_timeout",
+                        "entry_price": 0.0,
+                        "quantity": 0.0,
+                    }
+                return {
+                    "status": OrderStatus.EXECUTION_FAILED.value,
+                    "reason": "entry_order_not_open_no_position",
+                    "entry_price": 0.0,
+                    "quantity": 0.0,
+                }
+
+            wait = min(
+                ENTRY_CONFIRM_POLL_INTERVAL,
+                self._entry_confirm_timeout - elapsed,
+            )
+            if wait > 0:
+                time.sleep(wait)
 
     def _make_monitor_result(
         self,
@@ -695,6 +848,240 @@ class Skill4Execute(BaseSkill):
             )
 
         return success
+
+    def _protect_existing_positions(self, account: AccountState) -> None:
+        """
+        为执行前已存在的实盘持仓补齐服务端止损/止盈。
+
+        这些持仓不是本轮 Skill-4 开出来的，不会进入本地监控循环；如果没有
+        Binance 服务端条件单保护，定时任务重启或网络异常时会暴露裸仓风险。
+        """
+        if self._risk_controller.is_paper_mode():
+            return
+
+        for raw_pos in account.positions:
+            symbol = raw_pos.get("symbol", "") if isinstance(raw_pos, dict) else ""
+            if not symbol:
+                continue
+
+            try:
+                pos_risk = self._binance_client.get_position_risk(symbol)
+            except Exception as exc:
+                log.warning(f"[{self.name}] {symbol} 查询已有持仓失败: {exc}")
+                continue
+
+            position_amt = pos_risk.position_amt
+            quantity = abs(position_amt)
+            entry_price = pos_risk.entry_price
+            current_price = pos_risk.mark_price
+            if quantity <= 0 or entry_price <= 0 or current_price <= 0:
+                continue
+
+            direction = TradeDirection.LONG if position_amt > 0 else TradeDirection.SHORT
+            close_side = "SELL" if direction == TradeDirection.LONG else "BUY"
+
+            self._ensure_symbol_leverage(symbol)
+
+            stop_loss_price, take_profit_price = self._calculate_existing_sl_tp(
+                entry_price,
+                direction,
+            )
+
+            if self._should_stop_loss(direction, current_price, stop_loss_price):
+                log.warning(
+                    f"[{self.name}] {symbol} 已有持仓触发保护性止损: "
+                    f"当前价={current_price}, 止损价={stop_loss_price}"
+                )
+                self._risk_controller.record_stop_loss(symbol, direction.value)
+                self._close_position(
+                    symbol, close_side, quantity, "existing_stop_loss", time.monotonic()
+                )
+                continue
+
+            if self._should_take_profit(direction, current_price, take_profit_price):
+                log.info(
+                    f"[{self.name}] {symbol} 已有持仓触发保护性止盈: "
+                    f"当前价={current_price}, 止盈价={take_profit_price}"
+                )
+                self._close_position(
+                    symbol, close_side, quantity, "existing_take_profit", time.monotonic()
+                )
+                continue
+
+            try:
+                algo_orders = self._binance_client.get_open_algo_orders(symbol)
+            except Exception as exc:
+                log.warning(f"[{self.name}] {symbol} 查询 Algo 条件单失败: {exc}")
+                algo_orders = []
+
+            has_sl = self._has_valid_algo_order(
+                algo_orders,
+                close_side,
+                "STOP_MARKET",
+                stop_loss_price,
+            )
+            has_tp = self._has_valid_algo_order(
+                algo_orders,
+                close_side,
+                "TAKE_PROFIT_MARKET",
+                take_profit_price,
+            )
+            if has_sl and has_tp:
+                continue
+
+            if self._has_protection_algo_order(algo_orders, close_side):
+                log.warning(
+                    f"[{self.name}] {symbol} 已有保护单触发价不匹配，撤销后重挂"
+                )
+                self._cancel_algo_orders_safe(symbol)
+                has_sl = False
+                has_tp = False
+
+            log.warning(
+                f"[{self.name}] {symbol} 已有持仓缺少服务端保护单，"
+                f"补挂 SL={stop_loss_price}, TP={take_profit_price}, qty={quantity}"
+            )
+            self._place_missing_existing_protection(
+                symbol=symbol,
+                close_side=close_side,
+                quantity=quantity,
+                stop_loss_price=stop_loss_price,
+                take_profit_price=take_profit_price,
+                place_sl=not has_sl,
+                place_tp=not has_tp,
+            )
+
+    def _ensure_symbol_leverage(self, symbol: str) -> bool:
+        """将交易所侧 symbol 杠杆同步为 Skill-4 目标杠杆。"""
+        try:
+            self._binance_client.set_leverage(symbol, self._leverage)
+            log.info(f"[{self.name}] {symbol} 杠杆已同步为 {self._leverage}x")
+            return True
+        except Exception as exc:
+            log.warning(
+                f"[{self.name}] {symbol} 设置杠杆 {self._leverage}x 失败: {exc}"
+            )
+            return False
+
+    @staticmethod
+    def _calculate_existing_sl_tp(
+        entry_price: float,
+        direction: TradeDirection,
+    ) -> tuple[float, float]:
+        """已有持仓没有对应策略计划时，使用固定 3%/6% 保护。"""
+        if direction == TradeDirection.LONG:
+            return (
+                entry_price * (1 - EXISTING_POSITION_STOP_LOSS_PCT),
+                entry_price * (1 + EXISTING_POSITION_TAKE_PROFIT_PCT),
+            )
+        return (
+            entry_price * (1 + EXISTING_POSITION_STOP_LOSS_PCT),
+            entry_price * (1 - EXISTING_POSITION_TAKE_PROFIT_PCT),
+        )
+
+    def _has_valid_algo_order(
+        self,
+        orders: list,
+        side: str,
+        order_type: str,
+        expected_trigger_price: float,
+    ) -> bool:
+        for order in orders:
+            if (
+                str(order.get("side", "")).upper() == side
+                and str(order.get("type", "")).upper() == order_type
+                and self._trigger_price_matches(order, expected_trigger_price)
+            ):
+                return True
+        return False
+
+    @staticmethod
+    def _has_protection_algo_order(orders: list, side: str) -> bool:
+        protection_types = {"STOP_MARKET", "TAKE_PROFIT_MARKET"}
+        for order in orders:
+            if (
+                str(order.get("side", "")).upper() == side
+                and str(order.get("type", "")).upper() in protection_types
+            ):
+                return True
+        return False
+
+    @staticmethod
+    def _trigger_price_matches(order: dict, expected_price: float) -> bool:
+        if expected_price <= 0:
+            return False
+
+        raw_price = (
+            order.get("triggerPrice")
+            or order.get("stopPrice")
+            or order.get("activatePrice")
+        )
+        try:
+            actual_price = float(raw_price)
+        except (TypeError, ValueError):
+            return False
+
+        diff_pct = abs(actual_price - expected_price) / expected_price
+        return diff_pct <= PROTECTION_PRICE_TOLERANCE_PCT
+
+    def _place_missing_existing_protection(
+        self,
+        symbol: str,
+        close_side: str,
+        quantity: float,
+        stop_loss_price: float,
+        take_profit_price: float,
+        place_sl: bool,
+        place_tp: bool,
+    ) -> None:
+        if place_sl:
+            try:
+                self._binance_client.place_stop_market_order(
+                    symbol=symbol,
+                    side=close_side,
+                    quantity=quantity,
+                    stop_price=stop_loss_price,
+                )
+            except Exception as exc:
+                log.warning(f"[{self.name}] {symbol} 补挂已有持仓止损失败: {exc}")
+
+        if place_tp:
+            try:
+                self._binance_client.place_take_profit_market_order(
+                    symbol=symbol,
+                    side=close_side,
+                    quantity=quantity,
+                    stop_price=take_profit_price,
+                )
+            except Exception as exc:
+                log.warning(f"[{self.name}] {symbol} 补挂已有持仓止盈失败: {exc}")
+
+    def _normalize_quantity_for_exchange(
+        self,
+        symbol: str,
+        quantity: float,
+        price: float,
+    ) -> Optional[float]:
+        """执行前按 Binance 交易规则兜底规整开仓数量。"""
+        if self._trading_rule_provider is None:
+            return quantity
+
+        try:
+            rule = self._trading_rule_provider(symbol)
+        except Exception as exc:
+            log.warning(f"[{self.name}] 获取 {symbol} 交易规则失败: {exc}")
+            return None
+
+        if rule is None:
+            log.warning(f"[{self.name}] {symbol} 缺少交易规则，拒绝执行")
+            return None
+
+        return normalize_order_quantity(
+            symbol=symbol,
+            quantity=quantity,
+            price=price,
+            rule=rule,
+        )
 
     def _cancel_algo_orders_safe(self, symbol: str) -> None:
         """安全清理指定币种的所有 Algo 条件单，防止残留。"""

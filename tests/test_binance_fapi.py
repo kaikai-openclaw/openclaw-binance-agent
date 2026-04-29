@@ -225,6 +225,36 @@ class TestRequestWithRetry:
 # 公开 API 方法测试
 # ============================================================
 
+class TestSetLeverage:
+    """set_leverage 测试。"""
+
+    @patch("time.sleep", return_value=None)
+    def test_set_leverage_posts_symbol_and_leverage(self, mock_sleep):
+        """设置杠杆应调用 Binance leverage 端点。"""
+        rl = MagicMock(spec=RateLimiter)
+        client = BinanceFapiClient("key", "secret", rate_limiter=rl)
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "symbol": "BTCUSDT",
+            "leverage": 10,
+            "maxNotionalValue": "1000000",
+        }
+        mock_resp.raise_for_status = MagicMock()
+
+        with patch.object(client._session, "request", return_value=mock_resp) as req:
+            result = client.set_leverage("BTCUSDT", 10)
+
+        assert result["symbol"] == "BTCUSDT"
+        assert result["leverage"] == 10
+        _, kwargs = req.call_args
+        assert kwargs["method"] == "POST"
+        assert kwargs["url"].endswith("/fapi/v1/leverage")
+        assert kwargs["data"]["symbol"] == "BTCUSDT"
+        assert kwargs["data"]["leverage"] == 10
+
+
 class TestPlaceLimitOrder:
     """place_limit_order 测试。"""
 

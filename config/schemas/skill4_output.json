@@ -42,7 +42,7 @@
           },
           "status": {
             "type": "string",
-            "enum": ["filled", "rejected_by_risk", "execution_failed", "paper_trade"],
+            "enum": ["filled", "open", "rejected_by_risk", "execution_failed", "paper_trade"],
             "description": "订单状态"
           },
           "executed_at": {

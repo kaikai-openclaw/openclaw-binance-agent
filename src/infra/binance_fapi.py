@@ -254,6 +254,19 @@ class BinanceFapiClient:
     # 公开 API 方法
     # ------------------------------------------------------------------
 
+    def set_leverage(self, symbol: str, leverage: int) -> dict:
+        """
+        设置指定 U 本位合约交易对杠杆。
+
+        Binance 的杠杆是交易所侧按 symbol 持久保存的状态；下单参数本身
+        不携带 leverage，因此每次自动执行前需要显式同步目标杠杆。
+        """
+        params = {
+            "symbol": symbol,
+            "leverage": leverage,
+        }
+        return self._request_with_retry("POST", "/fapi/v1/leverage", params)
+
     def place_limit_order(self, symbol: str, side: str, price: float,
                           quantity: float) -> OrderResult:
         """

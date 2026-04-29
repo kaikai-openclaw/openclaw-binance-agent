@@ -24,6 +24,7 @@ load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
 
 from src.infra.binance_fapi import BinanceFapiClient
 from src.infra.binance_public import BinancePublicClient
+from src.infra.exchange_rules import LazyBinanceTradingRuleProvider
 from src.infra.memory_store import MemoryStore
 from src.infra.rate_limiter import RateLimiter
 from src.infra.risk_controller import RiskController
@@ -140,6 +141,7 @@ def main():
 
     account_provider = make_account_provider(fapi_client, paper_mode)
     market_price_provider = make_market_price_provider(public_client)
+    trading_rule_provider = LazyBinanceTradingRuleProvider(public_client)
 
     # 从进化记忆读取调优参数
     rating_threshold, risk_ratio = memory_store.get_evolved_params()
@@ -204,6 +206,7 @@ def main():
             risk_controller=risk_controller,
             account_state_provider=account_provider,
             market_price_provider=market_price_provider,
+            trading_rule_provider=trading_rule_provider,
             risk_ratio=risk_ratio,
             require_market_price=True,  # P0-2：生产路径禁止 100.0 魔数回退
         )
@@ -229,6 +232,7 @@ def main():
             risk_controller=risk_controller,
             account_state_provider=account_provider,
             poll_interval=30,
+            trading_rule_provider=trading_rule_provider,
         )
         s4_input_id = state_store.save("skill4_input", {"input_state_id": s3_id})
         s4_id = skill4.execute(s4_input_id)

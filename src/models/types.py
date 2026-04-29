@@ -34,6 +34,7 @@ class Signal(str, Enum):
 class OrderStatus(str, Enum):
     """订单状态"""
     FILLED = "filled"                        # 已成交
+    OPEN = "open"                            # 已开仓/挂单，等待后续轮询管理
     REJECTED_BY_RISK = "rejected_by_risk"    # 被风控拒绝
     EXECUTION_FAILED = "execution_failed"    # 执行失败
     PAPER_TRADE = "paper_trade"              # 模拟盘交易

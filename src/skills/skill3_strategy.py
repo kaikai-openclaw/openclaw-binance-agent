@@ -24,6 +24,10 @@ import logging
 import uuid
 from typing import Any, Callable, Dict, List, Optional
 
+from src.infra.exchange_rules import (
+    TradingRuleProvider,
+    normalize_order_quantity,
+)
 from src.infra.fees import (
     CRYPTO_MAKER_FEE_RATE,
     CRYPTO_TAKER_FEE_RATE,
@@ -109,6 +113,7 @@ class Skill3Strategy(BaseSkill):
         fee_order_type: str = "taker",
         fee_vip_discount: float = 0.0,
         min_net_rr_ratio: float = DEFAULT_MIN_NET_RR_RATIO,
+        trading_rule_provider: Optional[TradingRuleProvider] = None,
     ) -> None:
         """
         初始化 Skill-3。
@@ -136,6 +141,8 @@ class Skill3Strategy(BaseSkill):
             fee_order_type: crypto 下单类型，"taker"（默认，更保守）或 "maker"
             fee_vip_discount: crypto VIP 费率折扣（0-1）
             min_net_rr_ratio: 扣费后净盈亏比下限（P0-4）；低于此值的交易直接拒绝
+            trading_rule_provider: Binance 交易规则提供者；提供时按 LOT_SIZE 规整 quantity，
+                并校验最小名义金额（至少 5 USDT）
         """
         super().__init__(state_store, input_schema, output_schema)
         self.name = "skill3_strategy"
@@ -154,6 +161,7 @@ class Skill3Strategy(BaseSkill):
         self._fee_order_type = fee_order_type
         self._fee_vip_discount = fee_vip_discount
         self._min_net_rr_ratio = min_net_rr_ratio
+        self._trading_rule_provider = trading_rule_provider
 
         # 预计算 round-trip 成本占比（每次下单一致，无需每笔重算）
         try:
@@ -329,6 +337,25 @@ class Skill3Strategy(BaseSkill):
             position_size_pct = 20.0
             position_size = (account.total_balance * 0.20) / entry_price
 
+        normalized_position_size = self._normalize_quantity_for_exchange(
+            symbol=symbol,
+            quantity=position_size,
+            price=entry_price,
+        )
+        if normalized_position_size is None:
+            log.warning(
+                f"[{self.name}] {symbol} 头寸数量不满足交易所 LOT_SIZE/minNotional，跳过"
+            )
+            return None
+        if normalized_position_size != position_size:
+            log.info(
+                f"[{self.name}] {symbol} quantity 按交易所规则规整: "
+                f"{position_size:.12g} -> {normalized_position_size:.12g}"
+            )
+            position_size = normalized_position_size
+            position_value = position_size * entry_price
+            position_size_pct = (position_value / account.total_balance) * 100
+
         # 需求 3.4：风控预校验 — 使用 RiskController 校验
         order_request = OrderRequest(
             symbol=symbol,
@@ -348,6 +375,19 @@ class Skill3Strategy(BaseSkill):
             if adjusted_plan is not None:
                 position_size = adjusted_plan["quantity"]
                 position_size_pct = adjusted_plan["pct"]
+                normalized_position_size = self._normalize_quantity_for_exchange(
+                    symbol=symbol,
+                    quantity=position_size,
+                    price=entry_price,
+                )
+                if normalized_position_size is None:
+                    log.warning(
+                        f"[{self.name}] {symbol} 裁剪后数量不满足交易所规则，跳过"
+                    )
+                    return None
+                position_size = normalized_position_size
+                position_value = position_size * entry_price
+                position_size_pct = (position_value / account.total_balance) * 100
                 log.info(
                     f"[{self.name}] {symbol} 头寸已裁剪至 {position_size_pct:.2f}%"
                 )
@@ -373,6 +413,8 @@ class Skill3Strategy(BaseSkill):
             "take_profit_price": round(take_profit_price, 8),
             "max_hold_hours": self._max_hold_hours,
         }
+        plan["quantity"] = position_size
+        plan["notional_value"] = round(position_size * entry_price, 8)
         # 审计字段：标注止损/价格来源 + 费率成本估算，便于回测归因（schema 可选字段）
         plan["stop_loss_source"] = sl_source
         plan["price_source"] = price_source
@@ -488,6 +530,38 @@ class Skill3Strategy(BaseSkill):
             take_profit = entry_price * (1 - tp_pct)
 
         return stop_loss, take_profit, source
+
+    def _normalize_quantity_for_exchange(
+        self,
+        symbol: str,
+        quantity: float,
+        price: float,
+    ) -> Optional[float]:
+        """
+        按 Binance 交易规则规整 quantity。
+
+        未注入 provider 时保持旧行为，便于测试和离线回测；生产入口会注入
+        exchangeInfo 规则，保证真实下单数量满足 LOT_SIZE 与最小名义金额。
+        """
+        if self._trading_rule_provider is None:
+            return quantity
+
+        try:
+            rule = self._trading_rule_provider(symbol)
+        except Exception as exc:
+            log.warning(f"[{self.name}] 获取 {symbol} 交易规则失败: {exc}")
+            return None
+
+        if rule is None:
+            log.warning(f"[{self.name}] {symbol} 缺少交易规则，跳过")
+            return None
+
+        return normalize_order_quantity(
+            symbol=symbol,
+            quantity=quantity,
+            price=price,
+            rule=rule,
+        )
 
     def _try_adjust_position(
         self,

@@ -112,10 +112,13 @@ def _call_fast_llm(prompt: str, model: Optional[str] = None) -> str:
         # 的输出会先写 <think>...</think> 推理块再给答案，占用 tokens。
         # 默认 max_tokens 常为 1024，对 reasoning 模型会导致答案被截断在思考
         # 块内（表现为解析 JSON 失败），因此统一提升到 2048。
+        # MiniMax API 不认 "minimax/" 前缀，需要剥离
+        api_model = model.split("/", 1)[1] if provider == "minimax" and "/" in model else model
+
         resp = requests.post(
             f"{base_url}/chat/completions",
             headers=headers,
-            json={"model": model,
+            json={"model": api_model,
                   "messages": [{"role": "user", "content": prompt}],
                   "max_tokens": 2048,
                   "temperature": 0.3},

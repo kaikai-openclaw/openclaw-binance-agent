@@ -248,6 +248,11 @@ dev = [
     { name = "pytest" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "hypothesis" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "hypothesis", marker = "extra == 'dev'", specifier = ">=6.92.0" },
@@ -259,6 +264,9 @@ requires-dist = [
     { name = "websocket-client", specifier = ">=1.7.0" },
 ]
 provides-extras = ["dev"]
+
+[package.metadata.requires-dev]
+dev = [{ name = "hypothesis", specifier = ">=6.152.4" }]
 
 [[package]]
 name = "packaging"

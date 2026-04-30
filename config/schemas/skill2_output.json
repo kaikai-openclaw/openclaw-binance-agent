@@ -17,7 +17,7 @@
           },
           "rating_score": {
             "type": "integer",
-            "minimum": 1,
+            "minimum": 0,
             "maximum": 10
           },
           "signal": {
@@ -67,7 +67,7 @@
           },
           "rating_score": {
             "type": "integer",
-            "minimum": 1,
+            "minimum": 0,
             "maximum": 10
           },
           "signal": {

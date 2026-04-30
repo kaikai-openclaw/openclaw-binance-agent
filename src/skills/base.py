@@ -7,6 +7,7 @@ Skill 基类模块
 需求: 6.6, 9.2, 9.3, 9.4, 9.5, 9.6
 """
 
+import copy
 import logging
 import time
 from typing import Optional
@@ -96,11 +97,17 @@ class BaseSkill:
             else:
                 input_data = {}
 
+            # 步骤 1.5：清洗输入数据
+            input_data = self.sanitize_input(input_data)
+
             # 步骤 2：校验输入数据
             self._validate_input(input_data)
 
             # 步骤 3：执行业务逻辑
             output_data = self.run(input_data)
+
+            # 步骤 3.5：清洗输出数据
+            output_data = self.sanitize_output(output_data)
 
             # 步骤 4：校验输出数据
             self._validate_output(output_data)
@@ -183,3 +190,77 @@ class BaseSkill:
                 f"[{self.name}] 输出数据 Schema 校验失败: {error_messages}",
                 errors=error_messages,
             )
+
+    def sanitize_data(self, data: dict, schema: dict) -> dict:
+        """
+        基于 Schema 对数据进行基础清洗，提高系统容错率（缓解 Schema 强校验带来的脆弱性）。
+        主要功能：
+        1. 尝试弱类型转换（str -> int/float/bool）。
+        2. 若 additionalProperties 为 False，自动剔除不在 properties 中的多余字段。
+        """
+        def _clean(val, sub_schema):
+            if not isinstance(sub_schema, dict):
+                return val
+            
+            s_type = sub_schema.get("type")
+            
+            # 尝试类型转换
+            if s_type == "number" and isinstance(val, str):
+                try:
+                    return float(val)
+                except ValueError:
+                    pass
+            elif s_type == "integer" and isinstance(val, str):
+                try:
+                    return int(val)
+                except ValueError:
+                    pass
+            elif s_type == "boolean" and isinstance(val, str):
+                if val.lower() == "true":
+                    return True
+                elif val.lower() == "false":
+                    return False
+            
+            # 处理对象和属性裁剪
+            if s_type == "object" and isinstance(val, dict):
+                props = sub_schema.get("properties", {})
+                additional = sub_schema.get("additionalProperties", True)
+                
+                # 如果明确拒绝附加属性，清理冗余字段
+                if additional is False:
+                    keys_to_remove = [k for k in val.keys() if k not in props]
+                    for k in keys_to_remove:
+                        log.debug(f"[{self.name}] sanitize_data 移除冗余字段: {k}")
+                        val.pop(k, None)
+                
+                # 递归处理已定义属性
+                for k, v in val.items():
+                    if k in props:
+                        val[k] = _clean(v, props[k])
+                        
+            # 处理数组
+            elif s_type == "array" and isinstance(val, list):
+                items_schema = sub_schema.get("items", {})
+                if items_schema:
+                    for i in range(len(val)):
+                        val[i] = _clean(val[i], items_schema)
+                        
+            return val
+
+        # 不修改原始数据对象，防止副作用
+        data_copy = copy.deepcopy(data)
+        return _clean(data_copy, schema)
+
+    def sanitize_input(self, data: dict) -> dict:
+        """
+        子类可重写此方法，实现自定义的输入清洗。
+        默认进行基础规则清洗。
+        """
+        return self.sanitize_data(data, self.input_schema)
+
+    def sanitize_output(self, data: dict) -> dict:
+        """
+        子类可重写此方法，实现自定义的输出清洗。
+        默认进行基础规则清洗。
+        """
+        return self.sanitize_data(data, self.output_schema)

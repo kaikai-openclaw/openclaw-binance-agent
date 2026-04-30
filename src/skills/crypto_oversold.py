@@ -72,10 +72,10 @@ FUNDING_RATE_VERY_EXTREME = -0.003      # -0.3%
 
 ST_INTERVAL = "4h"
 ST_MIN_KLINES = 50
-ST_RSI_THRESHOLD = 20.0          # 4h 级别 RSI < 20 才算极端超卖
-ST_BIAS_THRESHOLD = -10.0        # 4h 乖离率 < -10%
-ST_CONSECUTIVE_DOWN = 5          # 连续下跌 ≥ 5 根 4h（≈ 20 小时）
-ST_DROP_PCT = -15.0              # 近 N 根累计跌幅 < -15%
+ST_RSI_THRESHOLD = 28.0          # 4h 级别 RSI < 28 算作超卖区 (从20放宽)
+ST_BIAS_THRESHOLD = -8.0         # 4h 乖离率 < -8% (从-10放宽)
+ST_CONSECUTIVE_DOWN = 3          # 连续下跌 ≥ 3 根 4h (12小时) (从5放宽)
+ST_DROP_PCT = -12.0              # 近 N 根累计跌幅 < -12% (从-15放宽)
 ST_DROP_LOOKBACK = 18            # 回看 18 根 4h = 3 天
 ST_DRAWDOWN_THRESHOLD = -20.0    # 距近期高点回撤 > 20%（短期看 5 天内）
 ST_DRAWDOWN_LOOKBACK = 30        # 回看 30 根 4h = 5 天
@@ -98,9 +98,9 @@ ST_W_VOLUME = 10        # 底部放量（恐慌盘涌出，短期反弹前兆）
 
 LT_INTERVAL = "1d"
 LT_MIN_KLINES = 60               # 最低 60 天数据（新币也能参与）
-LT_RSI_THRESHOLD = 30.0          # 日线 RSI < 30
+LT_RSI_THRESHOLD = 35.0          # 日线 RSI < 35 (从30放宽)
 LT_BIAS_THRESHOLD = -15.0        # 日线 20 日乖离率 < -15%
-LT_CONSECUTIVE_DOWN = 3          # 连续下跌 ≥ 3 天
+LT_CONSECUTIVE_DOWN = 2          # 连续下跌 ≥ 2 天 (从3放宽)
 LT_DROP_PCT = -30.0              # 近 N 日累计跌幅 < -30%
 LT_DROP_LOOKBACK = 14            # 回看 14 天
 LT_DRAWDOWN_THRESHOLD = -40.0    # 距近期高点回撤 > 40%（中期深度回调）
@@ -329,18 +329,10 @@ class _CryptoOversoldBase(BaseSkill):
             "market_regime_panic_drop_pct",
             MARKET_REGIME_PANIC_DROP_PCT,
         )
-        downtrend = (
-            ema_fast is not None
-            and ema_slow is not None
-            and last_close < ema_fast < ema_slow
-        )
+        # 移除 BTC 均线空头阻断，仅防范短期暴跌(瀑布)接刀风险
         panic_drop = recent_return_pct <= panic_drop_pct
-        if downtrend or panic_drop:
-            reasons = []
-            if downtrend:
-                reasons.append("BTC 4h close<EMA_FAST<EMA_SLOW")
-            if panic_drop:
-                reasons.append(f"BTC recent_return={recent_return_pct:.2f}%")
+        if panic_drop:
+            reasons = [f"BTC recent_return={recent_return_pct:.2f}%"]
             return {
                 "status": "blocked",
                 "reason": "; ".join(reasons),

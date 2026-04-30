@@ -116,6 +116,7 @@ class TradeRecord:
     position_size_pct: float       # 头寸规模百分比
     closed_at: datetime            # 平仓时间戳
     strategy_tag: str = "unknown"  # 策略标签，用于独立归因统计
+    is_paper: bool = False         # 是否为模拟盘交易
 
 
 @dataclass
@@ -215,11 +216,11 @@ def calculate_position_size(
     position_value = position_size * entry_price
     position_pct = (position_value / account_balance) * 100
 
-    # 风控上限裁剪：单笔不超过 20%
-    if position_pct > 20.0:
-        position_pct = 20.0
-        position_size = (account_balance * 0.20) / entry_price
-        log.info(f"头寸规模超限，已裁剪至 20%: {position_size}")
+    # 风控上限裁剪：单笔不超过 35%
+    if position_pct > 35.0:
+        position_pct = 35.0
+        position_size = (account_balance * 0.35) / entry_price
+        log.info(f"头寸规模超限，已裁剪至 35%: {position_size}")
 
     return position_size
 
@@ -306,9 +307,9 @@ def compute_evolution_adjustment(
             f"降低风险比例 {current_risk_ratio:.4f}→{new_risk_ratio:.4f}"
         )
     elif win_rate > 60:
-        # 放松：阈值 -1（下限 5），风险 ×1.1（上限 0.03）
+        # 放松：阈值 -1（下限 5），风险 ×1.1（上限 0.08）
         new_threshold = max(5, current_rating_threshold - 1)
-        new_risk_ratio = min(0.03, round(current_risk_ratio * 1.1, 4))
+        new_risk_ratio = min(0.08, round(current_risk_ratio * 1.1, 4))
         reasoning = (
             f"胜率 {win_rate:.1f}% 高于 60% 阈值，"
             f"放松评级过滤阈值 {current_rating_threshold}→{new_threshold}，"

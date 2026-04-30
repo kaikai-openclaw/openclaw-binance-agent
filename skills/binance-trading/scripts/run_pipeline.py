@@ -280,6 +280,7 @@ def main():
             memory_store=memory_store,
             account_state_provider=account_provider,
             trade_syncer=trade_syncer,
+            risk_controller=risk_controller,
         )
         s5_input_id = state_store.save("skill5_input", {"input_state_id": s4_id})
         s5_id = skill5.execute(s5_input_id)

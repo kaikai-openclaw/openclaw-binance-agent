@@ -621,6 +621,7 @@ def run_report(args: argparse.Namespace) -> dict:
                     memory_store=memory_store,
                     account_state_provider=account_provider,
                     trade_syncer=None,
+                    risk_controller=risk_controller,
                 )
                 s5_input_id = state_store.save("skill5_input", {"input_state_id": s4_id})
                 s5_id = skill5.execute(s5_input_id)
@@ -680,8 +681,8 @@ def run_report(args: argparse.Namespace) -> dict:
             "protection_orders": protection,
             "account": account_summary,
             "risk": {
-                "single_trade_margin_limit_pct": 20,
-                "single_symbol_position_limit_pct": 30,
+                "single_trade_margin_limit_pct": 35,
+                "single_symbol_position_limit_pct": 40,
                 "daily_loss_stop_pct": 5,
                 "risk_status": "paper_mode" if paper_mode else "normal",
             },

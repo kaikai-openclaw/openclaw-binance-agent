@@ -37,8 +37,8 @@ class RiskController:
     """
 
     # 硬编码常量（不可配置）
-    MAX_SINGLE_MARGIN_RATIO = 0.20    # 单笔保证金 <= 总资金 20%
-    MAX_SINGLE_COIN_RATIO = 0.30      # 单币累计持仓 <= 总资金 30%
+    MAX_SINGLE_MARGIN_RATIO = 0.35    # 单笔保证金 <= 总资金 35%
+    MAX_SINGLE_COIN_RATIO = 0.40      # 单币累计持仓 <= 总资金 40%
     DAILY_LOSS_THRESHOLD = 0.05       # 日亏损阈值 5%
     STOP_LOSS_COOLDOWN_HOURS = 24     # 止损后同方向冷却期（小时）
 

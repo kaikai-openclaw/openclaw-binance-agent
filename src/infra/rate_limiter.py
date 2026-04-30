@@ -31,12 +31,13 @@ class RateLimiter:
     NORMAL_RATE = 1000       # 正常速率：1000 次/分钟
     DEGRADED_RATE = 500      # 降级速率：500 次/分钟
     QUEUE_THRESHOLD = 800    # 队列阈值：超过 800 自动降速
+    MAX_BURST = 30           # 令牌桶瞬间突发并发上限（防止触发 Binance 秒级 429 封禁）
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
 
         # 令牌桶状态
-        self._tokens: float = self.NORMAL_RATE  # 当前可用令牌数
+        self._tokens: float = self.MAX_BURST  # 初始可用令牌数为突发上限
         self._last_refill_time: float = time.monotonic()  # 上次补充令牌的时间
 
         # 队列计数器：跟踪当前等待获取令牌的请求数
@@ -64,8 +65,8 @@ class RateLimiter:
         tokens_per_second = rate / 60.0
         new_tokens = elapsed * tokens_per_second
 
-        # 令牌上限为当前速率值（即一分钟的量）
-        self._tokens = min(self._tokens + new_tokens, float(rate))
+        # 令牌上限为突发阈值，而不是一整分钟的限额
+        self._tokens = min(self._tokens + new_tokens, float(self.MAX_BURST))
         self._last_refill_time = now
 
     def acquire(self) -> None:
@@ -150,3 +151,9 @@ class RateLimiter:
         """返回当前待发送请求数量。"""
         with self._lock:
             return self._queue_size
+
+# ============================================================
+# 全局共享单例
+# ============================================================
+GLOBAL_RATE_LIMITER = RateLimiter()
+

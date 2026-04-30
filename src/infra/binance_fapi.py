@@ -17,7 +17,7 @@ from typing import Dict, List, Optional, Set
 
 import requests
 
-from src.infra.rate_limiter import RateLimiter
+from src.infra.rate_limiter import RateLimiter, GLOBAL_RATE_LIMITER
 
 log = logging.getLogger(__name__)
 
@@ -156,7 +156,7 @@ class BinanceFapiClient:
         self.api_key = api_key
         self.api_secret = api_secret
         self.base_url = base_url.rstrip("/")
-        self.rate_limiter = rate_limiter or RateLimiter()
+        self.rate_limiter = rate_limiter or GLOBAL_RATE_LIMITER
         self._session = requests.Session()
         self._session.headers.update({
             "X-MBX-APIKEY": self.api_key,

@@ -55,6 +55,7 @@ class Skill5Evolve(BaseSkill):
         memory_store: MemoryStore,
         account_state_provider: AccountStateProvider,
         trade_syncer: Optional[Any] = None,
+        risk_controller: Optional[Any] = None,
         fee_market: str = "crypto",
         fee_order_type: str = "taker",
         fee_vip_discount: float = 0.0,
@@ -77,6 +78,7 @@ class Skill5Evolve(BaseSkill):
         self._memory_store = memory_store
         self._account_state_provider = account_state_provider
         self._trade_syncer = trade_syncer
+        self._risk_controller = risk_controller
         self._fee_market = fee_market
         self._fee_order_type = fee_order_type
         self._fee_vip_discount = fee_vip_discount
@@ -257,6 +259,7 @@ class Skill5Evolve(BaseSkill):
                 position_size_pct=position_size_pct,
                 closed_at=datetime.now(timezone.utc),
                 strategy_tag=strategy_tag,
+                is_paper=(status == "paper_trade"),
             )
 
             try:
@@ -395,6 +398,21 @@ class Skill5Evolve(BaseSkill):
         # P0-4：额外计算净胜率/净均盈亏（不改动毛统计，确保不篡改原始数据）
         net_win_rate, net_avg_pnl = self._compute_net_stats(recent_trades)
 
+        recovery_suggested = False
+        # 需求：乒乓效应防护滞后恢复，连续 5 笔模拟盘且胜率 >=60% 且净盈亏>0 则恢复
+        account = self._account_state_provider()
+        if account.is_paper_mode and self._risk_controller is not None:
+            paper_trades = [t for t in recent_trades if getattr(t, "is_paper", False)]
+            if len(paper_trades) >= 5:
+                recent_paper = paper_trades[:5]
+                wins = sum(1 for t in recent_paper if t.pnl_amount > 0)
+                total_pnl = sum(t.pnl_amount for t in recent_paper)
+                paper_win_rate = wins / len(recent_paper) * 100
+                if paper_win_rate >= 60.0 and total_pnl > 0:
+                    log.info(f"[{self.name}] 模拟盘近期 5 笔交易胜率达 {paper_win_rate}% 且净利润为正，满足滞后恢复条件，自动解除模拟盘！")
+                    self._risk_controller.disable_paper_mode(reason="auto_recovery_performance_met")
+                    recovery_suggested = True
+
         return {
             "win_rate": round(stats.win_rate, 2),
             "avg_pnl_ratio": round(stats.avg_pnl_ratio, 4),
@@ -412,6 +430,7 @@ class Skill5Evolve(BaseSkill):
                 if reflection else current_risk
             ),
             "strategy_stats": strategy_stats,
+            "recovery_suggested": recovery_suggested,
         }
 
     def _strategy_stats_payload(self, trades: List[TradeRecord]) -> dict:
@@ -532,6 +551,9 @@ class Skill5Evolve(BaseSkill):
             f"- 平均净盈亏金额: {evolution.get('net_avg_pnl_amount', 0.0):.4f}",
             f"- 参数调整: {'是' if evolution['adjustment_applied'] else '否'}",
         ])
+
+        if evolution.get("recovery_suggested"):
+            lines.append("- 实盘恢复: 模拟盘表现达标（近期 5 笔胜率 >= 60% 且净利为正），系统已自动恢复实盘交易 🟢")
 
         if evolution.get("adjustment_detail"):
             lines.append(

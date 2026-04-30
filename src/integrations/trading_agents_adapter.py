@@ -264,13 +264,41 @@ def create_fast_analyzer() -> callable:
         log.info(f"[FastAnalyzer] {symbol} 行情获取成功: {ticker['last_price']}, "
                  f"24h {ticker['price_change_pct']:+.2f}%")
 
-        prompt = f"""你是一名专业的加密货币量化研究员。请根据以下 {symbol} 的市场数据，进行量化评估并输出结构化评分。
+        signal_dir_map = {
+            "long": "抄底做多 (Long)",
+            "short": "摸顶做空 (Short)",
+            "hold": "观望 (Hold)"
+        }
+        
+        expected_dir = market_data.get("signal_direction", "")
+        direction_text = signal_dir_map.get(expected_dir, expected_dir) if expected_dir else "未知"
+        
+        deep_indicators = ""
+        if market_data.get("rsi") is not None:
+            deep_indicators += f"- RSI 指标: {market_data.get('rsi')}\\n"
+        if market_data.get("bias_pct") is not None:
+            deep_indicators += f"- 均线乖离率 (Bias): {market_data.get('bias_pct')}%\\n"
+        if market_data.get("atr_pct") is not None:
+            deep_indicators += f"- ATR 波动率: {market_data.get('atr_pct')}%\\n"
+        if market_data.get("adx") is not None:
+            deep_indicators += f"- ADX 趋势强度: {market_data.get('adx')}\\n"
+        if market_data.get("heat_score"):
+            deep_indicators += f"- 市场热度评分: {market_data.get('heat_score')}\\n"
 
-市场数据：
+        prompt = f"""你是一名专业的加密货币量化研究员。请根据以下 {symbol} 的综合市场数据进行量化评估并输出结构化评分。
+
+【核心背景】
+底层量化算法已将该标的筛选出，且预判的战略方向为：{direction_text}。
+请在此基础上评估该交易方向的胜率和安全边际。
+
+【市场数据】
 - 当前价格: {ticker['last_price']} USDT
 - 24h 涨跌幅: {ticker['price_change_pct']:+.2f}%
 - 24h 成交量: {ticker['quote_volume']/1e6:.1f}M USDT
 - 24h 高点: {ticker['high_24h']} / 低点: {ticker['low_24h']}
+
+【深度技术指标】
+{deep_indicators if deep_indicators else "暂无深度技术指标"}
 
 请基于以上数据，从技术面和资金面角度进行量化评估。
 直接返回以下 JSON 格式（不要解释，只返回 JSON）：

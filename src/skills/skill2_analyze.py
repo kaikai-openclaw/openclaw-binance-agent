@@ -183,6 +183,9 @@ class Skill2Analyze(BaseSkill):
                 "atr_pct": candidate.get("atr_pct"),
                 "adx": candidate.get("adx"),
                 "signal_direction": candidate.get("signal_direction"),
+                "rsi": candidate.get("rsi"),
+                "bias_pct": candidate.get("bias_pct"),
+                "price_change_pct": candidate.get("price_change_pct"),
             }
 
             try:

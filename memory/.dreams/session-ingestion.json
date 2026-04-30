@@ -1,0 +1,1554 @@
+{
+  "version": 3,
+  "files": {
+    "binance:sessions/02005b7d-f942-4a7d-b8b2-5cb87941f4bf.jsonl.deleted.2026-04-29T07-46-46.447Z": {
+      "mtimeMs": 1777362736498,
+      "size": 123093,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/02005b7d-f942-4a7d-b8b2-5cb87941f4bf.trajectory.jsonl": {
+      "mtimeMs": 1777362454503,
+      "size": 186584,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/05aab13b-9ba8-4ebd-9d76-6c70878fcfb8.jsonl.deleted.2026-04-29T15-37-17.094Z": {
+      "mtimeMs": 1777392434204,
+      "size": 13602,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/05aab13b-9ba8-4ebd-9d76-6c70878fcfb8.trajectory.jsonl": {
+      "mtimeMs": 1777392436951,
+      "size": 203243,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/065f753e-61ae-4e9e-9ecb-07c956bb519f.jsonl": {
+      "mtimeMs": 1777458080445,
+      "size": 77558,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/065f753e-61ae-4e9e-9ecb-07c956bb519f.trajectory.jsonl": {
+      "mtimeMs": 1777458080581,
+      "size": 284173,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/06f036d6-3d67-4a6c-a187-aed5b95deac4.jsonl": {
+      "mtimeMs": 1777480682255,
+      "size": 11626,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/06f036d6-3d67-4a6c-a187-aed5b95deac4.trajectory.jsonl": {
+      "mtimeMs": 1777480682461,
+      "size": 218285,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/0c324593-cd6f-4c45-9561-53e6fa6ac753.jsonl": {
+      "mtimeMs": 1777446954480,
+      "size": 43338,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/0c324593-cd6f-4c45-9561-53e6fa6ac753.trajectory.jsonl": {
+      "mtimeMs": 1777446954557,
+      "size": 239343,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/100972c7-0750-41ce-b592-cdf8c6dbe6e5.jsonl": {
+      "mtimeMs": 1777451384691,
+      "size": 65550,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/100972c7-0750-41ce-b592-cdf8c6dbe6e5.trajectory.jsonl": {
+      "mtimeMs": 1777451384832,
+      "size": 262660,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/109e97a8-5feb-4eb7-aa60-1ebd7db222df.jsonl": {
+      "mtimeMs": 1777454350616,
+      "size": 35314,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/109e97a8-5feb-4eb7-aa60-1ebd7db222df.trajectory.jsonl": {
+      "mtimeMs": 1777454350699,
+      "size": 243965,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/1433eae5-ccf0-499c-ae94-bbde961ebd28.jsonl": {
+      "mtimeMs": 1777427782451,
+      "size": 64651,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/1433eae5-ccf0-499c-ae94-bbde961ebd28.trajectory.jsonl": {
+      "mtimeMs": 1777427782533,
+      "size": 259606,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/14c92669-384d-4f66-818f-dab998e19081.jsonl": {
+      "mtimeMs": 1777443393067,
+      "size": 51369,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/14c92669-384d-4f66-818f-dab998e19081.trajectory.jsonl": {
+      "mtimeMs": 1777443393111,
+      "size": 245962,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/1522a863-9b0c-4d4d-a67b-7074643f1ec2.jsonl.deleted.2026-04-29T13-52-26.698Z": {
+      "mtimeMs": 1777386296647,
+      "size": 12380,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/1522a863-9b0c-4d4d-a67b-7074643f1ec2.trajectory.jsonl": {
+      "mtimeMs": 1777386296911,
+      "size": 202343,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/18618217-3a17-439f-adf5-fe3d1d2116ae.jsonl": {
+      "mtimeMs": 1777473515942,
+      "size": 25025,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/18618217-3a17-439f-adf5-fe3d1d2116ae.trajectory.jsonl": {
+      "mtimeMs": 1777473516124,
+      "size": 232631,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/1874d94e-3fa4-4c85-95e3-d50795072bb6.jsonl": {
+      "mtimeMs": 1777481286001,
+      "size": 11186,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/1874d94e-3fa4-4c85-95e3-d50795072bb6.trajectory.jsonl": {
+      "mtimeMs": 1777481286157,
+      "size": 216084,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/1b450d83-3efe-413d-9f4b-0db2e5c813e6.jsonl": {
+      "mtimeMs": 1777433221734,
+      "size": 148211,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/1b450d83-3efe-413d-9f4b-0db2e5c813e6.trajectory.jsonl": {
+      "mtimeMs": 1777433221845,
+      "size": 342591,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/1b5c9290-3b3f-4b67-b134-3647e6162f4f.jsonl": {
+      "mtimeMs": 1777441410376,
+      "size": 37364,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/1b5c9290-3b3f-4b67-b134-3647e6162f4f.trajectory.jsonl": {
+      "mtimeMs": 1777441410856,
+      "size": 230737,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/1cb700b7-f788-4169-a199-8614aac0de02.jsonl.reset.2026-04-29T00-59-01.801Z": {
+      "mtimeMs": 1777361845383,
+      "size": 901988,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/1cb700b7-f788-4169-a199-8614aac0de02.trajectory.jsonl": {
+      "mtimeMs": 1777361845586,
+      "size": 11778444,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/1d566aca-da3d-498f-9723-a7b92002a9e6.jsonl": {
+      "mtimeMs": 1777477192195,
+      "size": 47340,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/1d566aca-da3d-498f-9723-a7b92002a9e6.trajectory.jsonl": {
+      "mtimeMs": 1777477192492,
+      "size": 254708,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/1ddb1296-1cf4-4c24-916f-def1b2c532c4.jsonl": {
+      "mtimeMs": 1777440928636,
+      "size": 48205,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/1ddb1296-1cf4-4c24-916f-def1b2c532c4.trajectory.jsonl": {
+      "mtimeMs": 1777440928963,
+      "size": 447619,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/1df81a45-86c0-46fd-9b1d-3d43c2756aff.jsonl": {
+      "mtimeMs": 1777456198078,
+      "size": 46847,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/1df81a45-86c0-46fd-9b1d-3d43c2756aff.trajectory.jsonl": {
+      "mtimeMs": 1777456198182,
+      "size": 255705,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/1f3d18fe-2532-4f39-b1bf-4a85a0b76b8a.jsonl": {
+      "mtimeMs": 1777484427010,
+      "size": 43031,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/1f3d18fe-2532-4f39-b1bf-4a85a0b76b8a.trajectory.jsonl": {
+      "mtimeMs": 1777484427229,
+      "size": 252035,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/1f3fbd8c-aa98-4f76-bfb6-eea9621c9601.jsonl": {
+      "mtimeMs": 1777475908465,
+      "size": 24088,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/1f3fbd8c-aa98-4f76-bfb6-eea9621c9601.trajectory.jsonl": {
+      "mtimeMs": 1777475908790,
+      "size": 231040,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/1fbb1726-38f2-4c44-bdec-b9f6d4f16dae.jsonl": {
+      "mtimeMs": 1777486216122,
+      "size": 24424,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/1fbb1726-38f2-4c44-bdec-b9f6d4f16dae.trajectory.jsonl": {
+      "mtimeMs": 1777486216320,
+      "size": 231289,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/20c3fecd-08db-4d3d-9aa2-cd001a7c903a.jsonl": {
+      "mtimeMs": 1777465138687,
+      "size": 41279,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/20c3fecd-08db-4d3d-9aa2-cd001a7c903a.trajectory.jsonl": {
+      "mtimeMs": 1777465138869,
+      "size": 248379,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/21385321-c690-4035-8c9f-69ded8d96fe1.jsonl": {
+      "mtimeMs": 1777463419763,
+      "size": 47850,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/21385321-c690-4035-8c9f-69ded8d96fe1.trajectory.jsonl": {
+      "mtimeMs": 1777463419883,
+      "size": 254449,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/23876c52-2b8a-4047-a1ef-36e463264cd9.jsonl": {
+      "mtimeMs": 1777474104897,
+      "size": 19914,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/23876c52-2b8a-4047-a1ef-36e463264cd9.trajectory.jsonl": {
+      "mtimeMs": 1777474105089,
+      "size": 226955,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/2525542d-5447-4afc-b262-2de7766d86b8.jsonl": {
+      "mtimeMs": 1777468734156,
+      "size": 36978,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/2525542d-5447-4afc-b262-2de7766d86b8.trajectory.jsonl": {
+      "mtimeMs": 1777468734255,
+      "size": 241572,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/258cfde1-c103-48f1-85c0-2c1cdfd90904.jsonl": {
+      "mtimeMs": 1777451934031,
+      "size": 45122,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/258cfde1-c103-48f1-85c0-2c1cdfd90904.trajectory.jsonl": {
+      "mtimeMs": 1777451934119,
+      "size": 266516,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/263b16a2-7d47-492f-9168-f1098d217d51.jsonl.deleted.2026-04-29T07-56-53.938Z": {
+      "mtimeMs": 1777364292045,
+      "size": 175622,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/263b16a2-7d47-492f-9168-f1098d217d51.trajectory.jsonl": {
+      "mtimeMs": 1777364291656,
+      "size": 800420,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/26bf5701-c2a1-4b96-9c3e-5336712c0102.jsonl": {
+      "mtimeMs": 1777456759859,
+      "size": 40175,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/26bf5701-c2a1-4b96-9c3e-5336712c0102.trajectory.jsonl": {
+      "mtimeMs": 1777456759986,
+      "size": 249202,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/27f48385-ac7f-4913-b67f-11e491b71da8.jsonl": {
+      "mtimeMs": 1777431420202,
+      "size": 136878,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/27f48385-ac7f-4913-b67f-11e491b71da8.trajectory.jsonl": {
+      "mtimeMs": 1777431420310,
+      "size": 331117,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/2ab0f98a-9727-4f45-be10-ff83e567ccf6.jsonl": {
+      "mtimeMs": 1777459331989,
+      "size": 94519,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/2ab0f98a-9727-4f45-be10-ff83e567ccf6.trajectory.jsonl": {
+      "mtimeMs": 1777459332093,
+      "size": 301093,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/2be81969-f04b-4165-8f97-430dd3d4ed83.jsonl": {
+      "mtimeMs": 1777462819470,
+      "size": 45313,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/2be81969-f04b-4165-8f97-430dd3d4ed83.trajectory.jsonl": {
+      "mtimeMs": 1777462819767,
+      "size": 254954,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/2f5c1b0c-dd3e-40af-a36b-2c72b6b6b864.jsonl": {
+      "mtimeMs": 1777449988137,
+      "size": 240569,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/2f5c1b0c-dd3e-40af-a36b-2c72b6b6b864.trajectory.jsonl": {
+      "mtimeMs": 1777449988232,
+      "size": 851095,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/2f6fec7e-ed2c-4bd6-a4ae-bc7e18171f59.jsonl": {
+      "mtimeMs": 1777454946810,
+      "size": 36659,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/2f6fec7e-ed2c-4bd6-a4ae-bc7e18171f59.trajectory.jsonl": {
+      "mtimeMs": 1777454946946,
+      "size": 245636,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/2f9a02ad-2a09-4d1f-a9b9-227e22c66497.jsonl": {
+      "mtimeMs": 1777450706925,
+      "size": 34191,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/2f9a02ad-2a09-4d1f-a9b9-227e22c66497.trajectory.jsonl": {
+      "mtimeMs": 1777450707041,
+      "size": 231718,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/30cf5dd3-32ed-4f28-ba8e-eedaf85a7ebf.jsonl": {
+      "mtimeMs": 1777476494601,
+      "size": 20023,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/30cf5dd3-32ed-4f28-ba8e-eedaf85a7ebf.trajectory.jsonl": {
+      "mtimeMs": 1777476494769,
+      "size": 227603,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/32754377-26d7-4f43-9308-79a4abec7d72.jsonl.deleted.2026-04-29T12-52-27.923Z": {
+      "mtimeMs": 1777382646481,
+      "size": 17895,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/32754377-26d7-4f43-9308-79a4abec7d72.trajectory.jsonl": {
+      "mtimeMs": 1777382647948,
+      "size": 208383,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/3a405e8b-c016-41e1-a66f-9e9c1593fcce.jsonl": {
+      "mtimeMs": 1777482478878,
+      "size": 9663,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/3a405e8b-c016-41e1-a66f-9e9c1593fcce.trajectory.jsonl": {
+      "mtimeMs": 1777482479045,
+      "size": 216222,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/3f324314-a75f-4a11-b414-8e6ad391df85.jsonl.deleted.2026-04-29T10-06-22.720Z": {
+      "mtimeMs": 1777372741851,
+      "size": 20600,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/3f324314-a75f-4a11-b414-8e6ad391df85.trajectory.jsonl": {
+      "mtimeMs": 1777372742010,
+      "size": 210914,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/4088df9d-a194-41a6-af67-602db4d890b5.jsonl": {
+      "mtimeMs": 1777472897144,
+      "size": 19835,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/4088df9d-a194-41a6-af67-602db4d890b5.trajectory.jsonl": {
+      "mtimeMs": 1777472897320,
+      "size": 226956,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/40b5dc1a-a9c0-4cdc-9672-1817a0149f0d.jsonl": {
+      "mtimeMs": 1777457412115,
+      "size": 51839,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/40b5dc1a-a9c0-4cdc-9672-1817a0149f0d.trajectory.jsonl": {
+      "mtimeMs": 1777457412254,
+      "size": 261452,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/40d3c2b7-38a0-4880-8f51-c8799383ebde.jsonl": {
+      "mtimeMs": 1777485479922,
+      "size": 11825,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/40d3c2b7-38a0-4880-8f51-c8799383ebde.trajectory.jsonl": {
+      "mtimeMs": 1777485480070,
+      "size": 217779,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/50270501-b708-4df4-9472-e54587dab79c.jsonl": {
+      "mtimeMs": 1777486682359,
+      "size": 11896,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/50270501-b708-4df4-9472-e54587dab79c.trajectory.jsonl": {
+      "mtimeMs": 1777486682551,
+      "size": 218812,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/5191303b-16c4-470c-ad0e-865aaadbc679.jsonl": {
+      "mtimeMs": 1777452546558,
+      "size": 34877,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/5191303b-16c4-470c-ad0e-865aaadbc679.trajectory.jsonl": {
+      "mtimeMs": 1777452546647,
+      "size": 243019,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/530efbbd-337c-4b6c-8fe1-b247d02b824b.jsonl": {
+      "mtimeMs": 1777438590525,
+      "size": 47710,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/530efbbd-337c-4b6c-8fe1-b247d02b824b.trajectory.jsonl": {
+      "mtimeMs": 1777438590901,
+      "size": 237950,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/5470a3c9-7d0d-4d22-abb7-bfefa11dd632.jsonl.deleted.2026-04-29T17-13-01.145Z": {
+      "mtimeMs": 1777398815939,
+      "size": 5901,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/5470a3c9-7d0d-4d22-abb7-bfefa11dd632.trajectory.jsonl": {
+      "mtimeMs": 1777398817831,
+      "size": 195746,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/551990fa-36e5-40ee-8cd5-4a842d91b9ba.jsonl": {
+      "mtimeMs": 1777429467800,
+      "size": 287309,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/551990fa-36e5-40ee-8cd5-4a842d91b9ba.trajectory.jsonl": {
+      "mtimeMs": 1777429467998,
+      "size": 193777,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/59bf3c09-3629-4315-9114-76d469d22d8e.jsonl.deleted.2026-04-29T06-16-34.815Z": {
+      "mtimeMs": 1777356901420,
+      "size": 39955,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/59bf3c09-3629-4315-9114-76d469d22d8e.trajectory.jsonl": {
+      "mtimeMs": 1777356901494,
+      "size": 233687,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/5a5632b6-7dc1-4b97-92d1-0b60194a8500.jsonl": {
+      "mtimeMs": 1777464635075,
+      "size": 38962,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/5a5632b6-7dc1-4b97-92d1-0b60194a8500.trajectory.jsonl": {
+      "mtimeMs": 1777464635236,
+      "size": 244515,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/62f7cabf-3016-4355-adc2-c69f5abbb234.jsonl": {
+      "mtimeMs": 1777462129837,
+      "size": 33231,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/62f7cabf-3016-4355-adc2-c69f5abbb234.trajectory.jsonl": {
+      "mtimeMs": 1777462130034,
+      "size": 242032,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/63420cd4-4f63-4eb0-9783-0f26643d1c35.jsonl": {
+      "mtimeMs": 1777478883925,
+      "size": 12765,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/63420cd4-4f63-4eb0-9783-0f26643d1c35.trajectory.jsonl": {
+      "mtimeMs": 1777478884055,
+      "size": 219843,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/647dda87-5d8c-4d32-bedf-0472ede1124d.jsonl": {
+      "mtimeMs": 1777469305997,
+      "size": 21960,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/647dda87-5d8c-4d32-bedf-0472ede1124d.trajectory.jsonl": {
+      "mtimeMs": 1777469306126,
+      "size": 226836,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/660be13d-b3dc-4ce0-a23e-4f6b18718151.jsonl.deleted.2026-04-29T08-55-08.942Z": {
+      "mtimeMs": 1777366486835,
+      "size": 33451,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/660be13d-b3dc-4ce0-a23e-4f6b18718151.trajectory.jsonl": {
+      "mtimeMs": 1777366486882,
+      "size": 227599,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/77603cf5-e6e1-473d-afa8-ac333b430969.jsonl": {
+      "mtimeMs": 1777481879168,
+      "size": 10742,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/77603cf5-e6e1-473d-afa8-ac333b430969.trajectory.jsonl": {
+      "mtimeMs": 1777481879374,
+      "size": 216869,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/7b2d7d43-b2b4-4dc8-b24b-abcce5b126d4.jsonl": {
+      "mtimeMs": 1777479550448,
+      "size": 42173,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/7b2d7d43-b2b4-4dc8-b24b-abcce5b126d4.trajectory.jsonl": {
+      "mtimeMs": 1777479550652,
+      "size": 250743,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/7cf1dec0-6446-4e24-9286-ee7fe2392d59.jsonl.reset.2026-04-28T01-22-15.259Z": {
+      "mtimeMs": 1777282480286,
+      "size": 5958,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/7cf1dec0-6446-4e24-9286-ee7fe2392d59.trajectory.jsonl": {
+      "mtimeMs": 1777282480293,
+      "size": 423140,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/80dd46f2-ef7b-4ca7-9971-aa21b313406a.jsonl": {
+      "mtimeMs": 1777450178490,
+      "size": 37379,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/80dd46f2-ef7b-4ca7-9971-aa21b313406a.trajectory.jsonl": {
+      "mtimeMs": 1777450178625,
+      "size": 235309,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/85cb5978-a3de-4172-926e-82f39d0588b4.jsonl": {
+      "mtimeMs": 1777487887889,
+      "size": 11925,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/85cb5978-a3de-4172-926e-82f39d0588b4.trajectory.jsonl": {
+      "mtimeMs": 1777487888061,
+      "size": 218635,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/85e4e2cf-2b57-47b8-8600-7cd28b88b938.jsonl.deleted.2026-04-29T03-27-04.009Z": {
+      "mtimeMs": 1777346411016,
+      "size": 61741,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/85e4e2cf-2b57-47b8-8600-7cd28b88b938.trajectory.jsonl": {
+      "mtimeMs": 1777346411040,
+      "size": 255459,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/872cf7e1-df75-4048-b63e-65f701daaf91.trajectory.jsonl": {
+      "mtimeMs": 1777411141263,
+      "size": 385136,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/8a03ad07-854d-4f88-9c49-a8b171f72cd0.jsonl.deleted.2026-04-29T11-51-21.953Z": {
+      "mtimeMs": 1777379125109,
+      "size": 6110,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/8a03ad07-854d-4f88-9c49-a8b171f72cd0.trajectory.jsonl": {
+      "mtimeMs": 1777379125278,
+      "size": 195946,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/8b9ec69c-8123-477f-b587-e921bbf6baaa.jsonl": {
+      "mtimeMs": 1777417409766,
+      "size": 4283,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/8b9ec69c-8123-477f-b587-e921bbf6baaa.trajectory.jsonl": {
+      "mtimeMs": 1777417412127,
+      "size": 194258,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/8c12d894-8c39-4fa9-808e-493c575c7390.jsonl": {
+      "mtimeMs": 1777470504524,
+      "size": 20626,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/8c12d894-8c39-4fa9-808e-493c575c7390.trajectory.jsonl": {
+      "mtimeMs": 1777470504716,
+      "size": 227366,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/8fe28949-d2c9-45a5-83c9-d382e2896108.jsonl": {
+      "mtimeMs": 1777475319996,
+      "size": 34808,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/8fe28949-d2c9-45a5-83c9-d382e2896108.trajectory.jsonl": {
+      "mtimeMs": 1777475320199,
+      "size": 241184,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/92fb0d52-48b4-4ba1-a977-c89c63260878.jsonl": {
+      "mtimeMs": 1777477715716,
+      "size": 22752,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/92fb0d52-48b4-4ba1-a977-c89c63260878.trajectory.jsonl": {
+      "mtimeMs": 1777477715873,
+      "size": 228535,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/9373d641-7bd1-44dc-8971-59f82c4c3773.jsonl": {
+      "mtimeMs": 1777478294547,
+      "size": 20938,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/9373d641-7bd1-44dc-8971-59f82c4c3773.trajectory.jsonl": {
+      "mtimeMs": 1777478294695,
+      "size": 227800,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/93d0715b-ad10-4b54-a9ea-e40cc3cde052.jsonl": {
+      "mtimeMs": 1777465722635,
+      "size": 21545,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/93d0715b-ad10-4b54-a9ea-e40cc3cde052.trajectory.jsonl": {
+      "mtimeMs": 1777465724031,
+      "size": 229074,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/93eb0246-8872-41ea-86ef-5b0a9d98841c.jsonl": {
+      "mtimeMs": 1777474814659,
+      "size": 42505,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/93eb0246-8872-41ea-86ef-5b0a9d98841c.trajectory.jsonl": {
+      "mtimeMs": 1777474814821,
+      "size": 248629,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/9653d019-79fe-42ed-9b5e-eacfb093f084.jsonl": {
+      "mtimeMs": 1777489085530,
+      "size": 10414,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/9653d019-79fe-42ed-9b5e-eacfb093f084.trajectory.jsonl": {
+      "mtimeMs": 1777489085763,
+      "size": 216933,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/9a315963-f6a5-4f33-b342-f7730bd5c83c.jsonl.deleted.2026-04-29T04-56-47.596Z": {
+      "mtimeMs": 1777351194215,
+      "size": 22065,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/9a315963-f6a5-4f33-b342-f7730bd5c83c.trajectory.jsonl": {
+      "mtimeMs": 1777351194281,
+      "size": 443178,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/9a7f16ca-b41b-46ee-9ebb-0bd736f86c13.jsonl": {
+      "mtimeMs": 1777455638172,
+      "size": 42149,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/9a7f16ca-b41b-46ee-9ebb-0bd736f86c13.trajectory.jsonl": {
+      "mtimeMs": 1777455638246,
+      "size": 250072,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/9ce8f4e9-292e-470e-9e17-32e83ce7536b.jsonl": {
+      "mtimeMs": 1777445097987,
+      "size": 271348,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/9ce8f4e9-292e-470e-9e17-32e83ce7536b.trajectory.jsonl": {
+      "mtimeMs": 1777445098113,
+      "size": 194869,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/9e65df24-5214-46af-bd94-7261bd57402b.jsonl": {
+      "mtimeMs": 1777453891990,
+      "size": 58130,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/9e65df24-5214-46af-bd94-7261bd57402b.trajectory.jsonl": {
+      "mtimeMs": 1777453892206,
+      "size": 264996,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/9f2e1341-3624-46b0-a34d-895ff8506e05.jsonl": {
+      "mtimeMs": 1777461110302,
+      "size": 76927,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/9f2e1341-3624-46b0-a34d-895ff8506e05.trajectory.jsonl": {
+      "mtimeMs": 1777461110417,
+      "size": 285412,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/a0cc8d86-c56b-4d7b-84d9-d7ef3d6511a9.jsonl": {
+      "mtimeMs": 1777483739470,
+      "size": 43989,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/a0cc8d86-c56b-4d7b-84d9-d7ef3d6511a9.trajectory.jsonl": {
+      "mtimeMs": 1777483739609,
+      "size": 252020,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/a508cac7-6371-4e70-b491-5bcc68150f1f.jsonl.deleted.2026-04-29T09-27-12.816Z": {
+      "mtimeMs": 1777368984338,
+      "size": 171571,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/a508cac7-6371-4e70-b491-5bcc68150f1f.trajectory.jsonl": {
+      "mtimeMs": 1777368984383,
+      "size": 1893316,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/a7af91c1-d3f8-4e3c-84e2-57327288950b.jsonl": {
+      "mtimeMs": 1777471230049,
+      "size": 34005,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/a7af91c1-d3f8-4e3c-84e2-57327288950b.trajectory.jsonl": {
+      "mtimeMs": 1777471230220,
+      "size": 241176,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/a90c08f2-665c-4dc9-ba42-940dabd6131e.jsonl": {
+      "mtimeMs": 1777453167764,
+      "size": 46290,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/a90c08f2-665c-4dc9-ba42-940dabd6131e.trajectory.jsonl": {
+      "mtimeMs": 1777453167899,
+      "size": 253619,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/a9c797ad-eab1-460e-abdd-b55c99efb66c.jsonl": {
+      "mtimeMs": 1777448923950,
+      "size": 41736,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/a9c797ad-eab1-460e-abdd-b55c99efb66c.trajectory.jsonl": {
+      "mtimeMs": 1777448924054,
+      "size": 238532,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/ab2cb177-7ef3-4367-99ad-d46082ec8989.jsonl.deleted.2026-04-29T03-56-40.727Z": {
+      "mtimeMs": 1777348205307,
+      "size": 44466,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/ab2cb177-7ef3-4367-99ad-d46082ec8989.trajectory.jsonl": {
+      "mtimeMs": 1777348205333,
+      "size": 236849,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/aebc01d4-0ece-44c4-a41e-d0057adb7cf7.jsonl.deleted.2026-04-29T02-57-00.526Z": {
+      "mtimeMs": 1777344597355,
+      "size": 47498,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/aebc01d4-0ece-44c4-a41e-d0057adb7cf7.trajectory.jsonl": {
+      "mtimeMs": 1777344597378,
+      "size": 239624,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/b01f9c8a-1fc7-43d3-8699-ab85fa1cce44.jsonl": {
+      "mtimeMs": 1777467534456,
+      "size": 28012,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/b01f9c8a-1fc7-43d3-8699-ab85fa1cce44.trajectory.jsonl": {
+      "mtimeMs": 1777467534653,
+      "size": 233571,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/b361ede0-7807-4324-9055-2c2885ddb57d.jsonl": {
+      "mtimeMs": 1777480075384,
+      "size": 1127597,
+      "contentHash": "c80672c90a408fd2920c422ccd16ce49c12c32734e804fe50a277f7501b64d11",
+      "lineCount": 103,
+      "lastContentLine": 35
+    },
+    "binance:sessions/b361ede0-7807-4324-9055-2c2885ddb57d.trajectory.jsonl": {
+      "mtimeMs": 1777463518998,
+      "size": 2759426,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/b83f5ca2-b145-4b96-a1da-ef89bc26f1bc.jsonl": {
+      "mtimeMs": 1777404808424,
+      "size": 8107,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/b83f5ca2-b145-4b96-a1da-ef89bc26f1bc.trajectory.jsonl": {
+      "mtimeMs": 1777404779468,
+      "size": 191199,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/b948d02a-f5b0-4471-a8c2-0446fd977d90.jsonl": {
+      "mtimeMs": 1777434998518,
+      "size": 97779,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/b948d02a-f5b0-4471-a8c2-0446fd977d90.trajectory.jsonl": {
+      "mtimeMs": 1777434998636,
+      "size": 292418,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/bf64a683-cd94-49dc-9b92-51fe1b6c653f.jsonl": {
+      "mtimeMs": 1777460553192,
+      "size": 65487,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/bf64a683-cd94-49dc-9b92-51fe1b6c653f.trajectory.jsonl": {
+      "mtimeMs": 1777460553359,
+      "size": 533582,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/c4bba418-3fe6-4071-8e01-929358459961.jsonl": {
+      "mtimeMs": 1777466345959,
+      "size": 32577,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/c4bba418-3fe6-4071-8e01-929358459961.trajectory.jsonl": {
+      "mtimeMs": 1777466346339,
+      "size": 238754,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/c4e38961-6bef-4e48-a0c9-c3812c542821.jsonl": {
+      "mtimeMs": 1777468206455,
+      "size": 34593,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/c4e38961-6bef-4e48-a0c9-c3812c542821.trajectory.jsonl": {
+      "mtimeMs": 1777468206555,
+      "size": 241125,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/c551f971-4bff-410b-982b-e085f6fc24c8.jsonl": {
+      "mtimeMs": 1777472293441,
+      "size": 19461,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/c551f971-4bff-410b-982b-e085f6fc24c8.trajectory.jsonl": {
+      "mtimeMs": 1777472293558,
+      "size": 225733,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/c769fb92-458b-4685-a35d-89f7383e31f8.jsonl": {
+      "mtimeMs": 1777485081666,
+      "size": 102069,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/c769fb92-458b-4685-a35d-89f7383e31f8.trajectory.jsonl": {
+      "mtimeMs": 1777485081841,
+      "size": 311623,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/ca005c17-6a0d-4c2b-983b-a4bda1afb54b.jsonl": {
+      "mtimeMs": 1777469918172,
+      "size": 31754,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/ca005c17-6a0d-4c2b-983b-a4bda1afb54b.trajectory.jsonl": {
+      "mtimeMs": 1777469918277,
+      "size": 237075,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/cb1a0b9a-6716-4597-918d-886eed2068aa.jsonl": {
+      "mtimeMs": 1777487273520,
+      "size": 6325,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/cb1a0b9a-6716-4597-918d-886eed2068aa.trajectory.jsonl": {
+      "mtimeMs": 1777487273731,
+      "size": 211035,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/ce7b8a19-f84f-4cfd-b872-b7d06648429f.jsonl.deleted.2026-04-29T05-35-30.683Z": {
+      "mtimeMs": 1777353245430,
+      "size": 16389,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/ce7b8a19-f84f-4cfd-b872-b7d06648429f.trajectory.jsonl": {
+      "mtimeMs": 1777353245506,
+      "size": 421721,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/d34f5773-a15f-45fd-a8f2-91777336ec70.jsonl": {
+      "mtimeMs": 1777466904954,
+      "size": 20654,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/d34f5773-a15f-45fd-a8f2-91777336ec70.trajectory.jsonl": {
+      "mtimeMs": 1777466905190,
+      "size": 226265,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/d5e5c5ad-e1ba-43fe-b04a-dbda645696e7.jsonl": {
+      "mtimeMs": 1777480080138,
+      "size": 8393,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/d5e5c5ad-e1ba-43fe-b04a-dbda645696e7.trajectory.jsonl": {
+      "mtimeMs": 1777480080318,
+      "size": 213290,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/d60f2bea-a291-4232-8ed0-a2b03f27995c.jsonl": {
+      "mtimeMs": 1777483076630,
+      "size": 9284,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/d60f2bea-a291-4232-8ed0-a2b03f27995c.trajectory.jsonl": {
+      "mtimeMs": 1777483076841,
+      "size": 214937,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/e51ada2c-704d-4579-9a2a-8b48d2b197d4.jsonl": {
+      "mtimeMs": 1777423767164,
+      "size": 54375,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/e51ada2c-704d-4579-9a2a-8b48d2b197d4.trajectory.jsonl": {
+      "mtimeMs": 1777423767251,
+      "size": 249427,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/e7ce4faf-20cc-4c60-9a9f-d332121b271e.jsonl": {
+      "mtimeMs": 1777447947579,
+      "size": 44581,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/e7ce4faf-20cc-4c60-9a9f-d332121b271e.trajectory.jsonl": {
+      "mtimeMs": 1777447947708,
+      "size": 483468,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/ec850387-a5a9-4dfa-bb48-fa0d760d32bc.jsonl.deleted.2026-04-29T07-17-56.479Z": {
+      "mtimeMs": 1777360630401,
+      "size": 80143,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/ec850387-a5a9-4dfa-bb48-fa0d760d32bc.trajectory.jsonl": {
+      "mtimeMs": 1777360630436,
+      "size": 274789,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/eceb7358-5ba2-4ad5-9ef5-df28ac8eb0ad.jsonl": {
+      "mtimeMs": 1777458761656,
+      "size": 55366,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/eceb7358-5ba2-4ad5-9ef5-df28ac8eb0ad.trajectory.jsonl": {
+      "mtimeMs": 1777458761758,
+      "size": 515851,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/f0dc9906-edac-4086-873d-c1c6d4df424d.jsonl": {
+      "mtimeMs": 1777488636963,
+      "size": 65635,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/f0dc9906-edac-4086-873d-c1c6d4df424d.trajectory.jsonl": {
+      "mtimeMs": 1777488637215,
+      "size": 275836,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/f2bfb33f-379e-47f5-bf9d-6656eba6ce34.jsonl": {
+      "mtimeMs": 1777463957167,
+      "size": 35122,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/f2bfb33f-379e-47f5-bf9d-6656eba6ce34.trajectory.jsonl": {
+      "mtimeMs": 1777463957334,
+      "size": 244138,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/f469a61d-0226-4986-bf8c-b432c0d1937e.jsonl": {
+      "mtimeMs": 1777461628485,
+      "size": 74594,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/f469a61d-0226-4986-bf8c-b432c0d1937e.trajectory.jsonl": {
+      "mtimeMs": 1777461629036,
+      "size": 290680,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/f4b431c0-8da1-440c-a61c-1245a021938f.jsonl": {
+      "mtimeMs": 1777448503749,
+      "size": 69582,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/f4b431c0-8da1-440c-a61c-1245a021938f.trajectory.jsonl": {
+      "mtimeMs": 1777448503888,
+      "size": 267503,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/f708861c-7df6-4177-9d78-0e3f33b44731.jsonl.deleted.2026-04-29T08-29-46.862Z": {
+      "mtimeMs": 1777364753298,
+      "size": 39330,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/f708861c-7df6-4177-9d78-0e3f33b44731.trajectory.jsonl": {
+      "mtimeMs": 1777364753388,
+      "size": 233492,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/f786241d-7ce2-40f7-9643-385d1f6179d1.jsonl.deleted.2026-04-29T11-02-35.371Z": {
+      "mtimeMs": 1777375681273,
+      "size": 10872,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/f786241d-7ce2-40f7-9643-385d1f6179d1.trajectory.jsonl": {
+      "mtimeMs": 1777375667615,
+      "size": 191191,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/fdf68078-8867-4e10-981d-ff5ce7780725.jsonl": {
+      "mtimeMs": 1777471723103,
+      "size": 33908,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/fdf68078-8867-4e10-981d-ff5ce7780725.trajectory.jsonl": {
+      "mtimeMs": 1777471723251,
+      "size": 239678,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/fea55b47-21dc-460a-b6a9-27bf884df26c.jsonl": {
+      "mtimeMs": 1777459801648,
+      "size": 66951,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    },
+    "binance:sessions/fea55b47-21dc-460a-b6a9-27bf884df26c.trajectory.jsonl": {
+      "mtimeMs": 1777459802103,
+      "size": 275666,
+      "contentHash": "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070",
+      "lineCount": 0,
+      "lastContentLine": 0
+    }
+  },
+  "seenMessages": {
+    "binance:7cf1dec0-6446-4e24-9286-ee7fe2392d59": [
+      "86b479eade1dbe748c7fa366d3ccab3b8f54b797",
+      "b988c2ddc2d3192ea630493b8f5c47b9abab5a6b"
+    ],
+    "binance:1cb700b7-f788-4169-a199-8614aac0de02": [
+      "69310f6b88d1a863676b0b0553ae5fbc176068a3",
+      "55081e41b269b3ebd4d54c56e927d2ec6765eb62",
+      "7aad06dd9d210840aa6238568b6ff4b5ce51da26",
+      "e6234fec244e3c58b173ce0637a3b7098f744eaa",
+      "3762c1de5610326fb0ec50c24b1937e365879280",
+      "83bd081a2099de0bc24c106d750417174029783f",
+      "76c8b53012358945ce7867cd60f5e7024885f7ce",
+      "3d1a8349e2f7d3c5abc129058bce2111559e66b3",
+      "376440a78fd0f5212746963132c23ae093c8fcb9",
+      "dd2b1025f1b656469d572a3848f56f4c00424333",
+      "df65867aba3809d3f493d547cef4d502063ff947",
+      "3dd110954ed2690811aaea2b2c150d183f76ece1",
+      "3447f4fd0f26d65cb8074568505224423042b620",
+      "7bae252fd158dc9d053c16b060517430827e9ce3",
+      "12c97e78e95e2dadc412ff46159dd560fc369d51",
+      "fd3dba4c61bc29407c1902d29e1e776a370d1600",
+      "b61a64580e0b9c1d14c7f54b1a710d84a56f8a0b",
+      "873414232a8435658d93f822be2261fac4245fb1",
+      "4f334c9b9a9ad3b458598902f69269b2b9954605",
+      "5e81172628713fff30d7f311fad178b10af6839f",
+      "b77f7b6acab7cdd2fe0758dbe4d0619fcc41ad76",
+      "ff2c16ace29e550baab456068501b76d3c87b3e7",
+      "abadeb29d6798eb56fa17ade1e5077ba2b6a78fd",
+      "6890e0984b92a16092dd30a05c86584bb5aa5e05"
+    ],
+    "binance:b361ede0-7807-4324-9055-2c2885ddb57d": [
+      "d00d6d8f59d00512b788cbb1d8d14a04fc267e6a",
+      "bd9749b149918d04d1213384c561a667af00a30d",
+      "14989f902eb6219e145d7e9d677dc84b60b4dd2d",
+      "11facbc21af18d0e27c6725238bc31fbe47c9581",
+      "da0acd125d7b0f340509a3c2e2d81a9d8fa78fc0",
+      "9841621615b012c7a6402d45e40f4c2ae8d08c53",
+      "81b2822d8f2ffd7b116fe7bc276f88186de98879",
+      "3a7dc4f29fa2cb6016e752e91f2e01886245cb59",
+      "e05cad4f2eff762843c97399d8674507b5bb9f8a",
+      "747527309b6d6d67f9ffc6dba74465409eda244e",
+      "86453226299e386a2a2f0b1e7affd441324d0ce4",
+      "74a8669bc949b408f29ee7e8d39570f0afa75c64",
+      "ac2a38895a5d2678a0719ae768e01c20ba47e9bf",
+      "bcfb6fce7523b5667ab3ce4cde75c697096034aa",
+      "08928cd1e1b1edd9b2aebc1d123c8028c52027ab",
+      "9eb71ccf42d7ee09d61d55837ee531d032975100",
+      "64d63da7cf972c4ab4c2fb01b868e2ed3164d8ab",
+      "1f78813b9d33444f1732a025c83469157f13d090",
+      "58b49126924c9fc421666d994ff2aa9b4a8944c6",
+      "5a3601cafc95c1ef428f968216766afdd1f3d1fc",
+      "dc57da9de2f3ceb0a5c58b75d840b5ae59c76e89",
+      "1fd627846fcfcf3011ec52ed0b9b83f9ce04d244",
+      "f97bec58b2c2dce9df902859514c6699d6ae187e",
+      "f1e0f9ff624f2a265ce893f6d3e20fbb0c8fb774"
+    ]
+  }
+}

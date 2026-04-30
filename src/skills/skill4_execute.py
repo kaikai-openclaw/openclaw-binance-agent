@@ -14,6 +14,7 @@ BinanceFapiClient 和 RiskController 通过构造函数注入，便于测试时 
 import logging
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Callable, List, Optional
 
@@ -23,6 +24,7 @@ from src.infra.exchange_rules import (
     normalize_order_quantity,
     normalize_order_price,
 )
+from src.infra.fees import calc_crypto_fee
 from src.infra.risk_controller import RiskController
 from src.infra.state_store import StateStore
 from src.models.types import (
@@ -40,6 +42,9 @@ DEFAULT_POLL_INTERVAL = 30
 
 # 默认杠杆倍数
 DEFAULT_LEVERAGE = 10
+
+# 多品种并发执行最大线程数（monitor_until_close=True 时生效）
+DEFAULT_MAX_CONCURRENT_TRADES = 8
 
 # 已有持仓缺少策略计划时的保护性止损/止盈（与 Skill-3 固定回退保持一致）
 EXISTING_POSITION_STOP_LOSS_PCT = 0.03
@@ -79,6 +84,9 @@ class Skill4Execute(BaseSkill):
         trading_rule_provider: Optional[TradingRuleProvider] = None,
         monitor_until_close: bool = False,
         entry_confirm_timeout: float = DEFAULT_ENTRY_CONFIRM_TIMEOUT,
+        max_concurrent_trades: int = DEFAULT_MAX_CONCURRENT_TRADES,
+        fee_order_type: str = "taker",
+        fee_vip_discount: float = 0.0,
     ) -> None:
         """
         初始化 Skill-4。
@@ -97,6 +105,11 @@ class Skill4Execute(BaseSkill):
             monitor_until_close: 是否在本轮阻塞监控到平仓；定时任务默认 False，
                 由下一轮任务继续管理已有持仓
             entry_confirm_timeout: 非阻塞模式下等待入场成交的最长秒数
+            max_concurrent_trades: monitor_until_close=True 时的最大并发线程数，
+                默认 8；非阻塞模式单次调用极短，并发收益有限，保持默认即可
+            fee_order_type: 平仓订单类型，"taker"（市价单，默认）或 "maker"（限价单），
+                用于计算平仓手续费
+            fee_vip_discount: Binance VIP 费率折扣系数（0-1）
         """
         super().__init__(state_store, input_schema, output_schema)
         self.name = "skill4_execute"
@@ -108,6 +121,9 @@ class Skill4Execute(BaseSkill):
         self._trading_rule_provider = trading_rule_provider
         self._monitor_until_close = monitor_until_close
         self._entry_confirm_timeout = entry_confirm_timeout
+        self._max_concurrent_trades = max_concurrent_trades
+        self._fee_order_type = fee_order_type
+        self._fee_vip_discount = fee_vip_discount
 
     def run(self, input_data: dict) -> dict:
         """
@@ -152,10 +168,10 @@ class Skill4Execute(BaseSkill):
         # 对已经存在的实盘持仓补齐交易所侧保护，避免无 SL/TP 裸奔。
         self._protect_existing_positions(account)
 
-        # 步骤 3：逐笔执行交易计划
-        for plan in trade_plans:
-            result = self._execute_single_trade(plan)
-            execution_results.append(result)
+        # 步骤 3：并发执行交易计划
+        # monitor_until_close=True 时每笔交易可能阻塞数小时，必须并发；
+        # monitor_until_close=False 时单次调用极短，并发收益有限但无害。
+        execution_results = self._execute_plans_concurrent(trade_plans)
 
         is_paper = self._risk_controller.is_paper_mode()
 
@@ -172,6 +188,58 @@ class Skill4Execute(BaseSkill):
         )
 
         return output
+
+    def _execute_plans_concurrent(self, trade_plans: List[dict]) -> List[dict]:
+        """
+        并发执行所有交易计划，结果按原始 plan 顺序返回。
+
+        使用 ThreadPoolExecutor 同时监控多个品种，解决
+        monitor_until_close=True 时串行阻塞的问题。
+        单个品种抛出未捕获异常时，记录错误并返回 EXECUTION_FAILED 结果，
+        不影响其他品种的执行。
+        """
+        if not trade_plans:
+            return []
+
+        # 单品种时无需创建线程池，直接串行
+        if len(trade_plans) == 1:
+            return [self._execute_single_trade(trade_plans[0])]
+
+        results: List[dict] = [None] * len(trade_plans)  # type: ignore[list-item]
+        workers = min(self._max_concurrent_trades, len(trade_plans))
+
+        log.info(
+            f"[{self.name}] 并发执行 {len(trade_plans)} 笔计划，"
+            f"线程数={workers}"
+        )
+
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="skill4") as pool:
+            # 以 index 为 key 保留原始顺序
+            future_to_idx = {
+                pool.submit(self._execute_single_trade, plan): idx
+                for idx, plan in enumerate(trade_plans)
+            }
+
+            for future in as_completed(future_to_idx):
+                idx = future_to_idx[future]
+                plan = trade_plans[idx]
+                symbol = plan.get("symbol", f"plan[{idx}]")
+                try:
+                    results[idx] = future.result()
+                except Exception as exc:
+                    log.error(
+                        f"[{self.name}] {symbol} 并发执行异常（已隔离）: {exc}",
+                        exc_info=True,
+                    )
+                    results[idx] = self._make_result(
+                        symbol=symbol,
+                        direction=plan.get("direction", "unknown"),
+                        status="EXECUTION_FAILED",
+                        executed_at=datetime.now(timezone.utc).isoformat(),
+                        reason=f"concurrent_exception: {exc}",
+                    )
+
+        return results
 
     def _execute_single_trade(self, plan: dict) -> dict:
         """
@@ -311,6 +379,7 @@ class Skill4Execute(BaseSkill):
                 take_profit_price=take_profit_price,
                 planned_quantity=quantity,
                 order_id=order_result.order_id,
+                trailing_stop=trailing_stop,
             )
             return self._make_result(
                 symbol=symbol,
@@ -634,12 +703,17 @@ class Skill4Execute(BaseSkill):
         take_profit_price: float,
         planned_quantity: float,
         order_id: str,
+        trailing_stop: Optional[dict] = None,
     ) -> dict:
         """
         非阻塞执行模式：短暂确认入场成交，挂好服务端保护后返回。
 
         若限价单在短时间内未成交，则主动撤单，避免本轮结束后订单才成交而
         暴露无保护仓位。
+
+        若 trailing_stop 含有效配置（trail_pct > 0），在 SL/TP 挂单后
+        同步向 Binance 提交 TRAILING_STOP_MARKET 条件单，使移动止损
+        在非阻塞生产模式下也能由服务端执行（进程崩溃不丢失保护）。
         """
         start_time = time.monotonic()
         while True:
@@ -661,6 +735,7 @@ class Skill4Execute(BaseSkill):
                         quantity=position_amt,
                         stop_loss_price=stop_loss_price,
                         take_profit_price=take_profit_price,
+                        trailing_stop=trailing_stop or {},
                     )
                     if not protection_placed:
                         log.critical(
@@ -854,14 +929,21 @@ class Skill4Execute(BaseSkill):
                 side=side,
                 quantity=quantity,
             )
+            # 以平仓名义金额计算真实手续费（taker 市价单）
+            close_notional = quantity * result.price if result.price > 0 else 0.0
+            close_fee = calc_crypto_fee(
+                notional=close_notional,
+                order_type=self._fee_order_type,
+                vip_discount=self._fee_vip_discount,
+            ).total
             log.info(
                 f"[{self.name}] {symbol} 平仓成功: "
-                f"原因={reason}, 价格={result.price}"
+                f"原因={reason}, 价格={result.price}, 手续费={close_fee:.4f} USDT"
             )
             return self._make_monitor_result(
                 status=OrderStatus.FILLED.value,
                 close_price=result.price,
-                fee=0.0,
+                fee=close_fee,
                 reason=reason,
                 start_time=start_time,
             )
@@ -896,13 +978,17 @@ class Skill4Execute(BaseSkill):
         quantity: float,
         stop_loss_price: float,
         take_profit_price: float,
+        trailing_stop: Optional[dict] = None,
     ) -> bool:
         """
-        在 Binance 服务端挂止损 + 止盈条件单（双重保护）。
+        在 Binance 服务端挂止损 + 止盈 + 移动止损条件单（三重保护）。
 
         仅在入场成交后调用，使用 closePosition=True 让 Binance 按当前仓位
         全平，避免另一侧残留保护单在仓位已平后反向开仓。
         任一条件单挂载失败不影响另一张，本地轮询作为兜底。
+
+        若 trailing_stop 含有效的 trail_pct（> 0），则同步挂载
+        TRAILING_STOP_MARKET 移动止损单，使非阻塞模式也能保护盈利。
 
         返回:
             True 表示至少一张条件单挂载成功
@@ -962,7 +1048,75 @@ class Skill4Execute(BaseSkill):
                 f"将依赖本地轮询兜底"
             )
 
+        # 挂移动止损单 (TRAILING_STOP_MARKET)
+        if trailing_stop:
+            self._place_server_trailing_stop(
+                symbol=symbol,
+                close_side=close_side,
+                quantity=quantity,
+                trailing_stop=trailing_stop,
+            )
+
         return success
+
+    def _place_server_trailing_stop(
+        self,
+        symbol: str,
+        close_side: str,
+        quantity: float,
+        trailing_stop: dict,
+    ) -> None:
+        """
+        向 Binance 提交 TRAILING_STOP_MARKET 移动止损条件单。
+
+        参数:
+            symbol: 交易对符号
+            close_side: 平仓方向（"SELL" 或 "BUY"）
+            quantity: 持仓数量
+            trailing_stop: 移动止损配置字典，包含:
+                - trail_pct: 回调比例（%），必填，0 < trail_pct <= 5.0
+                - activation_price: 激活价格（可选），达到此价格才开始追踪
+        """
+        trail_pct = float(trailing_stop.get("trail_pct") or 0)
+        activation_price = float(trailing_stop.get("activation_price") or 0)
+
+        # Binance callbackRate 范围 0.1% ~ 5.0%
+        if trail_pct <= 0:
+            return
+        callback_rate = max(0.1, min(trail_pct, 5.0))
+        if callback_rate != trail_pct:
+            log.warning(
+                f"[{self.name}] {symbol} trail_pct={trail_pct} 超出 Binance "
+                f"允许范围 [0.1, 5.0]，自动裁剪为 {callback_rate}"
+            )
+
+        # 对激活价格进行 tickSize 规整
+        normalized_activation = (
+            self._normalize_price_for_exchange(symbol, activation_price)
+            if activation_price > 0
+            else None
+        )
+
+        try:
+            result = self._binance_client.place_trailing_stop_market_order(
+                symbol=symbol,
+                side=close_side,
+                quantity=quantity,
+                callback_rate=callback_rate,
+                activation_price=normalized_activation,
+                close_position=True,
+            )
+            log.info(
+                f"[{self.name}] {symbol} 服务端移动止损单已挂载: "
+                f"callbackRate={callback_rate}%, "
+                f"activationPrice={normalized_activation}, "
+                f"algoId={result.order_id}"
+            )
+        except Exception as exc:
+            log.warning(
+                f"[{self.name}] {symbol} 服务端移动止损单挂载失败: {exc}，"
+                f"将依赖本地轮询兜底"
+            )
 
     def _protect_existing_positions(self, account: AccountState) -> None:
         """
@@ -1201,7 +1355,8 @@ class Skill4Execute(BaseSkill):
 
     @staticmethod
     def _looks_like_protection_algo_order(order: dict) -> bool:
-        protection_types = {"STOP_MARKET", "TAKE_PROFIT_MARKET"}
+        # 包含 TRAILING_STOP_MARKET，以便孤儿单清理也能覆盖移动止损残留单
+        protection_types = {"STOP_MARKET", "TAKE_PROFIT_MARKET", "TRAILING_STOP_MARKET"}
         raw_type = (
             order.get("type")
             or order.get("origType")
@@ -1212,7 +1367,11 @@ class Skill4Execute(BaseSkill):
 
         return (
             str(order.get("algoType", "")).upper() == "CONDITIONAL"
-            and bool(order.get("triggerPrice") or order.get("stopPrice"))
+            and bool(
+                order.get("triggerPrice")
+                or order.get("stopPrice")
+                or order.get("callbackRate")  # TRAILING_STOP_MARKET 标识字段
+            )
         )
 
     @staticmethod

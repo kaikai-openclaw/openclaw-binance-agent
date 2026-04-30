@@ -1,0 +1,2 @@
+[binance/sessions/7cf1dec0-6446-4e24-9286-ee7fe2392d59.jsonl#L6] Assistant: 你好！有什么我可以帮你的吗？
+[binance/sessions/7cf1dec0-6446-4e24-9286-ee7fe2392d59.jsonl#L10] Assistant: 你好，solo life！👋 我是 BianTrading，你的量化交易助手。 你可以让我： - 📊 查看账户状态 - 🔍 分析加密货币（Binance 合约） - 📈 扫描 A 股超跌/趋势候选 - 🚀 运行交易 Pipeline 有什么想做的？

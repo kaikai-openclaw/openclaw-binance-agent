@@ -20,6 +20,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from typing import Any, Callable, Dict, List, Optional
 
+from src.infra.memory_store import MemoryStore
 from src.infra.state_store import StateStore
 from src.skills.base import BaseSkill
 
@@ -73,14 +74,29 @@ class Skill2AAnalyze(BaseSkill):
         output_schema: dict,
         trading_agents: AStockTradingAgentsModule,
         rating_threshold: int = DEFAULT_RATING_THRESHOLD,
+        memory_store: Optional[MemoryStore] = None,
     ) -> None:
         super().__init__(state_store, input_schema, output_schema)
         self.name = "skill2a_analyze"
         self._trading_agents = trading_agents
         self._rating_threshold = rating_threshold
+        self._memory_store = memory_store
 
     def run(self, input_data: dict) -> dict:
         input_state_id = input_data["input_state_id"]
+
+        # 热更新：每轮从 MemoryStore 读取最新进化阈值
+        if self._memory_store is not None:
+            evolved_threshold, _ = self._memory_store.get_evolved_params(
+                default_rating_threshold=self._rating_threshold,
+            )
+            effective_threshold = evolved_threshold
+            if evolved_threshold != self._rating_threshold:
+                log.info("[%s] 热更新 rating_threshold: %d → %d（来自 MemoryStore）",
+                         self.name, self._rating_threshold, evolved_threshold)
+        else:
+            effective_threshold = self._rating_threshold
+
         upstream = self.state_store.load(input_state_id)
         candidates = upstream.get("candidates", [])
 
@@ -115,7 +131,7 @@ class Skill2AAnalyze(BaseSkill):
                 log.warning("[%s] %s 失败: %s", self.name, symbol, exc)
                 failed_symbols.append({"symbol": symbol, "reason": str(exc)[:100]})
 
-        filtered = [r for r in all_ratings if r["rating_score"] >= self._rating_threshold]
+        filtered = [r for r in all_ratings if r["rating_score"] >= effective_threshold]
         filtered_count = len(all_ratings) - len(filtered)
 
         log.info("[%s] 完成: 总=%d, 通过=%d, 过滤=%d",

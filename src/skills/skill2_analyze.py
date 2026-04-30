@@ -14,6 +14,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from typing import Any, Callable, Dict, List, Optional
 
+from src.infra.memory_store import MemoryStore
 from src.infra.state_store import StateStore
 from src.skills.base import BaseSkill
 
@@ -103,6 +104,7 @@ class Skill2Analyze(BaseSkill):
         output_schema: dict,
         trading_agents: TradingAgentsModule,
         rating_threshold: int = DEFAULT_RATING_THRESHOLD,
+        memory_store: Optional[MemoryStore] = None,
     ) -> None:
         """
         初始化 Skill-2。
@@ -112,12 +114,16 @@ class Skill2Analyze(BaseSkill):
             input_schema: 输入 JSON Schema
             output_schema: 输出 JSON Schema
             trading_agents: TradingAgentsModule 实例（可注入 mock）
-            rating_threshold: 评级过滤阈值，默认 6 分
+            rating_threshold: 评级过滤阈值默认值，默认 6 分；
+                注入 memory_store 后每轮动态读取进化参数，此值作为兜底
+            memory_store: 可选，注入后每轮从最新反思日志动态读取
+                rating_threshold，无需重启即可感知 Skill-5 的进化结果
         """
         super().__init__(state_store, input_schema, output_schema)
         self.name = "skill2_analyze"
         self._trading_agents = trading_agents
         self._rating_threshold = rating_threshold
+        self._memory_store = memory_store
 
     def run(self, input_data: dict) -> dict:
         """
@@ -136,6 +142,20 @@ class Skill2Analyze(BaseSkill):
             符合 skill2_output.json Schema 的输出字典
         """
         input_state_id = input_data["input_state_id"]
+
+        # 热更新：每轮从 MemoryStore 读取最新进化参数，无需重启
+        if self._memory_store is not None:
+            evolved_threshold, _ = self._memory_store.get_evolved_params(
+                default_rating_threshold=self._rating_threshold,
+            )
+            effective_threshold = evolved_threshold
+            if evolved_threshold != self._rating_threshold:
+                log.info(
+                    f"[{self.name}] 热更新 rating_threshold: "
+                    f"{self._rating_threshold} → {evolved_threshold}（来自 MemoryStore）"
+                )
+        else:
+            effective_threshold = self._rating_threshold
 
         # 步骤 1：从 State_Store 读取候选币种列表
         upstream_data = self.state_store.load(input_state_id)
@@ -188,10 +208,10 @@ class Skill2Analyze(BaseSkill):
                 )
                 failed_symbols.append({"symbol": symbol, "reason": str(exc)[:100]})
 
-        # 步骤 3：过滤评级分低于阈值的币种
+        # 步骤 3：过滤评级分低于阈值的币种（使用热更新后的 effective_threshold）
         filtered_ratings = [
             r for r in all_ratings
-            if r["rating_score"] >= self._rating_threshold
+            if r["rating_score"] >= effective_threshold
         ]
         filtered_count = len(all_ratings) - len(filtered_ratings)
 

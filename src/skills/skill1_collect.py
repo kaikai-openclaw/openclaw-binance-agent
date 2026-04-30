@@ -22,6 +22,7 @@ Skill-1：Binance 量化数据采集与候选筛选（v2）
 import logging
 import math
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -41,6 +42,9 @@ DEFAULT_MIN_ADX = 20.0
 DEFAULT_KLINE_INTERVAL = "4h"
 DEFAULT_MAX_CANDIDATES = 10
 KLINE_LIMIT = 100  # K 线条数（用于技术指标计算）
+
+# K 线并发拉取线程数，IO 密集型，可适当调高
+DEFAULT_KLINE_WORKERS = 10
 
 # ── RSI 参数 ──────────────────────────────────────────────
 RSI_PERIOD = 14
@@ -388,62 +392,33 @@ class Skill1Collect(BaseSkill):
         if max_quote_volume <= 0:
             max_quote_volume = 1.0
 
-        # ── Step 2 + 3: 逐币种计算量比和技术指标 ──
+        # ── Step 2 + 3: 并发拉取 K 线并计算技术指标 ──
         scored: List[dict] = []
-        # 保存收益率序列用于 Step 4 相关性去重
         returns_map: Dict[str, List[float]] = {}
 
-        for item in pool:
-            symbol = item["symbol"]
-            try:
-                klines = self._client.get_klines(symbol, interval, KLINE_LIMIT)
-                if not klines or len(klines) < VOLUME_LONG_WINDOW:
-                    continue
+        workers = min(DEFAULT_KLINE_WORKERS, len(pool)) if pool else 1
+        log.info("[skill1] 并发拉取 K 线: 候选=%d, 线程数=%d", len(pool), workers)
 
-                closes = [float(k[4]) for k in klines]
-                volumes = [float(k[5]) for k in klines]
-                highs = [float(k[2]) for k in klines]
-                lows = [float(k[3]) for k in klines]
-
-                # Step 2: 量比过滤（指定币种模式下放宽，不过滤）
-                surge = calc_volume_surge(volumes)
-                if surge is None:
-                    surge = 0.0
-                if not target_symbols and surge < surge_ratio:
-                    continue
-
-                # Step 3: 技术指标评分（双向）
-                score_detail = self._calc_signal_score(
-                    closes, highs, lows, item["quote_volume"], max_quote_volume
-                )
-                if score_detail["total_score"] < min_signal_score:
-                    continue
-                adx_val = score_detail["adx"]
-                if adx_val is None or adx_val < min_adx:
-                    continue
-
-                # 保存收益率用于相关性去重
-                returns_map[symbol] = calc_returns(closes)
-
-                scored.append({
-                    "symbol": symbol,
-                    "quote_volume_24h": item["quote_volume"],
-                    "price_change_pct": item["price_change_pct"],
-                    "amplitude_pct": item["amplitude_pct"],
-                    "volume_surge_ratio": round(surge, 2),
-                    "rsi": score_detail["rsi"],
-                    "ema_bullish": score_detail["ema_bullish"],
-                    "macd_bullish": score_detail["macd_bullish"],
-                    "signal_score": score_detail["total_score"],
-                    "signal_direction": score_detail["direction"],
-                    "atr": score_detail["atr"],
-                    "atr_pct": score_detail["atr_pct"],
-                    "adx": score_detail["adx"],
-                    "collected_at": datetime.now(timezone.utc).isoformat(),
-                })
-            except Exception as exc:
-                log.warning("[skill1] %s K线分析失败: %s", symbol, exc)
-                continue
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="skill1_kline") as executor:
+            future_to_item = {
+                executor.submit(
+                    self._fetch_and_analyze_symbol,
+                    item,
+                    interval,
+                    surge_ratio,
+                    min_signal_score,
+                    min_adx,
+                    bool(target_symbols),
+                    max_quote_volume,
+                ): item
+                for item in pool
+            }
+            for future in as_completed(future_to_item):
+                result = future.result()  # _fetch_and_analyze_symbol 内部已 catch 异常
+                if result is not None:
+                    scored_item, returns = result
+                    scored.append(scored_item)
+                    returns_map[scored_item["symbol"]] = returns
 
         # 按 signal_score 降序排序
         scored.sort(key=lambda x: x["signal_score"], reverse=True)
@@ -467,6 +442,73 @@ class Skill1Collect(BaseSkill):
                 "output_count": len(candidates),
             },
         }
+
+    def _fetch_and_analyze_symbol(
+        self,
+        item: dict,
+        interval: str,
+        surge_ratio: float,
+        min_signal_score: int,
+        min_adx: float,
+        is_target_mode: bool,
+        max_quote_volume: float,
+    ) -> Optional[Tuple[dict, List[float]]]:
+        """
+        拉取单币种 K 线并执行量比 + 技术指标评分（线程安全，无共享状态）。
+
+        返回:
+            (scored_item, returns) 元组，或 None（不满足条件时）。
+        """
+        symbol = item["symbol"]
+        try:
+            klines = self._client.get_klines(symbol, interval, KLINE_LIMIT)
+            if not klines or len(klines) < VOLUME_LONG_WINDOW:
+                return None
+
+            closes = [float(k[4]) for k in klines]
+            volumes = [float(k[5]) for k in klines]
+            highs = [float(k[2]) for k in klines]
+            lows = [float(k[3]) for k in klines]
+
+            # Step 2: 量比过滤（指定币种模式下放宽，不过滤）
+            surge = calc_volume_surge(volumes)
+            if surge is None:
+                surge = 0.0
+            if not is_target_mode and surge < surge_ratio:
+                return None
+
+            # Step 3: 技术指标评分（双向）
+            score_detail = self._calc_signal_score(
+                closes, highs, lows, item["quote_volume"], max_quote_volume
+            )
+            if score_detail["total_score"] < min_signal_score:
+                return None
+            adx_val = score_detail["adx"]
+            if adx_val is None or adx_val < min_adx:
+                return None
+
+            returns = calc_returns(closes)
+            scored_item = {
+                "symbol": symbol,
+                "quote_volume_24h": item["quote_volume"],
+                "price_change_pct": item["price_change_pct"],
+                "amplitude_pct": item["amplitude_pct"],
+                "volume_surge_ratio": round(surge, 2),
+                "rsi": score_detail["rsi"],
+                "ema_bullish": score_detail["ema_bullish"],
+                "macd_bullish": score_detail["macd_bullish"],
+                "signal_score": score_detail["total_score"],
+                "signal_direction": score_detail["direction"],
+                "atr": score_detail["atr"],
+                "atr_pct": score_detail["atr_pct"],
+                "adx": score_detail["adx"],
+                "collected_at": datetime.now(timezone.utc).isoformat(),
+            }
+            return scored_item, returns
+
+        except Exception as exc:
+            log.warning("[skill1] %s K线分析失败: %s", symbol, exc)
+            return None
 
     # ── 内部方法 ──────────────────────────────────────────
 

@@ -516,6 +516,57 @@ class BinanceFapiClient:
             raw=data,
         )
 
+    def place_trailing_stop_market_order(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        callback_rate: float,
+        activation_price: Optional[float] = None,
+        close_position: bool = False,
+    ) -> OrderResult:
+        """
+        提交移动止损市价单（TRAILING_STOP_MARKET）。
+
+        价格在激活价触发后，跟踪最优价格，当回调幅度达到 callback_rate 时
+        以市价平仓，锁住已实现盈利。
+
+        注意：条件单已迁移至 Algo Service，使用 POST /fapi/v1/algoOrder 端点。
+
+        参数:
+            symbol: 交易对符号（如 \"BTCUSDT\"）
+            side: 买卖方向（做多持仓平仓用 \"SELL\"，做空持仓平仓用 \"BUY\"）
+            quantity: 下单数量（close_position=True 时忽略）
+            callback_rate: 回调比例（%），取值范围 0.1 ~ 5.0
+            activation_price: 激活价格（可选），达到此价格才开始追踪；
+                              不传则立即从当前价格开始追踪
+            close_position: 是否全仓平仓（True 时忽略 quantity）
+        """
+        params: dict = {
+            "algoType": "CONDITIONAL",
+            "symbol": symbol,
+            "side": side,
+            "type": "TRAILING_STOP_MARKET",
+            "callbackRate": format_decimal_param(callback_rate),
+        }
+        if activation_price is not None and activation_price > 0:
+            params["activationPrice"] = format_decimal_param(activation_price)
+        if close_position:
+            params["closePosition"] = "true"
+        else:
+            params["quantity"] = format_decimal_param(quantity)
+
+        data = self._request_with_retry("POST", "/fapi/v1/algoOrder", params)
+        return OrderResult(
+            order_id=str(data.get("algoId", "")),
+            symbol=data.get("symbol", symbol),
+            side=data.get("side", side),
+            price=float(data.get("activationPrice", activation_price or 0)),
+            quantity=float(data.get("quantity", quantity)),
+            status=data.get("algoStatus", ""),
+            raw=data,
+        )
+
     def place_oco_stop_take_profit(self, symbol: str, side: str,
                                    quantity: float, stop_price: float,
                                    take_profit_price: float) -> List[OrderResult]:

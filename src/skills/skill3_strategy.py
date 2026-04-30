@@ -34,6 +34,7 @@ from src.infra.fees import (
     CRYPTO_TAKER_FEE_RATE,
     calc_round_trip_cost_pct,
 )
+from src.infra.memory_store import MemoryStore
 from src.infra.risk_controller import RiskController
 from src.infra.state_store import StateStore
 from src.models.types import (
@@ -106,7 +107,7 @@ class Skill3Strategy(BaseSkill):
         risk_ratio: float = DEFAULT_RISK_RATIO,
         max_hold_hours: float = DEFAULT_MAX_HOLD_HOURS,
         leverage: int = DEFAULT_LEVERAGE,
-        require_market_price: bool = False,
+        require_market_price: bool = True,
         atr_stop_mult: float = DEFAULT_ATR_STOP_MULT,
         atr_tp_mult: float = DEFAULT_ATR_TP_MULT,
         min_stop_pct: float = DEFAULT_MIN_STOP_PCT,
@@ -116,6 +117,7 @@ class Skill3Strategy(BaseSkill):
         fee_vip_discount: float = 0.0,
         min_net_rr_ratio: float = DEFAULT_MIN_NET_RR_RATIO,
         trading_rule_provider: Optional[TradingRuleProvider] = None,
+        memory_store: Optional[MemoryStore] = None,
     ) -> None:
         """
         初始化 Skill-3。
@@ -132,8 +134,9 @@ class Skill3Strategy(BaseSkill):
             max_hold_hours: 默认持仓时间上限（小时），默认 24
             leverage: 默认杠杆倍数，默认 10
             require_market_price: 是否要求必须拿到真实市场价（P0-2）
-                - True（生产路径）：provider 返回无效值时跳过该币种
-                - False（测试路径，默认）：回退到 TEST_FALLBACK_PRICE=100.0
+                - True（生产路径，默认）：provider 返回无效值时跳过该币种
+                - False（测试路径）：回退到 TEST_FALLBACK_PRICE=100.0，
+                  仅用于单元测试，生产环境禁止使用
             atr_stop_mult: ATR 止损乘数（止损距离 = atr_pct × atr_stop_mult）
             atr_tp_mult: ATR 止盈乘数（止盈距离 = atr_pct × atr_tp_mult），
                 atr_tp_mult / atr_stop_mult 即实际盈亏比
@@ -145,6 +148,8 @@ class Skill3Strategy(BaseSkill):
             min_net_rr_ratio: 扣费后净盈亏比下限（P0-4）；低于此值的交易直接拒绝
             trading_rule_provider: Binance 交易规则提供者；提供时按 LOT_SIZE 规整 quantity，
                 并校验最小名义金额（至少 5 USDT）
+            memory_store: 可选，注入后每轮从最新反思日志动态读取
+                risk_ratio，无需重启即可感知 Skill-5 的进化结果
         """
         super().__init__(state_store, input_schema, output_schema)
         self.name = "skill3_strategy"
@@ -164,6 +169,7 @@ class Skill3Strategy(BaseSkill):
         self._fee_vip_discount = fee_vip_discount
         self._min_net_rr_ratio = min_net_rr_ratio
         self._trading_rule_provider = trading_rule_provider
+        self._memory_store = memory_store
 
         # 预计算 round-trip 成本占比（每次下单一致，无需每笔重算）
         try:
@@ -198,6 +204,20 @@ class Skill3Strategy(BaseSkill):
         """
         input_state_id = input_data["input_state_id"]
 
+        # 热更新：每轮从 MemoryStore 读取最新进化参数，无需重启
+        if self._memory_store is not None:
+            _, evolved_risk = self._memory_store.get_evolved_params(
+                default_risk_ratio=self._risk_ratio,
+            )
+            effective_risk_ratio = evolved_risk
+            if evolved_risk != self._risk_ratio:
+                log.info(
+                    f"[{self.name}] 热更新 risk_ratio: "
+                    f"{self._risk_ratio} → {evolved_risk}（来自 MemoryStore）"
+                )
+        else:
+            effective_risk_ratio = self._risk_ratio
+
         # 步骤 1：从 State_Store 读取评级结果
         upstream_data = self.state_store.load(input_state_id)
         ratings = upstream_data.get("ratings", [])
@@ -219,10 +239,10 @@ class Skill3Strategy(BaseSkill):
         # 步骤 3：获取当前账户状态
         account = self._account_state_provider()
 
-        # 步骤 4 & 5：为每个目标币种生成交易计划
+        # 步骤 4 & 5：为每个目标币种生成交易计划（使用热更新后的 risk_ratio）
         trade_plans: List[Dict[str, Any]] = []
         for rating in ratings:
-            plan = self._generate_trade_plan(rating, account)
+            plan = self._generate_trade_plan(rating, account, effective_risk_ratio)
             if plan is not None:
                 trade_plans.append(plan)
 
@@ -248,7 +268,8 @@ class Skill3Strategy(BaseSkill):
         return output
 
     def _generate_trade_plan(
-        self, rating: Dict[str, Any], account: AccountState
+        self, rating: Dict[str, Any], account: AccountState,
+        risk_ratio: Optional[float] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         为单个目标币种生成交易计划。
@@ -259,10 +280,12 @@ class Skill3Strategy(BaseSkill):
         参数:
             rating: 评级结果字典（symbol, rating_score, signal, confidence）
             account: 当前账户状态
+            risk_ratio: 本轮有效风险比例；None 时回退到 self._risk_ratio（构造时注入值）
 
         返回:
             交易计划字典，或 None（信号为 hold 或风控拒绝时）
         """
+        effective_risk = risk_ratio if risk_ratio is not None else self._risk_ratio
         symbol = rating.get("symbol", "")
         signal = rating.get("signal", "")
         confidence = rating.get("confidence", 0.0)
@@ -315,11 +338,11 @@ class Skill3Strategy(BaseSkill):
             )
             return None
 
-        # 需求 3.2：使用固定风险模型计算头寸规模
+        # 需求 3.2：使用固定风险模型计算头寸规模（使用热更新后的 effective_risk）
         try:
             position_size = calculate_position_size(
                 account_balance=account.total_balance,
-                risk_ratio=self._risk_ratio,
+                risk_ratio=effective_risk,
                 entry_price=entry_price,
                 stop_loss_price=stop_loss_price,
             )

@@ -39,6 +39,7 @@ A 股 vs 加密货币的关键差异（影响指标设计）：
 import logging
 import math
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -77,6 +78,9 @@ DEFAULT_MIN_PRICE = 3.0
 DEFAULT_MIN_OVERSOLD_SCORE = 25
 DEFAULT_MAX_CANDIDATES = 30
 DEFAULT_PREFILTER_CHANGE_PCT = 0.0
+
+# K 线并发拉取线程数（IO 密集型）
+DEFAULT_KLINE_WORKERS = 8
 
 # ══════════════════════════════════════════════════════════
 # 短期超跌参数（3~5 天反弹）
@@ -237,59 +241,26 @@ class _AStockOversoldBase(BaseSkill):
         scored: List[dict] = []
         returns_map: Dict[str, List[float]] = {}
 
-        for item in pool:
-            symbol = item["symbol"]
-            try:
-                klines = self._client.get_klines(symbol, "daily", kline_need)
-                if not klines or len(klines) < min_klines:
-                    continue
+        workers = min(DEFAULT_KLINE_WORKERS, len(pool)) if pool else 1
+        log.info("[%s] 并发拉取 K 线: 候选=%d, 线程数=%d", self.name, len(pool), workers)
 
-                closes = [float(k[4]) for k in klines]
-                highs = [float(k[2]) for k in klines]
-                lows = [float(k[3]) for k in klines]
-                volumes = [float(k[5]) for k in klines]
-
-                if mode == "short":
-                    result = _calc_short_term_score(
-                        closes, highs, lows, volumes,
-                        rsi_thresh, bias_thresh, consec_thresh,
-                        drop_thresh, drop_lookback,
-                    )
-                else:
-                    result = _calc_long_term_score(
-                        closes, highs, lows, volumes,
-                        rsi_thresh, bias_thresh, consec_thresh,
-                        drop_thresh, drop_lookback,
-                    )
-
-                if result["oversold_score"] < min_score and not target_symbols:
-                    continue
-
-                returns_map[symbol] = calc_returns(closes)
-                atr_val = calc_atr(highs, lows, closes, ATR_PERIOD)
-                last_close = closes[-1]
-                atr_pct = round(atr_val / last_close * 100, 2) if (atr_val and last_close > 0) else None
-
-                scored.append({
-                    "symbol": symbol,
-                    "name": item.get("name", ""),
-                    "close": last_close,
-                    "amount": item.get("amount", 0),
-                    "rsi": result["rsi"],
-                    "bias_20": result["bias"],
-                    "consecutive_down": result["consecutive_down"],
-                    "drop_pct": result["drop_pct"],
-                    "below_boll_lower": result["below_boll_lower"],
-                    "kdj_j": result["kdj_j"],
-                    "macd_divergence": result["macd_divergence"],
-                    "volume_surge": result.get("volume_surge"),
-                    "oversold_score": result["oversold_score"],
-                    "signal_details": result["signal_details"],
-                    "atr_pct": atr_pct,
-                    "collected_at": datetime.now(timezone.utc).isoformat(),
-                })
-            except Exception as exc:
-                log.warning("[%s] %s 分析失败: %s", self.name, symbol, exc)
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="skill1b_kline") as executor:
+            future_to_item = {
+                executor.submit(
+                    self._fetch_and_score_symbol,
+                    item, mode, kline_need, min_klines,
+                    rsi_thresh, bias_thresh, consec_thresh,
+                    drop_thresh, drop_lookback, min_score,
+                    bool(target_symbols),
+                ): item
+                for item in pool
+            }
+            for future in as_completed(future_to_item):
+                result = future.result()  # 内部已 catch 异常
+                if result is not None:
+                    scored_item, returns = result
+                    scored.append(scored_item)
+                    returns_map[scored_item["symbol"]] = returns
 
         scored.sort(key=lambda x: x["oversold_score"], reverse=True)
         candidates = self._deduplicate(scored, returns_map, max_cands)
@@ -308,6 +279,80 @@ class _AStockOversoldBase(BaseSkill):
                 "output_count": len(candidates),
             },
         }
+
+    def _fetch_and_score_symbol(
+        self,
+        item: dict,
+        mode: str,
+        kline_need: int,
+        min_klines: int,
+        rsi_thresh: float,
+        bias_thresh: float,
+        consec_thresh: int,
+        drop_thresh: float,
+        drop_lookback: int,
+        min_score: int,
+        is_target_mode: bool,
+    ) -> Optional[tuple]:
+        """拉取单股票 K 线并计算超跌评分（线程安全）。
+
+        返回 (scored_item, returns) 元组，或 None。
+        """
+        symbol = item["symbol"]
+        try:
+            klines = self._client.get_klines(symbol, "daily", kline_need)
+            if not klines or len(klines) < min_klines:
+                return None
+
+            closes = [float(k[4]) for k in klines]
+            highs = [float(k[2]) for k in klines]
+            lows = [float(k[3]) for k in klines]
+            volumes = [float(k[5]) for k in klines]
+
+            if mode == "short":
+                result = _calc_short_term_score(
+                    closes, highs, lows, volumes,
+                    rsi_thresh, bias_thresh, consec_thresh,
+                    drop_thresh, drop_lookback,
+                )
+            else:
+                result = _calc_long_term_score(
+                    closes, highs, lows, volumes,
+                    rsi_thresh, bias_thresh, consec_thresh,
+                    drop_thresh, drop_lookback,
+                )
+
+            if result["oversold_score"] < min_score and not is_target_mode:
+                return None
+
+            returns = calc_returns(closes)
+            atr_val = calc_atr(highs, lows, closes, ATR_PERIOD)
+            last_close = closes[-1]
+            atr_pct = round(atr_val / last_close * 100, 2) if (atr_val and last_close > 0) else None
+
+            scored_item = {
+                "symbol": symbol,
+                "name": item.get("name", ""),
+                "close": last_close,
+                "amount": item.get("amount", 0),
+                "rsi": result["rsi"],
+                "bias_20": result["bias"],
+                "consecutive_down": result["consecutive_down"],
+                "drop_pct": result["drop_pct"],
+                "below_boll_lower": result["below_boll_lower"],
+                "kdj_j": result["kdj_j"],
+                "macd_divergence": result["macd_divergence"],
+                "volume_surge": result.get("volume_surge"),
+                "oversold_score": result["oversold_score"],
+                "signal_details": result["signal_details"],
+                "atr_pct": atr_pct,
+                "collected_at": datetime.now(timezone.utc).isoformat(),
+            }
+            return scored_item, returns
+
+        except Exception as exc:
+            log.warning("[%s] %s 分析失败: %s", self.name, symbol, exc)
+            return None
 
 
 # ══════════════════════════════════════════════════════════

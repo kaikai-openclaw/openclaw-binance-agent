@@ -1,0 +1,1746 @@
+{
+  "version": 1,
+  "updatedAt": "2026-04-29T19:00:04.256Z",
+  "entries": {
+    "memory:memory/.dreams/session-corpus/2026-04-27.txt:1:1": {
+      "key": "memory:memory/.dreams/session-corpus/2026-04-27.txt:1:1",
+      "path": "memory/.dreams/session-corpus/2026-04-27.txt",
+      "startLine": 1,
+      "endLine": 1,
+      "source": "memory",
+      "snippet": "Assistant: 你好！有什么我可以帮你的吗？",
+      "recallCount": 0,
+      "dailyCount": 1,
+      "groundedCount": 0,
+      "totalScore": 0.58,
+      "maxScore": 0.58,
+      "firstRecalledAt": "2026-04-27T19:02:37.224Z",
+      "lastRecalledAt": "2026-04-27T19:02:37.224Z",
+      "queryHashes": [
+        "e29ad1ab29b1"
+      ],
+      "recallDays": [
+        "2026-04-28",
+        "2026-04-27"
+      ],
+      "conceptTags": [
+        "你好",
+        "什么",
+        "可以",
+        "你的"
+      ]
+    },
+    "memory:memory/.dreams/session-corpus/2026-04-27.txt:2:2": {
+      "key": "memory:memory/.dreams/session-corpus/2026-04-27.txt:2:2",
+      "path": "memory/.dreams/session-corpus/2026-04-27.txt",
+      "startLine": 2,
+      "endLine": 2,
+      "source": "memory",
+      "snippet": "Assistant: 你好，solo life！👋 我是 BianTrading，你的量化交易助手。 你可以让我： - 📊 查看账户状态 - 🔍 分析加密货币（Binance 合约） - 📈 扫描 A 股超跌/趋势候选 - 🚀 运行交易 Pipeline 有什么想做的？",
+      "recallCount": 0,
+      "dailyCount": 1,
+      "groundedCount": 0,
+      "totalScore": 0.58,
+      "maxScore": 0.58,
+      "firstRecalledAt": "2026-04-27T19:02:37.224Z",
+      "lastRecalledAt": "2026-04-27T19:02:37.224Z",
+      "queryHashes": [
+        "e29ad1ab29b1"
+      ],
+      "recallDays": [
+        "2026-04-28",
+        "2026-04-27"
+      ],
+      "conceptTags": [
+        "股超跌/趋势候选",
+        "你好",
+        "solo",
+        "life",
+        "我是",
+        "biantrading",
+        "你的",
+        "量化"
+      ]
+    },
+    "memory:memory/2025-06-26.md:1:30": {
+      "key": "memory:memory/2025-06-26.md:1:30",
+      "path": "memory/2025-06-26.md",
+      "startLine": 1,
+      "endLine": 30,
+      "source": "memory",
+      "snippet": "# 2025-06-26 ## 系统搭建 - 完成 OpenClaw Binance 交易 Agent 全部实现（19 个任务，304 个测试） - 基础设施层：StateStore、MemoryStore、RateLimiter、RiskController、BinanceFapiClient - 5 个 Skill：信息收集、深度分析、策略制定、自动执行、展示进化 - Pipeline 编排：支持崩溃恢复和 no_opportunity 跳过 ## 连通性测试 - Binance fapi: ✅ 通过（香港 IP 203.175.14.44） - API 认证: ✅ 通过（账户余额 0 USDT） - TradingAgents + Gemini: ✅ 通过（BTC 分析返回 SELL） ## 代码审查与修复 - StateStore/MemoryStore 添加上下文管理器 - BinanceFapiClient 网络标记改为线程安全 - Skill3Strategy 支持 market_price_provider 注入 - 止损止盈魔法数字提取为常量 - 持仓监控添加连续错误上限保护 - TradingAgentsModule 复用线程池 ## OpenClaw 配置 - 创建 binance-trader agent，workspace 指向项目目录 - 注册 Telegram Bot: @BianTrading_Bot - 待完成：绑定 telegram:biantrading 到 binance-trader agent",
+      "recallCount": 2,
+      "dailyCount": 0,
+      "groundedCount": 0,
+      "totalScore": 0.9183878630399703,
+      "maxScore": 0.4708520859479904,
+      "firstRecalledAt": "2026-04-28T03:19:28.913Z",
+      "lastRecalledAt": "2026-04-29T02:13:48.948Z",
+      "queryHashes": [
+        "d5532e8202d5",
+        "7356573fd980"
+      ],
+      "recallDays": [
+        "2026-04-28",
+        "2026-04-29"
+      ],
+      "conceptTags": [
+        "网络",
+        "no-opportunity",
+        "203.175.14.44",
+        "statestore/memorystore",
+        "market-price-provider",
+        "binance-trader",
+        "biantrading-bot",
+        "系统"
+      ]
+    },
+    "memory:memory/2026-04-01.md:22:30": {
+      "key": "memory:memory/2026-04-01.md:22:30",
+      "path": "memory/2026-04-01.md",
+      "startLine": 22,
+      "endLine": 30,
+      "source": "memory",
+      "snippet": "- 加上网络抖动，单次查询可能 20+ 秒 ### 潜在优化方向（备忘，未实施） 1. 版本兼容: 把 `dict | None` 改回 `Optional[dict]`（兼容 3.9），或统一强制 3.14 2. 长驻进程: 封装成 gRPC/HTTP daemon，首次加载后调用 ms 级 3. 减少重试: 降低 MAX_RETRIES 或改异步并发 4. 模块预加载: 用 exec background 模式保持进程复用 5. exchangeInfo 缓存: 持久化到 SQLite，避免每次冷启动请求",
+      "recallCount": 1,
+      "dailyCount": 0,
+      "groundedCount": 0,
+      "totalScore": 0.4294052511453628,
+      "maxScore": 0.4294052511453628,
+      "firstRecalledAt": "2026-04-28T03:19:28.913Z",
+      "lastRecalledAt": "2026-04-28T03:19:28.913Z",
+      "queryHashes": [
+        "d5532e8202d5"
+      ],
+      "recallDays": [
+        "2026-04-28"
+      ],
+      "conceptTags": [
+        "网络",
+        "3.9",
+        "3.14",
+        "grpc/http",
+        "max-retries",
+        "加上",
+        "抖动",
+        "查询"
+      ]
+    },
+    "memory:memory/2026-04-01.md:1:27": {
+      "key": "memory:memory/2026-04-01.md:1:27",
+      "path": "memory/2026-04-01.md",
+      "startLine": 1,
+      "endLine": 27,
+      "source": "memory",
+      "snippet": "# 2026-04-01 ## 性能分析报告（用户提出，仅记录不改） ### 问题 1: Python 版本混乱 - 系统 `/usr/bin/python3` = 3.9.6，不支持 `dict | None`（PEP 604） - homebrew `python3` = 3.14.3，`.venv/bin/python3` = 3.14.3 - `binance_fapi.py` 大量使用 `dict | None`、`str | None`、`list[dict]` 等 3.10+ 语法 - 当前 PATH 优先 homebrew，所以 `python3` 能跑。但如果 OpenClaw 用 `/usr/bin/python3` 就会 SyntaxError - 影响文件: `binance_fapi.py`, `trading_agents_adapter.py`, `base.py`, `skill1_collect.py`, `paper_backtest.py` 等 ### 问题 2: exec 冷启动架构 - SKILL.md 所有命令都是 `python3 -c \"...\"` 模式，每次新进程 - 每次调用开销: 解释器启动 ~200-500ms + 依赖加载 ~100-300ms + SSL ~50ms - 没有模块缓存、连接池复用、SSL session 复用 - `BinanceFapiClient.__init__` 每次创建新 `requests.Session` - `_load_symbol_info()` 每次冷启动都要重新请求 `ex",
+      "recallCount": 1,
+      "dailyCount": 0,
+      "groundedCount": 0,
+      "totalScore": 0.42431538999080654,
+      "maxScore": 0.42431538999080654,
+      "firstRecalledAt": "2026-04-28T03:19:28.913Z",
+      "lastRecalledAt": "2026-04-28T03:19:28.913Z",
+      "queryHashes": [
+        "d5532e8202d5"
+      ],
+      "recallDays": [
+        "2026-04-28"
+      ],
+      "conceptTags": [
+        "usr/bin/python3",
+        "3.9.6",
+        "3.14.3",
+        "venv/bin/python3",
+        "binance-fapi.py",
+        "3.10",
+        "trading-agents-adapter.py",
+        "base.py"
+      ]
+    },
+    "memory:memory/.dreams/session-corpus/2026-04-28.txt:1:1": {
+      "key": "memory:memory/.dreams/session-corpus/2026-04-28.txt:1:1",
+      "path": "memory/.dreams/session-corpus/2026-04-28.txt",
+      "startLine": 1,
+      "endLine": 1,
+      "source": "memory",
+      "snippet": "User: 缓存A股数据",
+      "recallCount": 0,
+      "dailyCount": 1,
+      "groundedCount": 0,
+      "totalScore": 0.58,
+      "maxScore": 0.58,
+      "firstRecalledAt": "2026-04-28T20:28:16.362Z",
+      "lastRecalledAt": "2026-04-28T20:28:16.362Z",
+      "queryHashes": [
+        "8a4254b47642"
+      ],
+      "recallDays": [
+        "2026-04-29",
+        "2026-04-28"
+      ],
+      "conceptTags": [
+        "数据"
+      ]
+    },
+    "memory:memory/.dreams/session-corpus/2026-04-28.txt:2:2": {
+      "key": "memory:memory/.dreams/session-corpus/2026-04-28.txt:2:2",
+      "path": "memory/.dreams/session-corpus/2026-04-28.txt",
+      "startLine": 2,
+      "endLine": 2,
+      "source": "memory",
+      "snippet": "Assistant: 正在后台运行全市场 A 股数据预加载： - **数据源:** 腾讯日线（纯 HTTP，最稳定） - **起始日期:** 2020-01-01 - **当前进度:** 已缓存 70 只股票，约 10 万行数据，DB 13MB - **预计总量:** 5000+ 只股票，约 250 万行 脚本在后台运行中（PID 21458），完成后会写入 `data/preload.log`。 完成后会自动 checkpoint续传（`--skip-existing`），下次运行不会重复拉取已有数据。 完成后我会更新 MEMORY.md 记录本次缓存",
+      "recallCount": 0,
+      "dailyCount": 1,
+      "groundedCount": 0,
+      "totalScore": 0.58,
+      "maxScore": 0.58,
+      "firstRecalledAt": "2026-04-28T20:28:16.362Z",
+      "lastRecalledAt": "2026-04-28T20:28:16.362Z",
+      "queryHashes": [
+        "8a4254b47642"
+      ],
+      "recallDays": [
+        "2026-04-29",
+        "2026-04-28"
+      ],
+      "conceptTags": [
+        "data/preload.log",
+        "skip-existing",
+        "memory.md",
+        "正在",
+        "后台",
+        "运行",
+        "市场",
+        "数据"
+      ]
+    },
+    "memory:memory/.dreams/session-corpus/2026-04-28.txt:3:3": {
+      "key": "memory:memory/.dreams/session-corpus/2026-04-28.txt:3:3",
+      "path": "memory/.dreams/session-corpus/2026-04-28.txt",
+      "startLine": 3,
+      "endLine": 3,
+      "source": "memory",
+      "snippet": "User: 现在的进度?",
+      "recallCount": 0,
+      "dailyCount": 1,
+      "groundedCount": 0,
+      "totalScore": 0.58,
+      "maxScore": 0.58,
+      "firstRecalledAt": "2026-04-28T20:28:16.362Z",
+      "lastRecalledAt": "2026-04-28T20:28:16.362Z",
+      "queryHashes": [
+        "8a4254b47642"
+      ],
+      "recallDays": [
+        "2026-04-29",
+        "2026-04-28"
+      ],
+      "conceptTags": [
+        "现在",
+        "进度"
+      ]
+    },
+    "memory:memory/.dreams/session-corpus/2026-04-28.txt:4:4": {
+      "key": "memory:memory/.dreams/session-corpus/2026-04-28.txt:4:4",
+      "path": "memory/.dreams/session-corpus/2026-04-28.txt",
+      "startLine": 4,
+      "endLine": 4,
+      "source": "memory",
+      "snippet": "Assistant: 预加载在约10分钟后被系统中断了（可能是资源限制）。已完成 **674 只股票，约 99.7 万行**，数据库 132MB。 用 `--skip-existing` 断点续传重启：",
+      "recallCount": 0,
+      "dailyCount": 1,
+      "groundedCount": 0,
+      "totalScore": 0.58,
+      "maxScore": 0.58,
+      "firstRecalledAt": "2026-04-28T20:28:16.362Z",
+      "lastRecalledAt": "2026-04-28T20:28:16.362Z",
+      "queryHashes": [
+        "8a4254b47642"
+      ],
+      "recallDays": [
+        "2026-04-29",
+        "2026-04-28"
+      ],
+      "conceptTags": [
+        "99.7",
+        "skip-existing",
+        "分钟",
+        "系统",
+        "中断",
+        "可能是",
+        "资源",
+        "限制"
+      ]
+    },
+    "memory:memory/.dreams/session-corpus/2026-04-28.txt:5:5": {
+      "key": "memory:memory/.dreams/session-corpus/2026-04-28.txt:5:5",
+      "path": "memory/.dreams/session-corpus/2026-04-28.txt",
+      "startLine": 5,
+      "endLine": 5,
+      "source": "memory",
+      "snippet": "Assistant: 断点续传已重新启动（PID 27289）。 📊 **当前缓存状态：** - **已缓存:** 674 只股票，约 99.7 万行 - **数据库:** 132MB - **进度:** 正在重新获取代码列表并继续下载 预加载在后台运行中，完成后会自动停止。下次再问进度我会再查。",
+      "recallCount": 0,
+      "dailyCount": 1,
+      "groundedCount": 0,
+      "totalScore": 0.58,
+      "maxScore": 0.58,
+      "firstRecalledAt": "2026-04-28T20:28:16.362Z",
+      "lastRecalledAt": "2026-04-28T20:28:16.362Z",
+      "queryHashes": [
+        "8a4254b47642"
+      ],
+      "recallDays": [
+        "2026-04-29",
+        "2026-04-28"
+      ],
+      "conceptTags": [
+        "99.7",
+        "重新",
+        "启动",
+        "pid",
+        "当前",
+        "状态",
+        "股票",
+        "数据"
+      ]
+    },
+    "memory:memory/.dreams/session-corpus/2026-04-28.txt:6:6": {
+      "key": "memory:memory/.dreams/session-corpus/2026-04-28.txt:6:6",
+      "path": "memory/.dreams/session-corpus/2026-04-28.txt",
+      "startLine": 6,
+      "endLine": 6,
+      "source": "memory",
+      "snippet": "Assistant: active subagents: ----- (none) recent subagents (last 30m): ----- (none)",
+      "recallCount": 0,
+      "dailyCount": 1,
+      "groundedCount": 0,
+      "totalScore": 0.58,
+      "maxScore": 0.58,
+      "firstRecalledAt": "2026-04-28T20:28:16.362Z",
+      "lastRecalledAt": "2026-04-28T20:28:16.362Z",
+      "queryHashes": [
+        "8a4254b47642"
+      ],
+      "recallDays": [
+        "2026-04-29",
+        "2026-04-28"
+      ],
+      "conceptTags": [
+        "active",
+        "subagents",
+        "none",
+        "recent",
+        "last",
+        "30m"
+      ]
+    },
+    "memory:memory/.dreams/session-corpus/2026-04-28.txt:7:7": {
+      "key": "memory:memory/.dreams/session-corpus/2026-04-28.txt:7:7",
+      "path": "memory/.dreams/session-corpus/2026-04-28.txt",
+      "startLine": 7,
+      "endLine": 7,
+      "source": "memory",
+      "snippet": "Assistant: 还在跑，当前进度： - **已缓存:** 1046 只股票，154.6 万行 - **数据库:** 205MB - **进程:** 运行中（PID 27289，9:35 起） 预计全市场约 5000 只股票，按当前速度可能还需 1-2 小时。如果觉得太久，可以先停掉，当前 1046 只已足够覆盖大多数分析场景。",
+      "recallCount": 0,
+      "dailyCount": 1,
+      "groundedCount": 0,
+      "totalScore": 0.58,
+      "maxScore": 0.58,
+      "firstRecalledAt": "2026-04-28T20:28:16.362Z",
+      "lastRecalledAt": "2026-04-28T20:28:16.362Z",
+      "queryHashes": [
+        "8a4254b47642"
+      ],
+      "recallDays": [
+        "2026-04-29",
+        "2026-04-28"
+      ],
+      "conceptTags": [
+        "154.6",
+        "1-2",
+        "当前",
+        "进度",
+        "股票",
+        "数据",
+        "205mb",
+        "进程"
+      ]
+    },
+    "memory:memory/.dreams/session-corpus/2026-04-28.txt:8:8": {
+      "key": "memory:memory/.dreams/session-corpus/2026-04-28.txt:8:8",
+      "path": "memory/.dreams/session-corpus/2026-04-28.txt",
+      "startLine": 8,
+      "endLine": 8,
+      "source": "memory",
+      "snippet": "User: 缓存完成了吗?",
+      "recallCount": 0,
+      "dailyCount": 1,
+      "groundedCount": 0,
+      "totalScore": 0.58,
+      "maxScore": 0.58,
+      "firstRecalledAt": "2026-04-28T20:28:16.362Z",
+      "lastRecalledAt": "2026-04-28T20:28:16.362Z",
+      "queryHashes": [
+        "8a4254b47642"
+      ],
+      "recallDays": [
+        "2026-04-29",
+        "2026-04-28"
+      ],
+      "conceptTags": [
+        "完成"
+      ]
+    },
+    "memory:memory/.dreams/session-corpus/2026-04-28.txt:9:9": {
+      "key": "memory:memory/.dreams/session-corpus/2026-04-28.txt:9:9",
+      "path": "memory/.dreams/session-corpus/2026-04-28.txt",
+      "startLine": 9,
+      "endLine": 9,
+      "source": "memory",
+      "snippet": "User: 缓存biance,Usdt合约的数据",
+      "recallCount": 0,
+      "dailyCount": 1,
+      "groundedCount": 0,
+      "totalScore": 0.58,
+      "maxScore": 0.58,
+      "firstRecalledAt": "2026-04-28T20:28:16.362Z",
+      "lastRecalledAt": "2026-04-28T20:28:16.362Z",
+      "queryHashes": [
+        "8a4254b47642"
+      ],
+      "recallDays": [
+        "2026-04-29",
+        "2026-04-28"
+      ],
+      "conceptTags": [
+        "biance",
+        "usdt",
+        "合约",
+        "数据"
+      ]
+    },
+    "memory:memory/.dreams/session-corpus/2026-04-28.txt:10:10": {
+      "key": "memory:memory/.dreams/session-corpus/2026-04-28.txt:10:10",
+      "path": "memory/.dreams/session-corpus/2026-04-28.txt",
+      "startLine": 10,
+      "endLine": 10,
+      "source": "memory",
+      "snippet": "Assistant: Binance 合约 K 线预加载已启动： - **当前进度:** 49 个合约，5.2 万行，DB 3.2MB - **默认:** 4h K 线，180 天历史 - **进程:** 运行中（PID 38188） --- 顺便 A 股预加载也在继续： - **已缓存:** 约 1100+ 只股票，160+ 万行，246MB（持续增长中） 两个都在后台跑，有进度我会继续汇报。",
+      "recallCount": 0,
+      "dailyCount": 1,
+      "groundedCount": 0,
+      "totalScore": 0.58,
+      "maxScore": 0.58,
+      "firstRecalledAt": "2026-04-28T20:28:16.362Z",
+      "lastRecalledAt": "2026-04-28T20:28:16.362Z",
+      "queryHashes": [
+        "8a4254b47642"
+      ],
+      "recallDays": [
+        "2026-04-29",
+        "2026-04-28"
+      ],
+      "conceptTags": [
+        "5.2",
+        "3.2mb",
+        "binance",
+        "合约",
+        "启动",
+        "当前",
+        "进度",
+        "默认"
+      ]
+    },
+    "memory:memory/.dreams/session-corpus/2026-04-28.txt:11:11": {
+      "key": "memory:memory/.dreams/session-corpus/2026-04-28.txt:11:11",
+      "path": "memory/.dreams/session-corpus/2026-04-28.txt",
+      "startLine": 11,
+      "endLine": 11,
+      "source": "memory",
+      "snippet": "User: 帮我制作1个定时任务,每隔30分钟进行-虚拟货币的超跌底部反转的扫描-进行TradingAgent的快速扫描(fast)-通过筛选的制定交易计划-进行实盘交易使用此agent下相关skill",
+      "recallCount": 0,
+      "dailyCount": 1,
+      "groundedCount": 0,
+      "totalScore": 0.58,
+      "maxScore": 0.58,
+      "firstRecalledAt": "2026-04-28T20:28:16.362Z",
+      "lastRecalledAt": "2026-04-28T20:28:16.362Z",
+      "queryHashes": [
+        "8a4254b47642"
+      ],
+      "recallDays": [
+        "2026-04-29",
+        "2026-04-28"
+      ],
+      "conceptTags": [
+        "制作",
+        "任务",
+        "每隔",
+        "分钟",
+        "进行",
+        "虚拟",
+        "货币",
+        "底部"
+      ]
+    },
+    "memory:memory/.dreams/session-corpus/2026-04-28.txt:12:12": {
+      "key": "memory:memory/.dreams/session-corpus/2026-04-28.txt:12:12",
+      "path": "memory/.dreams/session-corpus/2026-04-28.txt",
+      "startLine": 12,
+      "endLine": 12,
+      "source": "memory",
+      "snippet": "User: 帮我制作1个定时任务,每隔30分钟进行-虚拟货币的超跌底部反转的扫描-进行TradingAgent的快速扫描(fast)-通过筛选的制定交易计划-进行实盘交易使用此agent下相关skill",
+      "recallCount": 0,
+      "dailyCount": 1,
+      "groundedCount": 0,
+      "totalScore": 0.58,
+      "maxScore": 0.58,
+      "firstRecalledAt": "2026-04-28T20:28:16.362Z",
+      "lastRecalledAt": "2026-04-28T20:28:16.362Z",
+      "queryHashes": [
+        "8a4254b47642"
+      ],
+      "recallDays": [
+        "2026-04-29",
+        "2026-04-28"
+      ],
+      "conceptTags": [
+        "制作",
+        "任务",
+        "每隔",
+        "分钟",
+        "进行",
+        "虚拟",
+        "货币",
+        "底部"
+      ]
+    },
+    "memory:memory/.dreams/session-corpus/2026-04-28.txt:13:13": {
+      "key": "memory:memory/.dreams/session-corpus/2026-04-28.txt:13:13",
+      "path": "memory/.dreams/session-corpus/2026-04-28.txt",
+      "startLine": 13,
+      "endLine": 13,
+      "source": "memory",
+      "snippet": "User: openclaw config set gateway.allow_private_ips true",
+      "recallCount": 0,
+      "dailyCount": 1,
+      "groundedCount": 0,
+      "totalScore": 0.58,
+      "maxScore": 0.58,
+      "firstRecalledAt": "2026-04-28T20:28:16.362Z",
+      "lastRecalledAt": "2026-04-28T20:28:16.362Z",
+      "queryHashes": [
+        "8a4254b47642"
+      ],
+      "recallDays": [
+        "2026-04-29",
+        "2026-04-28"
+      ],
+      "conceptTags": [
+        "gateway",
+        "gateway.allow-private-ips",
+        "openclaw",
+        "config",
+        "set",
+        "true"
+      ]
+    },
+    "memory:memory/.dreams/session-corpus/2026-04-28.txt:14:14": {
+      "key": "memory:memory/.dreams/session-corpus/2026-04-28.txt:14:14",
+      "path": "memory/.dreams/session-corpus/2026-04-28.txt",
+      "startLine": 14,
+      "endLine": 14,
+      "source": "memory",
+      "snippet": "User: 缓存完成了吗?",
+      "recallCount": 0,
+      "dailyCount": 1,
+      "groundedCount": 0,
+      "totalScore": 0.58,
+      "maxScore": 0.58,
+      "firstRecalledAt": "2026-04-28T20:28:16.362Z",
+      "lastRecalledAt": "2026-04-28T20:28:16.362Z",
+      "queryHashes": [
+        "8a4254b47642"
+      ],
+      "recallDays": [
+        "2026-04-29",
+        "2026-04-28"
+      ],
+      "conceptTags": [
+        "完成"
+      ]
+    },
+    "memory:memory/.dreams/session-corpus/2026-04-28.txt:15:15": {
+      "key": "memory:memory/.dreams/session-corpus/2026-04-28.txt:15:15",
+      "path": "memory/.dreams/session-corpus/2026-04-28.txt",
+      "startLine": 15,
+      "endLine": 15,
+      "source": "memory",
+      "snippet": "User: 缓存完成了?",
+      "recallCount": 0,
+      "dailyCount": 1,
+      "groundedCount": 0,
+      "totalScore": 0.58,
+      "maxScore": 0.58,
+      "firstRecalledAt": "2026-04-28T20:28:16.362Z",
+      "lastRecalledAt": "2026-04-28T20:28:16.362Z",
+      "queryHashes": [
+        "8a4254b47642"
+      ],
+      "recallDays": [
+        "2026-04-29",
+        "2026-04-28"
+      ],
+      "conceptTags": [
+        "完成"
+      ]
+    },
+    "memory:memory/.dreams/session-corpus/2026-04-28.txt:16:16": {
+      "key": "memory:memory/.dreams/session-corpus/2026-04-28.txt:16:16",
+      "path": "memory/.dreams/session-corpus/2026-04-28.txt",
+      "startLine": 16,
+      "endLine": 16,
+      "source": "memory",
+      "snippet": "Assistant: **缓存进度：** - ✅ **Binance USDT 合约:** 535 个合约，55.3 万行（完成！） - 🔄 **A 股:** 2064 只股票，295 万行（继续中） --- **配置更新：**",
+      "recallCount": 0,
+      "dailyCount": 1,
+      "groundedCount": 0,
+      "totalScore": 0.58,
+      "maxScore": 0.58,
+      "firstRecalledAt": "2026-04-28T20:28:16.362Z",
+      "lastRecalledAt": "2026-04-28T20:28:16.362Z",
+      "queryHashes": [
+        "8a4254b47642"
+      ],
+      "recallDays": [
+        "2026-04-29",
+        "2026-04-28"
+      ],
+      "conceptTags": [
+        "55.3",
+        "进度",
+        "binance",
+        "usdt",
+        "合约",
+        "完成",
+        "股票",
+        "继续"
+      ]
+    },
+    "memory:memory/.dreams/session-corpus/2026-04-28.txt:17:17": {
+      "key": "memory:memory/.dreams/session-corpus/2026-04-28.txt:17:17",
+      "path": "memory/.dreams/session-corpus/2026-04-28.txt",
+      "startLine": 17,
+      "endLine": 17,
+      "source": "memory",
+      "snippet": "Assistant: `gateway.allow_private_ips` 在当前版本中不存在。最接近的是 `gateway.allowRealIpFallback`。你是否想设置这个？还是其他目的？ --- 关于 **30分钟定时交易任务**，我来创建：",
+      "recallCount": 0,
+      "dailyCount": 1,
+      "groundedCount": 0,
+      "totalScore": 0.58,
+      "maxScore": 0.58,
+      "firstRecalledAt": "2026-04-28T20:28:16.362Z",
+      "lastRecalledAt": "2026-04-28T20:28:16.362Z",
+      "queryHashes": [
+        "8a4254b47642"
+      ],
+      "recallDays": [
+        "2026-04-29",
+        "2026-04-28"
+      ],
+      "conceptTags": [
+        "gateway",
+        "gateway.allow-private-ips",
+        "gateway.allowrealipfallback",
+        "当前",
+        "版本",
+        "不存在",
+        "接近",
+        "的是"
+      ]
+    },
+    "memory:memory/.dreams/session-corpus/2026-04-28.txt:18:18": {
+      "key": "memory:memory/.dreams/session-corpus/2026-04-28.txt:18:18",
+      "path": "memory/.dreams/session-corpus/2026-04-28.txt",
+      "startLine": 18,
+      "endLine": 18,
+      "source": "memory",
+      "snippet": "Assistant: ✅ **定时任务已创建：** | 项目 | 值 | |------|-----| | 名称 | Crypto Oversold Trading Scan | | 频率 | 每 30 分钟 | | 执行内容 | 超跌扫描 → TradingAgents fast 分析 → 制定交易计划 → 实盘执行 | | 结果推送 | Telegram (@BianTrading_Bot) | | ID | `9f187edb-8892-4c38-a460-2d849738254a` | --- ⚠️ **关于 `gateway.allow_pri",
+      "recallCount": 0,
+      "dailyCount": 1,
+      "groundedCount": 0,
+      "totalScore": 0.58,
+      "maxScore": 0.58,
+      "firstRecalledAt": "2026-04-28T20:28:16.362Z",
+      "lastRecalledAt": "2026-04-28T20:28:16.362Z",
+      "queryHashes": [
+        "8a4254b47642"
+      ],
+      "recallDays": [
+        "2026-04-29",
+        "2026-04-28"
+      ],
+      "conceptTags": [
+        "gateway",
+        "biantrading-bot",
+        "gateway.allow-pri",
+        "任务",
+        "创建",
+        "项目",
+        "名称",
+        "crypto"
+      ]
+    },
+    "memory:memory/.dreams/session-corpus/2026-04-28.txt:19:19": {
+      "key": "memory:memory/.dreams/session-corpus/2026-04-28.txt:19:19",
+      "path": "memory/.dreams/session-corpus/2026-04-28.txt",
+      "startLine": 19,
+      "endLine": 19,
+      "source": "memory",
+      "snippet": "User: 我切换了模型 报了run error: Blocked: resolves to private/internal/special-use IP address 这个错是什么问题,不要修改先告诉我原因",
+      "recallCount": 0,
+      "dailyCount": 1,
+      "groundedCount": 0,
+      "totalScore": 0.58,
+      "maxScore": 0.58,
+      "firstRecalledAt": "2026-04-28T20:28:16.362Z",
+      "lastRecalledAt": "2026-04-28T20:28:16.362Z",
+      "queryHashes": [
+        "8a4254b47642"
+      ],
+      "recallDays": [
+        "2026-04-29",
+        "2026-04-28"
+      ],
+      "conceptTags": [
+        "private/internal/special-use",
+        "切换",
+        "模型",
+        "run",
+        "error",
+        "blocked",
+        "resolves",
+        "private"
+      ]
+    },
+    "memory:memory/.dreams/session-corpus/2026-04-28.txt:20:20": {
+      "key": "memory:memory/.dreams/session-corpus/2026-04-28.txt:20:20",
+      "path": "memory/.dreams/session-corpus/2026-04-28.txt",
+      "startLine": 20,
+      "endLine": 20,
+      "source": "memory",
+      "snippet": "Assistant: 这是 LLM 提供商的安全过滤机制触发的错误。 **原因：** 模型在处理请求时，尝试访问了某个域名/URL，但该域名解析到了**私有 IP 地址**（如 `127.0.0.1`、`192.168.x.x`、`10.x.x.x` 等），被模型提供商的安全策略拦截了。 **典型触发场景：** - 工具调用（如 `web_fetch`、`browser`）访问了内网地址 - 某些域名配置了内网 DNS 解析，指向私有 IP - 测试环境用了本地服务地址 **可能触发本次错误的操作：** 切换模型后，可能触发了某个工具的自动调用（例如检查",
+      "recallCount": 0,
+      "dailyCount": 1,
+      "groundedCount": 0,
+      "totalScore": 0.58,
+      "maxScore": 0.58,
+      "firstRecalledAt": "2026-04-28T20:28:16.362Z",
+      "lastRecalledAt": "2026-04-28T20:28:16.362Z",
+      "queryHashes": [
+        "8a4254b47642"
+      ],
+      "recallDays": [
+        "2026-04-29",
+        "2026-04-28"
+      ],
+      "conceptTags": [
+        "尝试访问了某个域名/url",
+        "127.0.0.1",
+        "192.168.x.x",
+        "10.x.x.x",
+        "web-fetch",
+        "llm",
+        "提供",
+        "安全"
+      ]
+    },
+    "memory:memory/.dreams/session-corpus/2026-04-28.txt:21:21": {
+      "key": "memory:memory/.dreams/session-corpus/2026-04-28.txt:21:21",
+      "path": "memory/.dreams/session-corpus/2026-04-28.txt",
+      "startLine": 21,
+      "endLine": 21,
+      "source": "memory",
+      "snippet": "User: 为什么minimax/MiniMax-M2.7-highspeed模型可以 但是genimi报错?",
+      "recallCount": 0,
+      "dailyCount": 1,
+      "groundedCount": 0,
+      "totalScore": 0.58,
+      "maxScore": 0.58,
+      "firstRecalledAt": "2026-04-28T20:28:16.362Z",
+      "lastRecalledAt": "2026-04-28T20:28:16.362Z",
+      "queryHashes": [
+        "8a4254b47642"
+      ],
+      "recallDays": [
+        "2026-04-29",
+        "2026-04-28"
+      ],
+      "conceptTags": [
+        "为什么",
+        "minimax",
+        "m2.7",
+        "highspeed",
+        "模型",
+        "可以",
+        "但是",
+        "genimi"
+      ]
+    },
+    "memory:memory/.dreams/session-corpus/2026-04-28.txt:22:22": {
+      "key": "memory:memory/.dreams/session-corpus/2026-04-28.txt:22:22",
+      "path": "memory/.dreams/session-corpus/2026-04-28.txt",
+      "startLine": 22,
+      "endLine": 22,
+      "source": "memory",
+      "snippet": "Assistant: 这是 **Google Gemini API 的内置安全策略**，不是 OpenClaw 的问题。 **核心原因：** | | MiniMax | Gemini (Google) | |---|---|---| | 安全策略 | 较宽松 | 严格过滤私有/内网 IP | | 私有 IP 拦截 | ❌ 不拦截 | ✅ 拦截（报错） | Gemini 在收到工具调用请求时，会对目标 URL 进行安全检查。如果检测到目标地址解析到以下范围，会直接拒绝： - `127.0.0.1` / `localhost` - `192.168.x.x`",
+      "recallCount": 0,
+      "dailyCount": 1,
+      "groundedCount": 0,
+      "totalScore": 0.58,
+      "maxScore": 0.58,
+      "firstRecalledAt": "2026-04-28T20:28:16.362Z",
+      "lastRecalledAt": "2026-04-28T20:28:16.362Z",
+      "queryHashes": [
+        "8a4254b47642"
+      ],
+      "recallDays": [
+        "2026-04-29",
+        "2026-04-28"
+      ],
+      "conceptTags": [
+        "严格过滤私有/内网",
+        "127.0.0.1",
+        "192.168.x.x",
+        "google",
+        "gemini",
+        "api",
+        "安全",
+        "策略"
+      ]
+    },
+    "memory:memory/.dreams/session-corpus/2026-04-28.txt:23:23": {
+      "key": "memory:memory/.dreams/session-corpus/2026-04-28.txt:23:23",
+      "path": "memory/.dreams/session-corpus/2026-04-28.txt",
+      "startLine": 23,
+      "endLine": 23,
+      "source": "memory",
+      "snippet": "User: 我切换到gemini,正常对话 也有这个错误?",
+      "recallCount": 0,
+      "dailyCount": 1,
+      "groundedCount": 0,
+      "totalScore": 0.58,
+      "maxScore": 0.58,
+      "firstRecalledAt": "2026-04-28T20:28:16.362Z",
+      "lastRecalledAt": "2026-04-28T20:28:16.362Z",
+      "queryHashes": [
+        "8a4254b47642"
+      ],
+      "recallDays": [
+        "2026-04-29",
+        "2026-04-28"
+      ],
+      "conceptTags": [
+        "切换",
+        "gemini",
+        "正常",
+        "对话",
+        "也有",
+        "这个",
+        "错误"
+      ]
+    },
+    "memory:memory/.dreams/session-corpus/2026-04-28.txt:24:24": {
+      "key": "memory:memory/.dreams/session-corpus/2026-04-28.txt:24:24",
+      "path": "memory/.dreams/session-corpus/2026-04-28.txt",
+      "startLine": 24,
+      "endLine": 24,
+      "source": "memory",
+      "snippet": "Assistant: 这个问题需要更多上下文才能定位。我需要知道： **在哪个具体操作之后出现这个错误？** 比如： - 刚切换模型后，第一次提问就报？ - 问某个特定问题后出现？ - 在执行某个 skill 或脚本后出现？ - 定时任务触发后才出现？ --- 另外，你当前 session 用的是 **MiniMax**（`minimax/MiniMax-M2.7-highspeed`），而你提到切换到 **Gemini** 后报错。 请打开一个新的 Gemini 对话，把这次报错时的**完整提示信息**截图或复制给我，我来帮你定位是哪个环节触发了私有",
+      "recallCount": 0,
+      "dailyCount": 1,
+      "groundedCount": 0,
+      "totalScore": 0.58,
+      "maxScore": 0.58,
+      "firstRecalledAt": "2026-04-28T20:28:16.362Z",
+      "lastRecalledAt": "2026-04-28T20:28:16.362Z",
+      "queryHashes": [
+        "8a4254b47642"
+      ],
+      "recallDays": [
+        "2026-04-29",
+        "2026-04-28"
+      ],
+      "conceptTags": [
+        "minimax/minimax-m2.7-highspeed",
+        "这个",
+        "问题",
+        "需要",
+        "更多",
+        "上下文",
+        "才能",
+        "定位"
+      ]
+    },
+    "memory:memory/2026-04-29.md:5:6": {
+      "key": "memory:memory/2026-04-29.md:5:6",
+      "path": "memory/2026-04-29.md",
+      "startLine": 5,
+      "endLine": 6,
+      "source": "memory",
+      "snippet": "Step 1: 超跌扫描（短期4h模式）: 筛选漏斗: 609 → 141 → 2; 候选: DAMUSDT(评分29, -62.79%/24h, MACD底背离), PRLUSDT(评分25, 费率-1.1%极端)",
+      "recallCount": 0,
+      "dailyCount": 1,
+      "groundedCount": 0,
+      "totalScore": 0.62,
+      "maxScore": 0.62,
+      "firstRecalledAt": "2026-04-29T19:00:01.412Z",
+      "lastRecalledAt": "2026-04-29T19:00:01.412Z",
+      "queryHashes": [
+        "312dd0eab707"
+      ],
+      "recallDays": [
+        "2026-04-30",
+        "2026-04-29"
+      ],
+      "conceptTags": [
+        "62.79",
+        "费率-1.1",
+        "step",
+        "扫描",
+        "短期",
+        "模式",
+        "筛选",
+        "漏斗"
+      ]
+    },
+    "memory:memory/2026-04-29.md:9:10": {
+      "key": "memory:memory/2026-04-29.md:9:10",
+      "path": "memory/2026-04-29.md",
+      "startLine": 9,
+      "endLine": 10,
+      "source": "memory",
+      "snippet": "Step 2: TradingAgents分析: 注意: `--fast` 跑的是动量流水线，非超跌流水线; 动量流水线选出6个候选，5个通过>=6分: ZKPUSDT/BROCCOLI714/API3/PUMPUSDT/APEUSDT",
+      "recallCount": 0,
+      "dailyCount": 1,
+      "groundedCount": 0,
+      "totalScore": 0.62,
+      "maxScore": 0.62,
+      "firstRecalledAt": "2026-04-29T19:00:01.412Z",
+      "lastRecalledAt": "2026-04-29T19:00:01.412Z",
+      "queryHashes": [
+        "312dd0eab707"
+      ],
+      "recallDays": [
+        "2026-04-30",
+        "2026-04-29"
+      ],
+      "conceptTags": [
+        "step",
+        "tradingagents",
+        "分析",
+        "注意",
+        "fast",
+        "的是",
+        "动量",
+        "流水"
+      ]
+    },
+    "memory:memory/2026-04-29.md:13:16": {
+      "key": "memory:memory/2026-04-29.md:13:16",
+      "path": "memory/2026-04-29.md",
+      "startLine": 13,
+      "endLine": 16,
+      "source": "memory",
+      "snippet": "Step 3-4: 执行失败（HTTP 400）: 5笔市价做多全部下单失败; 根因: qtyPrec=0/stepSize=1的币种(APEUSDT等)，quantity传了float而非integer; DAMUSDT/PULUSDT等stepSize=1必须整数下单; BUG: skill3_strategy未对quantity做LOT_SIZE取整",
+      "recallCount": 0,
+      "dailyCount": 1,
+      "groundedCount": 0,
+      "totalScore": 0.62,
+      "maxScore": 0.62,
+      "firstRecalledAt": "2026-04-29T19:00:01.412Z",
+      "lastRecalledAt": "2026-04-29T19:00:01.412Z",
+      "queryHashes": [
+        "312dd0eab707"
+      ],
+      "recallDays": [
+        "2026-04-30",
+        "2026-04-29"
+      ],
+      "conceptTags": [
+        "3-4",
+        "0/stepsize",
+        "damusdt/pulusdt等stepsize",
+        "step",
+        "执行",
+        "失败",
+        "http",
+        "市价"
+      ]
+    },
+    "memory:memory/2026-04-29.md:19:21": {
+      "key": "memory:memory/2026-04-29.md:19:21",
+      "path": "memory/2026-04-29.md",
+      "startLine": 19,
+      "endLine": 21,
+      "source": "memory",
+      "snippet": "Step 5: 账户状态: 总资金: 319.18 USDT | 可用: 315.05 USDT; 持仓: BTCUSDT做多0.001 BTC (76.45U, 杠杆20x, 浮亏-0.30U); 建议: 修复quantity取整逻辑后再执行",
+      "recallCount": 0,
+      "dailyCount": 1,
+      "groundedCount": 0,
+      "totalScore": 0.62,
+      "maxScore": 0.62,
+      "firstRecalledAt": "2026-04-29T19:00:01.412Z",
+      "lastRecalledAt": "2026-04-29T19:00:01.412Z",
+      "queryHashes": [
+        "312dd0eab707"
+      ],
+      "recallDays": [
+        "2026-04-30",
+        "2026-04-29"
+      ],
+      "conceptTags": [
+        "319.18",
+        "315.05",
+        "btcusdt做多0.001",
+        "76.45u",
+        "浮亏-0.30u",
+        "step",
+        "账户",
+        "状态"
+      ]
+    },
+    "memory:memory/.dreams/session-corpus/2026-04-29.txt:1:1": {
+      "key": "memory:memory/.dreams/session-corpus/2026-04-29.txt:1:1",
+      "path": "memory/.dreams/session-corpus/2026-04-29.txt",
+      "startLine": 1,
+      "endLine": 1,
+      "source": "memory",
+      "snippet": "Assistant: 你好！ 刚才今天的扫描报告已送达。快速摘要： **📊 当前账户** - 总资金：319.18 USDT - 可用：315.14 USDT - 持仓：BTCUSDT 做多 0.001 BTC（20x杠杆，浮亏 -0.21 USDT） **⚠️ 本轮问题** Pipeline 候选的 6 个币种（API3/ZKJ/ZKP/BROCCOLI714/TAC/PUMP）在 Binance fapi 合约下单被拒（HTTP 400），可能是小众币不支持 U 本位合约。 **💡 可用操作** - 扫描 A 股超跌反弹机会 - 手动分析某个币种",
+      "recallCount": 0,
+      "dailyCount": 1,
+      "groundedCount": 0,
+      "totalScore": 0.58,
+      "maxScore": 0.58,
+      "firstRecalledAt": "2026-04-29T19:00:01.412Z",
+      "lastRecalledAt": "2026-04-29T19:00:01.412Z",
+      "queryHashes": [
+        "401e1af52a6f"
+      ],
+      "recallDays": [
+        "2026-04-30",
+        "2026-04-29"
+      ],
+      "conceptTags": [
+        "319.18",
+        "315.14",
+        "0.001",
+        "0.21",
+        "你好",
+        "刚才",
+        "今天",
+        "扫描"
+      ]
+    },
+    "memory:memory/.dreams/session-corpus/2026-04-29.txt:2:2": {
+      "key": "memory:memory/.dreams/session-corpus/2026-04-29.txt:2:2",
+      "path": "memory/.dreams/session-corpus/2026-04-29.txt",
+      "startLine": 2,
+      "endLine": 2,
+      "source": "memory",
+      "snippet": "User: 执行超跌反弹定时任务",
+      "recallCount": 0,
+      "dailyCount": 1,
+      "groundedCount": 0,
+      "totalScore": 0.58,
+      "maxScore": 0.58,
+      "firstRecalledAt": "2026-04-29T19:00:01.412Z",
+      "lastRecalledAt": "2026-04-29T19:00:01.412Z",
+      "queryHashes": [
+        "401e1af52a6f"
+      ],
+      "recallDays": [
+        "2026-04-30",
+        "2026-04-29"
+      ],
+      "conceptTags": [
+        "执行",
+        "反弹",
+        "任务"
+      ]
+    },
+    "memory:memory/.dreams/session-corpus/2026-04-29.txt:3:3": {
+      "key": "memory:memory/.dreams/session-corpus/2026-04-29.txt:3:3",
+      "path": "memory/.dreams/session-corpus/2026-04-29.txt",
+      "startLine": 3,
+      "endLine": 3,
+      "source": "memory",
+      "snippet": "Assistant: 执行中，扫描短期（4h）+ 长期（1d）超跌候选...",
+      "recallCount": 0,
+      "dailyCount": 1,
+      "groundedCount": 0,
+      "totalScore": 0.58,
+      "maxScore": 0.58,
+      "firstRecalledAt": "2026-04-29T19:00:01.412Z",
+      "lastRecalledAt": "2026-04-29T19:00:01.412Z",
+      "queryHashes": [
+        "401e1af52a6f"
+      ],
+      "recallDays": [
+        "2026-04-30",
+        "2026-04-29"
+      ],
+      "conceptTags": [
+        "执行",
+        "扫描",
+        "短期",
+        "长期",
+        "候选"
+      ]
+    },
+    "memory:memory/.dreams/session-corpus/2026-04-29.txt:4:4": {
+      "key": "memory:memory/.dreams/session-corpus/2026-04-29.txt:4:4",
+      "path": "memory/.dreams/session-corpus/2026-04-29.txt",
+      "startLine": 4,
+      "endLine": 4,
+      "source": "memory",
+      "snippet": "Assistant: 📊 **超跌反弹扫描完成** | 2026-04-29 10:16 --- **⏱ 短期超跌（4h）** — 2 只候选 | 币种 | 现价 | 评分 | 核心信号 | |------|------|------|----------| | DAMUSDT | 0.02661 | **29** | BIAS=-21.5% + MACD底背离 + KDJ_J=-8.8 | | PRLUSDT | 0.3573 | **25** | MACD底背离 + 资金费率=-0.889%（极端负费率） | --- **📈 长期超跌（1d）**",
+      "recallCount": 0,
+      "dailyCount": 1,
+      "groundedCount": 0,
+      "totalScore": 0.58,
+      "maxScore": 0.58,
+      "firstRecalledAt": "2026-04-29T19:00:01.412Z",
+      "lastRecalledAt": "2026-04-29T19:00:01.412Z",
+      "queryHashes": [
+        "401e1af52a6f"
+      ],
+      "recallDays": [
+        "2026-04-30",
+        "2026-04-29"
+      ],
+      "conceptTags": [
+        "0.02661",
+        "21.5",
+        "kdj-j",
+        "8.8",
+        "0.3573",
+        "0.889",
+        "反弹",
+        "扫描"
+      ]
+    },
+    "memory:memory/.dreams/session-corpus/2026-04-29.txt:5:5": {
+      "key": "memory:memory/.dreams/session-corpus/2026-04-29.txt:5:5",
+      "path": "memory/.dreams/session-corpus/2026-04-29.txt",
+      "startLine": 5,
+      "endLine": 5,
+      "source": "memory",
+      "snippet": "Assistant: 3.24 | **27** | 连跌3根 + MACD底背离 | | APTUSDT | 0.9698 | **27** | MACD底背离 + 距高点-71.2% | --- **⚠️ 注意事项** - 短期候选 DAMUSDT 24h跌幅 -54.6%，属极端波动，需严格控仓 - TRADOORUSDT/RAVEUSDT 距历史高点 -90% 以上，流动性可能有限 - 建议结合 TradingAgents 深度分析后再入场 需要我对某个币种做深度分析吗？",
+      "recallCount": 0,
+      "dailyCount": 1,
+      "groundedCount": 0,
+      "totalScore": 0.58,
+      "maxScore": 0.58,
+      "firstRecalledAt": "2026-04-29T19:00:01.412Z",
+      "lastRecalledAt": "2026-04-29T19:00:01.412Z",
+      "queryHashes": [
+        "401e1af52a6f"
+      ],
+      "recallDays": [
+        "2026-04-30",
+        "2026-04-29"
+      ],
+      "conceptTags": [
+        "3.24",
+        "0.9698",
+        "距高点-71.2",
+        "54.6",
+        "tradoorusdt/raveusdt",
+        "macd",
+        "背离",
+        "aptusdt"
+      ]
+    },
+    "memory:memory/.dreams/session-corpus/2026-04-29.txt:6:6": {
+      "key": "memory:memory/.dreams/session-corpus/2026-04-29.txt:6:6",
+      "path": "memory/.dreams/session-corpus/2026-04-29.txt",
+      "startLine": 6,
+      "endLine": 6,
+      "source": "memory",
+      "snippet": "Assistant: 📊 超跌扫描结果 + 执行异常汇报 ━━━━━━━━━━━━━━━━━━━━ 🔍 Step 1: 超跌底部反转扫描（4h） 筛选漏斗: 609 → 141 → 2 个候选 🎯 DAMUSDT 评分 29/100 价格: 0.02304 USDT 24h: -62.1% | 成交额: 2.12亿 USDT RSI: 42.6 | BIAS: -21.5% | MACD底背离 ✓ 信号: 连跌18.9% | 距高点-53.2% | KDJ_J=-8.8 🎯 PRLUSDT 评分 25/100 价格: 0.3369 USDT 24",
+      "recallCount": 0,
+      "dailyCount": 1,
+      "groundedCount": 0,
+      "totalScore": 0.58,
+      "maxScore": 0.58,
+      "firstRecalledAt": "2026-04-29T19:00:01.412Z",
+      "lastRecalledAt": "2026-04-29T19:00:01.412Z",
+      "queryHashes": [
+        "401e1af52a6f"
+      ],
+      "recallDays": [
+        "2026-04-30",
+        "2026-04-29"
+      ],
+      "conceptTags": [
+        "29/100",
+        "0.02304",
+        "62.1",
+        "2.12亿",
+        "42.6",
+        "21.5",
+        "连跌18.9",
+        "距高点-53.2"
+      ]
+    },
+    "memory:memory/.dreams/session-corpus/2026-04-29.txt:7:7": {
+      "key": "memory:memory/.dreams/session-corpus/2026-04-29.txt:7:7",
+      "path": "memory/.dreams/session-corpus/2026-04-29.txt",
+      "startLine": 7,
+      "endLine": 7,
+      "source": "memory",
+      "snippet": "Assistant: 📌 持仓明细 BTCUSDT 做多 0.001 BTC 名义价值: 76.45 USDT | 保证金: 3.82 USDT 杠杆: 20x | 浮亏: -0.30 USDT ━━━━━━━━━━━━━━━━━━━━ 🛡️ 风控检查 ✓ 单笔保证金 ≤ 20% 总资金: 通过（未成交） ✓ 单币种持仓 ≤ 30%: BTC 1.2%，合规 ✓ 日亏损 5%: 当前 -0.30U，远未触发 ━━━━━━━━━━━━━━━━━━━━ 📋 待办 & 修复计划 1. 【Bug修复】skill3_strategy 需对 quantity",
+      "recallCount": 0,
+      "dailyCount": 1,
+      "groundedCount": 0,
+      "totalScore": 0.58,
+      "maxScore": 0.58,
+      "firstRecalledAt": "2026-04-29T19:00:01.412Z",
+      "lastRecalledAt": "2026-04-29T19:00:01.412Z",
+      "queryHashes": [
+        "401e1af52a6f"
+      ],
+      "recallDays": [
+        "2026-04-30",
+        "2026-04-29"
+      ],
+      "conceptTags": [
+        "0.001",
+        "76.45",
+        "3.82",
+        "0.30",
+        "1.2",
+        "0.30u",
+        "skill3-strategy",
+        "明细"
+      ]
+    },
+    "memory:memory/.dreams/session-corpus/2026-04-29.txt:8:8": {
+      "key": "memory:memory/.dreams/session-corpus/2026-04-29.txt:8:8",
+      "path": "memory/.dreams/session-corpus/2026-04-29.txt",
+      "startLine": 8,
+      "endLine": 8,
+      "source": "memory",
+      "snippet": "Assistant: 先查账户状态，再执行超跌流水线。",
+      "recallCount": 0,
+      "dailyCount": 1,
+      "groundedCount": 0,
+      "totalScore": 0.58,
+      "maxScore": 0.58,
+      "firstRecalledAt": "2026-04-29T19:00:01.412Z",
+      "lastRecalledAt": "2026-04-29T19:00:01.412Z",
+      "queryHashes": [
+        "401e1af52a6f"
+      ],
+      "recallDays": [
+        "2026-04-30",
+        "2026-04-29"
+      ],
+      "conceptTags": [
+        "账户",
+        "状态",
+        "执行",
+        "流水"
+      ]
+    },
+    "memory:memory/.dreams/session-corpus/2026-04-29.txt:9:9": {
+      "key": "memory:memory/.dreams/session-corpus/2026-04-29.txt:9:9",
+      "path": "memory/.dreams/session-corpus/2026-04-29.txt",
+      "startLine": 9,
+      "endLine": 9,
+      "source": "memory",
+      "snippet": "Assistant: 📊 **账户状态** - 总资金: 319.15 USDT | 可用: 300.84 USDT | 浮亏: +5.74 USDT - 持仓: BROCCOLI714USDT(+2.29) · ZKPUSDT(+3.01) · BTCUSDT(+0.45) - 条件单: 1 个（ZKPUSDT 限价多 310@0.09808） --- 开始扫描 + 执行流水线...",
+      "recallCount": 0,
+      "dailyCount": 1,
+      "groundedCount": 0,
+      "totalScore": 0.58,
+      "maxScore": 0.58,
+      "firstRecalledAt": "2026-04-29T19:00:01.412Z",
+      "lastRecalledAt": "2026-04-29T19:00:01.412Z",
+      "queryHashes": [
+        "401e1af52a6f"
+      ],
+      "recallDays": [
+        "2026-04-30",
+        "2026-04-29"
+      ],
+      "conceptTags": [
+        "319.15",
+        "300.84",
+        "5.74",
+        "2.29",
+        "3.01",
+        "0.45",
+        "0.09808",
+        "账户"
+      ]
+    },
+    "memory:memory/.dreams/session-corpus/2026-04-29.txt:10:10": {
+      "key": "memory:memory/.dreams/session-corpus/2026-04-29.txt:10:10",
+      "path": "memory/.dreams/session-corpus/2026-04-29.txt",
+      "startLine": 10,
+      "endLine": 10,
+      "source": "memory",
+      "snippet": "Assistant: 📊 **短期超跌结果** | 币种 | 评分 | 价格 | 24h | RSI | BIAS | 核心信号 | |------|------|------|------|-----|------|----------| | DAMUSDT | **47** | 0.0192 | -64.3% | 37.3 | -42.5% | BIAS极端+KDJ_J=-11.8+费率-1.5% | | PRLUSDT | 25 | 0.3378 | -3.5% | 63.6 | +15.9% | MACD底背离+费率极值 | 评分 47 未达",
+      "recallCount": 0,
+      "dailyCount": 1,
+      "groundedCount": 0,
+      "totalScore": 0.58,
+      "maxScore": 0.58,
+      "firstRecalledAt": "2026-04-29T19:00:01.412Z",
+      "lastRecalledAt": "2026-04-29T19:00:01.412Z",
+      "queryHashes": [
+        "401e1af52a6f"
+      ],
+      "recallDays": [
+        "2026-04-30",
+        "2026-04-29"
+      ],
+      "conceptTags": [
+        "0.0192",
+        "64.3",
+        "37.3",
+        "42.5",
+        "kdj-j",
+        "11.8",
+        "费率-1.5",
+        "0.3378"
+      ]
+    },
+    "memory:memory/.dreams/session-corpus/2026-04-29.txt:11:11": {
+      "key": "memory:memory/.dreams/session-corpus/2026-04-29.txt:11:11",
+      "path": "memory/.dreams/session-corpus/2026-04-29.txt",
+      "startLine": 11,
+      "endLine": 11,
+      "source": "memory",
+      "snippet": "Assistant: DAMUSDT K线数据已确认：4h级别出现长下影线锤子线（0.01989→0.0192），24h跌幅 -64.3%，极端超卖。 现在调用 TradingAgents 做深度分析：",
+      "recallCount": 0,
+      "dailyCount": 1,
+      "groundedCount": 0,
+      "totalScore": 0.58,
+      "maxScore": 0.58,
+      "firstRecalledAt": "2026-04-29T19:00:01.412Z",
+      "lastRecalledAt": "2026-04-29T19:00:01.412Z",
+      "queryHashes": [
+        "401e1af52a6f"
+      ],
+      "recallDays": [
+        "2026-04-30",
+        "2026-04-29"
+      ],
+      "conceptTags": [
+        "0.01989",
+        "0.0192",
+        "64.3",
+        "damusdt",
+        "数据",
+        "确认",
+        "级别",
+        "出现"
+      ]
+    },
+    "memory:memory/.dreams/session-corpus/2026-04-29.txt:12:12": {
+      "key": "memory:memory/.dreams/session-corpus/2026-04-29.txt:12:12",
+      "path": "memory/.dreams/session-corpus/2026-04-29.txt",
+      "startLine": 12,
+      "endLine": 12,
+      "source": "memory",
+      "snippet": "Assistant: TradingAgents 分析结果： | 指标 | 值 | |------|-----| | Skill1 评分 | 71/100 | | 方向信号 | **Short** ⚠️ | | RSI | 36.57 | | ADX | 41.31 | | TA 评级 | **4 分（阈值 6）** | | 信号 | **Hold** | 系统判断：虽然 DAMUSDT 超卖，但整体动量偏空（短信号），且 TA 评级未达标，建议不入场。 --- **当前无合适超跌做多机会。** 原因是： 1. **DAMUSDT** — 超卖评分 47",
+      "recallCount": 0,
+      "dailyCount": 1,
+      "groundedCount": 0,
+      "totalScore": 0.58,
+      "maxScore": 0.58,
+      "firstRecalledAt": "2026-04-29T19:00:01.412Z",
+      "lastRecalledAt": "2026-04-29T19:00:01.412Z",
+      "queryHashes": [
+        "401e1af52a6f"
+      ],
+      "recallDays": [
+        "2026-04-30",
+        "2026-04-29"
+      ],
+      "conceptTags": [
+        "71/100",
+        "36.57",
+        "41.31",
+        "tradingagents",
+        "分析",
+        "结果",
+        "指标",
+        "skill1"
+      ]
+    },
+    "memory:memory/.dreams/session-corpus/2026-04-29.txt:13:13": {
+      "key": "memory:memory/.dreams/session-corpus/2026-04-29.txt:13:13",
+      "path": "memory/.dreams/session-corpus/2026-04-29.txt",
+      "startLine": 13,
+      "endLine": 13,
+      "source": "memory",
+      "snippet": "User: 执行超跌交易任务",
+      "recallCount": 0,
+      "dailyCount": 1,
+      "groundedCount": 0,
+      "totalScore": 0.58,
+      "maxScore": 0.58,
+      "firstRecalledAt": "2026-04-29T19:00:01.412Z",
+      "lastRecalledAt": "2026-04-29T19:00:01.412Z",
+      "queryHashes": [
+        "401e1af52a6f"
+      ],
+      "recallDays": [
+        "2026-04-30",
+        "2026-04-29"
+      ],
+      "conceptTags": [
+        "执行",
+        "交易",
+        "任务"
+      ]
+    },
+    "memory:memory/.dreams/session-corpus/2026-04-29.txt:14:14": {
+      "key": "memory:memory/.dreams/session-corpus/2026-04-29.txt:14:14",
+      "path": "memory/.dreams/session-corpus/2026-04-29.txt",
+      "startLine": 14,
+      "endLine": 14,
+      "source": "memory",
+      "snippet": "Assistant: Current thinking level: high. Options: off, minimal, low, medium, high.",
+      "recallCount": 0,
+      "dailyCount": 1,
+      "groundedCount": 0,
+      "totalScore": 0.58,
+      "maxScore": 0.58,
+      "firstRecalledAt": "2026-04-29T19:00:01.412Z",
+      "lastRecalledAt": "2026-04-29T19:00:01.412Z",
+      "queryHashes": [
+        "401e1af52a6f"
+      ],
+      "recallDays": [
+        "2026-04-30",
+        "2026-04-29"
+      ],
+      "conceptTags": [
+        "current",
+        "thinking",
+        "level",
+        "high",
+        "options",
+        "off",
+        "minimal",
+        "low"
+      ]
+    },
+    "memory:memory/.dreams/session-corpus/2026-04-29.txt:15:15": {
+      "key": "memory:memory/.dreams/session-corpus/2026-04-29.txt:15:15",
+      "path": "memory/.dreams/session-corpus/2026-04-29.txt",
+      "startLine": 15,
+      "endLine": 15,
+      "source": "memory",
+      "snippet": "Assistant: 先查缓存现状，再增量更新：",
+      "recallCount": 0,
+      "dailyCount": 1,
+      "groundedCount": 0,
+      "totalScore": 0.58,
+      "maxScore": 0.58,
+      "firstRecalledAt": "2026-04-29T19:00:01.412Z",
+      "lastRecalledAt": "2026-04-29T19:00:01.412Z",
+      "queryHashes": [
+        "401e1af52a6f"
+      ],
+      "recallDays": [
+        "2026-04-30",
+        "2026-04-29"
+      ],
+      "conceptTags": [
+        "现状",
+        "增量",
+        "更新"
+      ]
+    },
+    "memory:memory/.dreams/session-corpus/2026-04-29.txt:16:16": {
+      "key": "memory:memory/.dreams/session-corpus/2026-04-29.txt:16:16",
+      "path": "memory/.dreams/session-corpus/2026-04-29.txt",
+      "startLine": 16,
+      "endLine": 16,
+      "source": "memory",
+      "snippet": "Assistant: DB 很大（989 MB），先直接跑增量预加载，后台运行：",
+      "recallCount": 0,
+      "dailyCount": 1,
+      "groundedCount": 0,
+      "totalScore": 0.58,
+      "maxScore": 0.58,
+      "firstRecalledAt": "2026-04-29T19:00:01.412Z",
+      "lastRecalledAt": "2026-04-29T19:00:01.412Z",
+      "queryHashes": [
+        "401e1af52a6f"
+      ],
+      "recallDays": [
+        "2026-04-30",
+        "2026-04-29"
+      ],
+      "conceptTags": [
+        "很大",
+        "直接",
+        "增量",
+        "后台",
+        "运行"
+      ]
+    },
+    "memory:memory/.dreams/session-corpus/2026-04-29.txt:17:17": {
+      "key": "memory:memory/.dreams/session-corpus/2026-04-29.txt:17:17",
+      "path": "memory/.dreams/session-corpus/2026-04-29.txt",
+      "startLine": 17,
+      "endLine": 17,
+      "source": "memory",
+      "snippet": "Assistant: 全量预加载太慢（989 MB DB），改为增量更新最近数据：",
+      "recallCount": 0,
+      "dailyCount": 1,
+      "groundedCount": 0,
+      "totalScore": 0.58,
+      "maxScore": 0.58,
+      "firstRecalledAt": "2026-04-29T19:00:01.412Z",
+      "lastRecalledAt": "2026-04-29T19:00:01.412Z",
+      "queryHashes": [
+        "401e1af52a6f"
+      ],
+      "recallDays": [
+        "2026-04-30",
+        "2026-04-29"
+      ],
+      "conceptTags": [
+        "全量",
+        "太慢",
+        "增量",
+        "更新",
+        "最近",
+        "数据"
+      ]
+    },
+    "memory:memory/.dreams/session-corpus/2026-04-29.txt:18:18": {
+      "key": "memory:memory/.dreams/session-corpus/2026-04-29.txt:18:18",
+      "path": "memory/.dreams/session-corpus/2026-04-29.txt",
+      "startLine": 18,
+      "endLine": 18,
+      "source": "memory",
+      "snippet": "Assistant: 缓存最新到 4月27日，缺 4/28、4/29 两天的数据。增量补齐：",
+      "recallCount": 0,
+      "dailyCount": 1,
+      "groundedCount": 0,
+      "totalScore": 0.58,
+      "maxScore": 0.58,
+      "firstRecalledAt": "2026-04-29T19:00:01.412Z",
+      "lastRecalledAt": "2026-04-29T19:00:01.412Z",
+      "queryHashes": [
+        "401e1af52a6f"
+      ],
+      "recallDays": [
+        "2026-04-30",
+        "2026-04-29"
+      ],
+      "conceptTags": [
+        "4/28",
+        "4/29",
+        "最新",
+        "数据",
+        "增量"
+      ]
+    },
+    "memory:memory/.dreams/session-corpus/2026-04-29.txt:19:19": {
+      "key": "memory:memory/.dreams/session-corpus/2026-04-29.txt:19:19",
+      "path": "memory/.dreams/session-corpus/2026-04-29.txt",
+      "startLine": 19,
+      "endLine": 19,
+      "source": "memory",
+      "snippet": "Assistant: 🧭 Identity Channel: webchat User id: openclaw-tui Username: @openclaw-tui AllowFrom: openclaw-tui",
+      "recallCount": 0,
+      "dailyCount": 1,
+      "groundedCount": 0,
+      "totalScore": 0.58,
+      "maxScore": 0.58,
+      "firstRecalledAt": "2026-04-29T19:00:01.412Z",
+      "lastRecalledAt": "2026-04-29T19:00:01.412Z",
+      "queryHashes": [
+        "401e1af52a6f"
+      ],
+      "recallDays": [
+        "2026-04-30",
+        "2026-04-29"
+      ],
+      "conceptTags": [
+        "openclaw-tui",
+        "identity",
+        "channel",
+        "webchat",
+        "openclaw",
+        "tui",
+        "username",
+        "allowfrom"
+      ]
+    },
+    "memory:memory/.dreams/session-corpus/2026-04-29.txt:20:20": {
+      "key": "memory:memory/.dreams/session-corpus/2026-04-29.txt:20:20",
+      "path": "memory/.dreams/session-corpus/2026-04-29.txt",
+      "startLine": 20,
+      "endLine": 20,
+      "source": "memory",
+      "snippet": "Assistant: 换个策略：直接用 DB 里已有股票列表，定向补最近数据：",
+      "recallCount": 0,
+      "dailyCount": 1,
+      "groundedCount": 0,
+      "totalScore": 0.58,
+      "maxScore": 0.58,
+      "firstRecalledAt": "2026-04-29T19:00:01.412Z",
+      "lastRecalledAt": "2026-04-29T19:00:01.412Z",
+      "queryHashes": [
+        "401e1af52a6f"
+      ],
+      "recallDays": [
+        "2026-04-30",
+        "2026-04-29"
+      ],
+      "conceptTags": [
+        "换个",
+        "策略",
+        "直接",
+        "已有",
+        "股票",
+        "列表",
+        "定向",
+        "最近"
+      ]
+    },
+    "memory:memory/.dreams/session-corpus/2026-04-29.txt:21:21": {
+      "key": "memory:memory/.dreams/session-corpus/2026-04-29.txt:21:21",
+      "path": "memory/.dreams/session-corpus/2026-04-29.txt",
+      "startLine": 21,
+      "endLine": 21,
+      "source": "memory",
+      "snippet": "Assistant: 直接用 DB 里已有的 5410 只股票，跳过股票发现流程，写个定向增量脚本：",
+      "recallCount": 0,
+      "dailyCount": 1,
+      "groundedCount": 0,
+      "totalScore": 0.58,
+      "maxScore": 0.58,
+      "firstRecalledAt": "2026-04-29T19:00:01.412Z",
+      "lastRecalledAt": "2026-04-29T19:00:01.412Z",
+      "queryHashes": [
+        "401e1af52a6f"
+      ],
+      "recallDays": [
+        "2026-04-30",
+        "2026-04-29"
+      ],
+      "conceptTags": [
+        "直接",
+        "已有",
+        "股票",
+        "发现",
+        "流程",
+        "写个",
+        "定向",
+        "增量"
+      ]
+    },
+    "memory:memory/.dreams/session-corpus/2026-04-29.txt:22:22": {
+      "key": "memory:memory/.dreams/session-corpus/2026-04-29.txt:22:22",
+      "path": "memory/.dreams/session-corpus/2026-04-29.txt",
+      "startLine": 22,
+      "endLine": 22,
+      "source": "memory",
+      "snippet": "Assistant: API 调通了，但 URL 格式不对。修复：",
+      "recallCount": 0,
+      "dailyCount": 1,
+      "groundedCount": 0,
+      "totalScore": 0.58,
+      "maxScore": 0.58,
+      "firstRecalledAt": "2026-04-29T19:00:01.412Z",
+      "lastRecalledAt": "2026-04-29T19:00:01.412Z",
+      "queryHashes": [
+        "401e1af52a6f"
+      ],
+      "recallDays": [
+        "2026-04-30",
+        "2026-04-29"
+      ],
+      "conceptTags": [
+        "api",
+        "url",
+        "格式",
+        "不对",
+        "修复"
+      ]
+    },
+    "memory:memory/.dreams/session-corpus/2026-04-29.txt:23:23": {
+      "key": "memory:memory/.dreams/session-corpus/2026-04-29.txt:23:23",
+      "path": "memory/.dreams/session-corpus/2026-04-29.txt",
+      "startLine": 23,
+      "endLine": 23,
+      "source": "memory",
+      "snippet": "Assistant: API 修复成功。现在测试完整流程：",
+      "recallCount": 0,
+      "dailyCount": 1,
+      "groundedCount": 0,
+      "totalScore": 0.58,
+      "maxScore": 0.58,
+      "firstRecalledAt": "2026-04-29T19:00:01.412Z",
+      "lastRecalledAt": "2026-04-29T19:00:01.412Z",
+      "queryHashes": [
+        "401e1af52a6f"
+      ],
+      "recallDays": [
+        "2026-04-30",
+        "2026-04-29"
+      ],
+      "conceptTags": [
+        "api",
+        "修复",
+        "成功",
+        "现在",
+        "测试",
+        "完整",
+        "流程"
+      ]
+    },
+    "memory:memory/.dreams/session-corpus/2026-04-29.txt:24:24": {
+      "key": "memory:memory/.dreams/session-corpus/2026-04-29.txt:24:24",
+      "path": "memory/.dreams/session-corpus/2026-04-29.txt",
+      "startLine": 24,
+      "endLine": 24,
+      "source": "memory",
+      "snippet": "Assistant: 写入正常。启动全量后台增量更新：",
+      "recallCount": 0,
+      "dailyCount": 1,
+      "groundedCount": 0,
+      "totalScore": 0.58,
+      "maxScore": 0.58,
+      "firstRecalledAt": "2026-04-29T19:00:01.412Z",
+      "lastRecalledAt": "2026-04-29T19:00:01.412Z",
+      "queryHashes": [
+        "401e1af52a6f"
+      ],
+      "recallDays": [
+        "2026-04-30",
+        "2026-04-29"
+      ],
+      "conceptTags": [
+        "正常",
+        "启动",
+        "全量",
+        "后台",
+        "增量",
+        "更新"
+      ]
+    }
+  }
+}

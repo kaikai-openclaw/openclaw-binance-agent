@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-趋势反转定时任务固定报告入口。
+趋势反转交易定时任务固定报告入口。
 
-脚本直接执行超跌扫描和交易流水线，并输出稳定结构的 JSON 或 Markdown。
+脚本直接执行趋势反转扫描和交易流水线，并输出稳定结构的 JSON 或 Markdown。
 定时任务应调用本脚本，而不是让模型根据零散命令输出临场总结。
 """
 import argparse
@@ -37,7 +37,6 @@ from src.infra.trade_sync import BinanceTradeSyncer
 from src.integrations.trading_agents_adapter import create_trading_agents_analyzer
 from src.models.types import AccountState
 from src.skills.crypto_reversal import LongTermReversalSkill, ShortTermReversalSkill
-from src.skills.skill1_collect import Skill1Collect
 from src.skills.skill2_analyze import Skill2Analyze, TradingAgentsModule
 from src.skills.skill3_strategy import Skill3Strategy
 from src.skills.skill4_execute import Skill4Execute
@@ -343,7 +342,7 @@ def render_markdown(report: dict) -> str:
     account = report["account"]
     risk = report["risk"]
     lines = [
-        "趋势反转定时任务报告",
+        "趋势反转交易定时任务报告",
         "",
         f"任务状态: {report['status']}",
         f"交易决策: {decision['action']}",
@@ -355,13 +354,13 @@ def render_markdown(report: dict) -> str:
         f"({scan.get('market_regime', {}).get('reason', '')})",
         f"- 全部交易对: {scan['filter_summary'].get('total_tickers', 0)}",
         f"- 基础过滤后: {scan['filter_summary'].get('after_base_filter', 0)}",
-        f"- 超跌候选: {scan['filter_summary'].get('after_reversal_filter', 0)}",
+        f"- 趋势反转候选: {scan['filter_summary'].get('after_reversal_filter', 0)}",
         f"- 最终输出: {scan['filter_summary'].get('output_count', 0)}",
     ]
 
     for item in scan["candidates"][:10]:
         lines.append(
-            "- {symbol}: 超跌评分 {score}/100, 24h {change:+.2f}%, "
+            "- {symbol}: 趋势反转评分 {score}/100, 24h {change:+.2f}%, "
             "RSI {rsi}, 费率 {funding}, 信号 {signals}".format(
                 symbol=item.get("symbol", ""),
                 score=item.get("reversal_score", 0),
@@ -520,7 +519,7 @@ def run_report(args: argparse.Namespace) -> dict:
             ]
         scan_data = reversal_skill.run(scan_input)
         scan_symbols = [c["symbol"] for c in scan_data.get("candidates", [])]
-        source_map = {symbol: f"超跌{args.mode}" for symbol in scan_symbols}
+        source_map = {symbol: f"趋势反转{args.mode}" for symbol in scan_symbols}
 
         rating_threshold, risk_ratio = memory_store.get_evolved_params()
         s1_data: dict = {"candidates": [], "filter_summary": {}}
@@ -540,18 +539,9 @@ def run_report(args: argparse.Namespace) -> dict:
         trading_rule_provider = LazyBinanceTradingRuleProvider(public_client)
 
         if scan_symbols:
-            skill1 = Skill1Collect(
-                state_store=state_store,
-                input_schema=load_schema("skill1_input.json"),
-                output_schema=load_schema("skill1_output.json"),
-                client=public_client,
-            )
-            trigger_id = state_store.save(
-                "reversal_cron_trigger",
-                {"trigger_time": started_at, "target_symbols": scan_symbols},
-            )
-            s1_id = skill1.execute(trigger_id)
-            s1_data = state_store.load(s1_id)
+            # 直接使用底层扫描器的结果，避免 Skill1 二次处理丢失深度指标
+            s1_data = scan_data
+            s1_id = state_store.save("skill1_output", s1_data)
 
             analyzer_fn = create_trading_agents_analyzer(fast_mode=args.fast)
             ta_module = TradingAgentsModule(analyzer=analyzer_fn)
@@ -648,7 +638,7 @@ def run_report(args: argparse.Namespace) -> dict:
 
         finished_at = utc_now()
         report = {
-            "task_name": "趋势反转",
+            "task_name": "趋势反转交易",
             "run_id": run_id,
             "mode": args.mode,
             "status": "success" if not errors else "partial_failed",
@@ -737,7 +727,7 @@ def _protection_warnings(protection: dict) -> list[str]:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="趋势反转定时任务固定报告")
+    parser = argparse.ArgumentParser(description="趋势反转交易定时任务固定报告")
     parser.add_argument("--mode", choices=["short", "long"], default="short")
     parser.add_argument("--min-score", type=int, default=25)
     parser.add_argument("--max-candidates", type=int, default=20)
@@ -754,7 +744,7 @@ def main() -> None:
         report = run_report(args)
     except Exception as exc:
         failure = {
-            "task_name": "趋势反转",
+            "task_name": "趋势反转交易",
             "status": "failed",
             "finished_at": utc_now(),
             "errors": [str(exc)],
@@ -762,7 +752,7 @@ def main() -> None:
         if args.format == "json":
             print(json.dumps(failure, ensure_ascii=False, indent=2))
         else:
-            print("趋势反转定时任务报告")
+            print("趋势反转交易定时任务报告")
             print("")
             print("任务状态: failed")
             print(f"错误: {exc}")

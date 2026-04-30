@@ -37,7 +37,6 @@ from src.infra.trade_sync import BinanceTradeSyncer
 from src.integrations.trading_agents_adapter import create_trading_agents_analyzer
 from src.models.types import AccountState
 from src.skills.crypto_oversold import LongTermOversoldSkill, ShortTermOversoldSkill
-from src.skills.skill1_collect import Skill1Collect
 from src.skills.skill2_analyze import Skill2Analyze, TradingAgentsModule
 from src.skills.skill3_strategy import Skill3Strategy
 from src.skills.skill4_execute import Skill4Execute
@@ -540,18 +539,9 @@ def run_report(args: argparse.Namespace) -> dict:
         trading_rule_provider = LazyBinanceTradingRuleProvider(public_client)
 
         if scan_symbols:
-            skill1 = Skill1Collect(
-                state_store=state_store,
-                input_schema=load_schema("skill1_input.json"),
-                output_schema=load_schema("skill1_output.json"),
-                client=public_client,
-            )
-            trigger_id = state_store.save(
-                "oversold_cron_trigger",
-                {"trigger_time": started_at, "target_symbols": scan_symbols},
-            )
-            s1_id = skill1.execute(trigger_id)
-            s1_data = state_store.load(s1_id)
+            # 直接使用底层扫描器的结果，避免 Skill1 二次处理丢失深度指标
+            s1_data = scan_data
+            s1_id = state_store.save("skill1_output", s1_data)
 
             analyzer_fn = create_trading_agents_analyzer(fast_mode=args.fast)
             ta_module = TradingAgentsModule(analyzer=analyzer_fn)

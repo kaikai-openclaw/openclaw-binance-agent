@@ -22,6 +22,7 @@
 
 import logging
 import math
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -195,7 +196,7 @@ class _CryptoOversoldBase(BaseSkill):
             if sym not in tradable:
                 continue
             base = sym.replace("USDT", "")
-            if base in exclude_bases:
+            if base in exclude_bases or not re.match(r'^[A-Z0-9]{2,15}$', base):
                 continue
             qv = float(t.get("quoteVolume", 0))
             if qv < min_qv:

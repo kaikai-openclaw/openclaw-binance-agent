@@ -21,6 +21,7 @@ Skill-1：Binance 量化数据采集与候选筛选（v2）
 
 import logging
 import math
+import re
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
@@ -632,9 +633,9 @@ class Skill1Collect(BaseSkill):
             if abs_change < pc_min or abs_change > pc_max:
                 continue
 
-            # base asset 长度过滤：排除 base < 2 字符的币种
+            # base asset 长度与字符合法性过滤：排除非标准字符（如中文名）和过短币种
             base_asset = symbol[:-4]
-            if len(base_asset) < 2:
+            if len(base_asset) < 2 or not re.match(r'^[A-Z0-9]{2,15}$', base_asset):
                 continue
 
             result.append({

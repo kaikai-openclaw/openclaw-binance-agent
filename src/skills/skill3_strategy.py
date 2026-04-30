@@ -65,7 +65,7 @@ TAKE_PROFIT_PCT = 0.06     # 止盈幅度 6%（盈亏比 2:1）
 DEFAULT_ATR_STOP_MULT = 1.5     # 止损距离 = ATR × 1.5
 DEFAULT_ATR_TP_MULT = 3.0       # 止盈距离 = ATR × 3.0（盈亏比 2:1）
 DEFAULT_MIN_STOP_PCT = 0.005    # 止损距离下限 0.5%（防止极低波动下 SL 贴得过近被秒扫）
-DEFAULT_MAX_STOP_PCT = 0.12     # 止损距离上限 12%（放宽以适应高波动山寨币）
+DEFAULT_MAX_STOP_PCT = 0.18     # 止损距离上限 18%（为超跌策略放宽，允许抄底极度恐慌的高波动山寨币）
 
 # 入场区间宽度常量
 ENTRY_SPREAD_MIN = 0.01    # 最窄区间（置信度 100% 时）

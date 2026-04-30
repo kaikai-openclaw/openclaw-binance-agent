@@ -552,7 +552,10 @@ class BinanceFapiClient:
         if activation_price is not None and activation_price > 0:
             params["activationPrice"] = format_decimal_param(activation_price)
         if close_position:
-            params["closePosition"] = "true"
+            # TRAILING_STOP_MARKET 被币安拒绝使用 closePosition=true
+            # 必须使用 reduceOnly=true 并显式提供数量
+            params["reduceOnly"] = "true"
+            params["quantity"] = format_decimal_param(quantity)
         else:
             params["quantity"] = format_decimal_param(quantity)
 

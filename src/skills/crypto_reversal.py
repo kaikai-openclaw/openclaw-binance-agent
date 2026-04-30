@@ -320,6 +320,7 @@ class _CryptoReversalBase(BaseSkill):
                     "shadow_score": result["shadow_score"],
                     "signal_details": result["signal_details"],
                     "atr_pct": atr_pct,
+                    "signal_direction": "long",
                     "collected_at": datetime.now(timezone.utc).isoformat(),
                 })
             except Exception as exc:

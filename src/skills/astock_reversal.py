@@ -76,7 +76,7 @@ W_SHADOW = 5           # 长下影线
 VOLUME_SURGE_THRESHOLD = 2.0           # 放量倍数阈值（近 3 日均量 / 前 15 日均量）
 VOLUME_SURGE_STRONG = 3.0              # 强放量
 PRICE_STABLE_DAYS = 5                  # 企稳观察窗口
-DROP_LOOKBACK = 30                     # 前期跌幅回看天数
+DROP_LOOKBACK = 60                     # 前期跌幅回看天数 (A股底部较长，从30改为60天)
 BOTTOM_LOOKBACK = 20                   # 近期最低点回看天数
 DIST_BOTTOM_IDEAL_MIN = 3.0            # 距底部理想距离下限（%）
 DIST_BOTTOM_IDEAL_MAX = 10.0           # 距底部理想距离上限（%）
@@ -149,10 +149,12 @@ class AStockReversalSkill(BaseSkill):
                 if result["total_score"] < min_score and not target_symbols:
                     continue
 
+                # 计算辅助分析指标
                 returns_map[symbol] = calc_returns(closes)
                 atr_val = calc_atr(highs, lows, closes, ATR_PERIOD)
                 last_close = closes[-1]
                 atr_pct = round(atr_val / last_close * 100, 2) if (atr_val and last_close > 0) else None
+                rsi_val = calc_rsi(closes, RSI_PERIOD)
 
                 scored.append({
                     "symbol": symbol,
@@ -160,6 +162,8 @@ class AStockReversalSkill(BaseSkill):
                     "close": last_close,
                     "amount": item.get("amount", 0),
                     "change_pct": item.get("change_pct", 0),
+                    "signal_direction": "long",  # 底部反转策略固定为看多
+                    "rsi": round(rsi_val, 2) if rsi_val else None,
                     "reversal_score": result["total_score"],
                     "volume_surge_score": result["volume_surge_score"],
                     "volume_surge_ratio": result["volume_surge_ratio"],
@@ -221,12 +225,25 @@ def _calc_reversal_score(
         base_avg = sum(volumes[-18:-3]) / 15
         if base_avg > 0:
             vol_surge_ratio = recent_avg / base_avg
+            
+            # A股防雷：放量必须伴随阳线（收盘价>开盘价），巨量阴线可能是恐慌盘杀跌
+            is_positive_line = closes[-1] > opens[-1]
+            
             if vol_surge_ratio >= VOLUME_SURGE_STRONG:
-                vol_surge_score = W_VOLUME_SURGE
-                signals.append(f"强放量{vol_surge_ratio:.1f}x")
+                if is_positive_line:
+                    vol_surge_score = W_VOLUME_SURGE
+                    signals.append(f"强放量阳线{vol_surge_ratio:.1f}x")
+                else:
+                    # 巨量大阴线，极度危险，得分减半且标注警告
+                    vol_surge_score = W_VOLUME_SURGE * 0.5
+                    signals.append(f"巨量阴线警告({vol_surge_ratio:.1f}x)")
             elif vol_surge_ratio >= VOLUME_SURGE_THRESHOLD:
-                vol_surge_score = W_VOLUME_SURGE * (vol_surge_ratio - 1.0) / (VOLUME_SURGE_STRONG - 1.0)
-                signals.append(f"放量{vol_surge_ratio:.1f}x")
+                if is_positive_line:
+                    vol_surge_score = W_VOLUME_SURGE * (vol_surge_ratio - 1.0) / (VOLUME_SURGE_STRONG - 1.0)
+                    signals.append(f"温和放量阳线{vol_surge_ratio:.1f}x")
+                else:
+                    vol_surge_score = (W_VOLUME_SURGE * (vol_surge_ratio - 1.0) / (VOLUME_SURGE_STRONG - 1.0)) * 0.5
+                    signals.append(f"放量阴线{vol_surge_ratio:.1f}x")
 
     # ── 2. 价格企稳（15 分）──
     # 近 5 日不再创新低 + 波动收窄

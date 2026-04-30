@@ -143,16 +143,30 @@ def create_astock_fast_analyzer() -> callable:
                     "comment": f"[快速模式] 行情获取失败: {e}"}
 
         name = quote.get("name", symbol)
-        prompt = f"""你是一名专业的 A 股量化研究员。请根据以下 {name}({symbol}) 的市场数据，进行量化评估并输出结构化评分。
+        
+        # 注入策略方向和量化细节
+        expected_signal = market_data.get("signal_direction", "long")
+        q_score = market_data.get("reversal_score", 0)
+        rsi_val = market_data.get("rsi", "N/A")
+        vol_ratio = market_data.get("volume_surge_ratio", "N/A")
+        details = market_data.get("signal_details", "无")
 
-市场数据：
+        prompt = f"""你是一名专业的 A 股量化研究员。请根据以下 {name}({symbol}) 的市场数据，进行量化评估并输出结构化评分。
+本次分析的策略背景是【底部放量反转】，预期的战术方向是【{expected_signal}】。
+
+市场实时数据：
 - 当前价格: {quote['last_price']:.2f} 元
 - 涨跌幅: {quote['change_pct']:+.2f}%
 - 成交额: {quote['amount']/1e8:.1f} 亿元
-- 最高: {quote['high']:.2f} / 最低: {quote['low']:.2f}
 - 换手率: {quote['turnover_rate']:.2f}%
 
-请基于以上数据，从技术面和资金面角度进行量化评估。
+底层量化筛选指标：
+- 策略量化评分: {q_score}/100
+- RSI 指标: {rsi_val}
+- 底部放量倍数: {vol_ratio}x
+- 核心反转信号: {details}
+
+请结合以上实时行情与底层量化细节，重点评估该股是否处于有效的反转确认期，或者是否存在诱多风险。
 直接返回以下 JSON 格式（不要解释，只返回 JSON）：
 {{"rating_score": <int 1-10>, "signal": "<long|short|hold>", "confidence": <float 0-100>}}
 

@@ -415,6 +415,18 @@ def _score_volume_price(
     elif turnover and turnover > 0:
         score += 2.0
 
+    # 活跃度基因检测：近 20 日内是否有涨幅 > 7% 的大阳线
+    has_active_gene = False
+    if len(closes) >= 21:
+        for i in range(-20, 0):
+            if closes[i-1] > 0 and (closes[i] - closes[i-1]) / closes[i-1] >= 0.07:
+                has_active_gene = True
+                break
+    
+    # A股无大阳线的票走势极慢，对没有活跃基因的个股量价得分减半
+    if not has_active_gene:
+        score *= 0.5
+
     return min(score, W_VOLUME)
 
 
@@ -441,13 +453,17 @@ def _score_breakout(
     pct_above = (last - prev_high) / prev_high
 
     if pct_above >= BREAKOUT_MARGIN:
-        # 检查是否放量突破
-        if len(volumes) >= 6:
+        # A股防假突破：突破必须伴随明显的放量（至少大于过去 20 日均量的 1.5 倍）
+        if len(volumes) >= 21:
             today_vol = volumes[-1]
-            avg_vol = sum(volumes[-6:-1]) / 5
-            if avg_vol > 0 and today_vol > avg_vol * 1.3:
-                return {"score": 15.0, "detail": f"放量突破20日高点({pct_above*100:+.1f}%)"}
-        return {"score": 10.0, "detail": f"突破20日高点({pct_above*100:+.1f}%)"}
+            avg_vol_20 = sum(volumes[-21:-1]) / 20
+            if avg_vol_20 > 0 and today_vol >= avg_vol_20 * 1.5:
+                return {"score": 15.0, "detail": f"强势放量突破前高({pct_above*100:+.1f}%)"}
+            elif avg_vol_20 > 0 and today_vol >= avg_vol_20 * 1.0:
+                return {"score": 8.0, "detail": f"温和突破前高({pct_above*100:+.1f}%)"}
+            else:
+                return {"score": 0.0, "detail": f"缩量假突破警告({pct_above*100:+.1f}%)"}
+        return {"score": 0.0, "detail": "数据不足无法确认突破有效性"}
     elif pct_above >= -BREAKOUT_MARGIN:
         return {"score": 5.0, "detail": f"接近20日高点({pct_above*100:+.1f}%)"}
     else:

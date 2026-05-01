@@ -65,8 +65,8 @@
           },
           "stop_loss_source": {
             "type": "string",
-            "enum": ["atr", "fixed"],
-            "description": "止损来源：ATR 动态 或 固定百分比回退"
+            "enum": ["atr", "fixed", "wick_tip"],
+            "description": "止损来源：ATR 动态 / 固定百分比回退 / 插针影线尖端"
           },
           "price_source": {
             "type": "string",

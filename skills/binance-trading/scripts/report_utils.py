@@ -20,6 +20,8 @@ STRATEGY_TAG_MAP: dict[str, tuple[str, str]] = {
     "crypto_reversal_short":   ("🔄", "反转短"),
     "crypto_overbought_long":  ("📉", "做空长"),
     "crypto_overbought_short": ("📉", "做空短"),
+    "crypto_wick_short":       ("🪡", "插针短"),
+    "crypto_wick_long":        ("🪡", "插针长"),
     "crypto_generic":          ("⚙️", "通用"),
 }
 

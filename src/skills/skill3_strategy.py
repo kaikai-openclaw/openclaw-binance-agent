@@ -301,6 +301,7 @@ class Skill3Strategy(BaseSkill):
         signal = rating.get("signal", "")
         confidence = rating.get("confidence", 0.0)
         atr_pct = rating.get("atr_pct")  # Skill-1/Skill-2 透传的 ATR 百分比（可选）
+        wick_tip_price = rating.get("wick_tip_price")  # 插针 Skill 透传的影线尖端价（可选）
 
         # hold 信号不生成交易计划
         if signal == "hold":
@@ -322,9 +323,10 @@ class Skill3Strategy(BaseSkill):
         if self._should_skip_for_excessive_volatility(atr_pct, symbol):
             return None
 
-        # 计算止损和止盈价格（P0-1：优先使用 ATR 动态）
+        # 计算止损和止盈价格（优先级：wick_tip > ATR 动态 > 固定百分比）
         stop_loss_price, take_profit_price, sl_source = self._calculate_sl_tp(
-            entry_price, direction, atr_pct, symbol
+            entry_price, direction, atr_pct, symbol,
+            wick_tip_price=wick_tip_price,
         )
 
         # 需求 3.8：数值参数边界校验
@@ -539,25 +541,64 @@ class Skill3Strategy(BaseSkill):
         direction: TradeDirection,
         atr_pct: Optional[float] = None,
         symbol: str = "",
+        wick_tip_price: Optional[float] = None,
     ) -> tuple[float, float, str]:
         """
-        计算止损和止盈价格（P0-1：ATR 动态 > 固定百分比）。
+        计算止损和止盈价格（优先级：wick_tip > ATR 动态 > 固定百分比）。
 
-        优先路径（ATR 动态）：
+        最优路径（插针尖端）：
+            - 止损 = 影线尖端 × (1 ± 0.5% 缓冲)
+            - 止盈 = 入场价 ± 止损距离 × (atr_tp_mult / atr_stop_mult)
+            - 影线尖端是天然止损位：再次跌破说明不是插针而是趋势突破
+
+        次优路径（ATR 动态）：
             - 止损距离 pct = clip(atr_pct / 100 × atr_stop_mult, min_stop_pct, max_stop_pct)
             - 止盈距离 pct = 止损距离 × (atr_tp_mult / atr_stop_mult)
-            - 盈亏比 = atr_tp_mult / atr_stop_mult（默认 2:1）
 
         回退路径（无 atr_pct）：
             - 沿用 STOP_LOSS_PCT=3% / TAKE_PROFIT_PCT=6%
-            - 打 warning 提示 ATR 缺失
 
         做多：止损 = 入场价 × (1 - sl_pct)，止盈 = 入场价 × (1 + tp_pct)
         做空：止损 = 入场价 × (1 + sl_pct)，止盈 = 入场价 × (1 - tp_pct)
 
         返回:
-            (止损价格, 止盈价格, 来源标记) 来源 ∈ {"atr", "fixed"}
+            (止损价格, 止盈价格, 来源标记) 来源 ∈ {"wick_tip", "atr", "fixed"}
         """
+        # 最优路径：插针尖端止损
+        if wick_tip_price is not None and wick_tip_price > 0:
+            wick_buffer = 0.005  # 0.5% 缓冲，防止精确到尖端被扫
+            if direction == TradeDirection.LONG and wick_tip_price < entry_price:
+                stop_loss = wick_tip_price * (1 - wick_buffer)
+                sl_dist_pct = (entry_price - stop_loss) / entry_price
+                # clip 止损距离到合理范围
+                sl_dist_pct = max(self._min_stop_pct, min(self._max_stop_pct, sl_dist_pct))
+                stop_loss = entry_price * (1 - sl_dist_pct)
+                tp_dist_pct = sl_dist_pct * (self._atr_tp_mult / self._atr_stop_mult)
+                take_profit = entry_price * (1 + tp_dist_pct)
+                log.info(
+                    f"[{self.name}] {symbol} 插针尖端止损: tip={wick_tip_price:.8g}, "
+                    f"sl={stop_loss:.8g}({sl_dist_pct:.4f}), tp={take_profit:.8g}"
+                )
+                return stop_loss, take_profit, "wick_tip"
+            elif direction == TradeDirection.SHORT and wick_tip_price > entry_price:
+                stop_loss = wick_tip_price * (1 + wick_buffer)
+                sl_dist_pct = (stop_loss - entry_price) / entry_price
+                sl_dist_pct = max(self._min_stop_pct, min(self._max_stop_pct, sl_dist_pct))
+                stop_loss = entry_price * (1 + sl_dist_pct)
+                tp_dist_pct = sl_dist_pct * (self._atr_tp_mult / self._atr_stop_mult)
+                take_profit = entry_price * (1 - tp_dist_pct)
+                log.info(
+                    f"[{self.name}] {symbol} 插针尖端止损: tip={wick_tip_price:.8g}, "
+                    f"sl={stop_loss:.8g}({sl_dist_pct:.4f}), tp={take_profit:.8g}"
+                )
+                return stop_loss, take_profit, "wick_tip"
+            # wick_tip_price 方向不匹配，回退到 ATR/固定
+            log.debug(
+                f"[{self.name}] {symbol} wick_tip_price={wick_tip_price} "
+                f"与方向 {direction.value} 不匹配，回退到 ATR"
+            )
+
+        # 次优路径：ATR 动态止损
         if atr_pct is not None and atr_pct > 0:
             atr_ratio = float(atr_pct) / 100.0
             stop_mult, tp_mult = self._get_dynamic_multipliers(float(atr_pct))

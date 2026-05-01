@@ -44,6 +44,10 @@
           "strategy_tag": {
             "type": "string",
             "description": "上游策略标签，用于独立胜率统计"
+          },
+          "wick_tip_price": {
+            "type": ["number", "null"],
+            "description": "插针 Skill 透传的影线尖端价，供 Skill-3 作为天然止损位"
           }
         },
         "required": [
@@ -94,6 +98,10 @@
           "strategy_tag": {
             "type": "string",
             "description": "上游策略标签，用于独立胜率统计"
+          },
+          "wick_tip_price": {
+            "type": ["number", "null"],
+            "description": "插针 Skill 透传的影线尖端价，供 Skill-3 作为天然止损位"
           }
         },
         "required": [

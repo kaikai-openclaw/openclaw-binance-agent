@@ -310,8 +310,8 @@ def compute_evolution_adjustment(
             f"降低风险比例 {current_risk_ratio:.4f}→{new_risk_ratio:.4f}"
         )
     elif win_rate > 60:
-        # 放松：阈值 -1（下限 5），风险 ×1.1（上限 0.08）
-        new_threshold = max(5, current_rating_threshold - 1)
+        # 放松：阈值 -1（下限 6），风险 ×1.1（上限 0.08）
+        new_threshold = max(6, current_rating_threshold - 1)
         new_risk_ratio = min(0.08, round(current_risk_ratio * 1.1, 4))
         reasoning = (
             f"胜率 {win_rate:.1f}% 高于 60% 阈值，"

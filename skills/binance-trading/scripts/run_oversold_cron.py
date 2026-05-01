@@ -49,6 +49,7 @@ from report_utils import (
     fmt_optional as _fmt_optional,
     build_position_snapshots,
     build_protection_report,
+    build_symbol_source_map,
     classify_protection_label,
     build_account_summary,
     build_decision,
@@ -367,8 +368,14 @@ def run_report(args: argparse.Namespace) -> dict:
         account_state = account_provider()
         account_info = fapi_client.get_account_info()
         raw_positions = fapi_client.get_positions()
+        # 合并本轮扫描来源 + 历史 StateStore 来源，确保所有持仓都有策略标签
+        historical_map = build_symbol_source_map(state_store)
+        full_source_map = {}
+        for sym, (emoji, label) in historical_map.items():
+            full_source_map[sym] = f"{emoji}{label}"
+        full_source_map.update(source_map)  # 本轮扫描优先
         positions = build_position_snapshots(
-            account_info.total_balance, raw_positions, source_map
+            account_info.total_balance, raw_positions, full_source_map
         )
         algo_orders = fapi_client.get_open_algo_orders()
         protection = build_protection_report(positions, algo_orders)

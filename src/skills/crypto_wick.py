@@ -257,38 +257,51 @@ def detect_wick_in_recent(
     lookback: int = 3,
 ) -> Optional[Dict[str, Any]]:
     """
-    在最近 N 根 K 线中检测最强的插针形态，并验证插针后价格确认。
+    在最近 N 根 K 线中检测插针低点（做多）或高点（做空）。
 
-    插针后确认规则：
-      - 下插针（做多）：插针之后的 K 线收盘价必须 ≥ 插针 K 线收盘价（价格企稳或反弹）
-      - 上插针（做空）：插针之后的 K 线收盘价必须 ≤ 插针 K 线收盘价
-      - 最后一根 K 线的插针不要求确认（刚发生，还没有后续 K 线）
+    核心逻辑：寻找近期急跌形成的低点，当前价格仍在低位附近。
+    不要求价格已经反弹——目标是在低点附近入场。
 
-    返回最强的已确认插针，或 None。
+    做多信号条件：
+      - 近 N 根中存在影线深度 ≥ 5% 的下插针形态
+      - 当前价格（最新收盘价）距插针低点不超过插针深度的 50%
+        （还在低位区域，没有完全拉回去）
+
+    返回最强插针的信息，或 None。
     """
     best: Optional[Dict[str, Any]] = None
     n = len(closes)
     start = max(0, n - lookback)
+    latest_close = closes[-1] if closes else 0
 
     for i in range(start, n):
         wick = detect_wick(opens[i], highs[i], lows[i], closes[i])
         if wick is None:
             continue
 
-        # 插针后价格确认（最后一根不要求，因为还没有后续 K 线）
-        if i < n - 1:
-            wick_close = closes[i]
-            latest_close = closes[-1]
-            if wick["direction"] == "long" and latest_close < wick_close * 0.995:
-                # 插针后价格继续下跌，不是有效插针
+        # 检查当前价格是否还在插针低点附近（没有完全拉回去）
+        tip = wick["wick_tip_price"]
+        wick_close = closes[i]
+
+        if wick["direction"] == "long" and tip > 0:
+            # 下插针：当前价格应该在 [tip, tip + 深度的50%] 区间
+            # 即还在低位，没有完全回到插针前的价格
+            wick_depth = wick_close - tip
+            upper_bound = tip + wick_depth * 0.5
+            if latest_close > upper_bound:
+                # 已经拉回太多，错过了最佳入场点
                 continue
-            if wick["direction"] == "short" and latest_close > wick_close * 1.005:
-                # 插针后价格继续上涨，不是有效插针
+
+        if wick["direction"] == "short" and tip > 0:
+            # 上插针：当前价格应该在 [tip - 深度的50%, tip] 区间
+            wick_depth = tip - wick_close
+            lower_bound = tip - wick_depth * 0.5
+            if latest_close < lower_bound:
                 continue
 
         if best is None or wick["shadow_ratio"] > best["shadow_ratio"]:
             best = wick
-            best["candle_index"] = i - n  # 负索引，-1 = 最后一根
+            best["candle_index"] = i - n
 
     return best
 

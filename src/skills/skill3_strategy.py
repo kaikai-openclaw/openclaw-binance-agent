@@ -121,6 +121,7 @@ class Skill3Strategy(BaseSkill):
         min_net_rr_ratio: float = DEFAULT_MIN_NET_RR_RATIO,
         trading_rule_provider: Optional[TradingRuleProvider] = None,
         memory_store: Optional[MemoryStore] = None,
+        max_trades: int = 3,
         trailing_stop_ratio: float = DEFAULT_TRAILING_STOP_RATIO,
         trailing_activation_mult: float = DEFAULT_TRAILING_ACTIVATION_MULT,
         trailing_activation_mult_hv: float = DEFAULT_TRAILING_ACTIVATION_MULT_HV,
@@ -175,6 +176,7 @@ class Skill3Strategy(BaseSkill):
         self._fee_order_type = fee_order_type
         self._fee_vip_discount = fee_vip_discount
         self._min_net_rr_ratio = min_net_rr_ratio
+        self._max_trades = max_trades
         self._trailing_stop_ratio = trailing_stop_ratio
         self._trailing_activation_mult = trailing_activation_mult
         self._trailing_activation_mult_hv = trailing_activation_mult_hv
@@ -249,6 +251,22 @@ class Skill3Strategy(BaseSkill):
 
         # 步骤 3：获取当前账户状态
         account = self._account_state_provider()
+
+        # 步骤 3.5：按评分+置信度排序，只取前 max_trades 个
+        if len(ratings) > self._max_trades:
+            ratings_sorted = sorted(
+                ratings,
+                key=lambda r: (r.get("rating_score", 0), r.get("confidence", 0)),
+                reverse=True,
+            )
+            skipped = ratings_sorted[self._max_trades:]
+            ratings = ratings_sorted[:self._max_trades]
+            skipped_symbols = [r.get("symbol", "") for r in skipped]
+            log.info(
+                f"[{self.name}] 评级通过 {len(ratings) + len(skipped)} 个，"
+                f"只取评分最高的 {self._max_trades} 个，"
+                f"跳过: {', '.join(skipped_symbols)}"
+            )
 
         # 步骤 4 & 5：为每个目标币种生成交易计划（使用热更新后的 risk_ratio）
         trade_plans: List[Dict[str, Any]] = []

@@ -320,6 +320,14 @@ def run_report(args: argparse.Namespace) -> dict:
                     trading_rule_provider=trading_rule_provider,
                     risk_ratio=risk_ratio,
                     require_market_price=True,
+                    # ── 趋势反转策略参数 ──
+                    # 趋势转折需要确认，48h 持仓，盈亏比 2.7:1，trailing stop 适度延迟
+                    max_hold_hours=48.0,
+                    atr_tp_mult=4.0,
+                    trailing_stop_ratio=0.4,
+                    trailing_activation_mult=1.3,
+                    trailing_activation_mult_hv=1.8,
+                    high_vol_tp_mult=7.0,
                 )
                 s3_input_id = state_store.save("skill3_input", {"input_state_id": s2_id})
                 s3_id = skill3.execute(s3_input_id)

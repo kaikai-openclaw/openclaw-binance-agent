@@ -77,6 +77,9 @@ TEST_FALLBACK_PRICE = 100.0
 # P0-4：扣费后净盈亏比的最低阈值；低于此值的交易直接拒绝
 DEFAULT_MIN_NET_RR_RATIO = 1.2
 DEFAULT_TRAILING_STOP_RATIO = 0.5
+DEFAULT_TRAILING_ACTIVATION_MULT = 1.0       # 常规币 trailing stop 激活距离 = 止损距离 × 此值
+DEFAULT_TRAILING_ACTIVATION_MULT_HV = 1.5    # 高波动币 trailing stop 激活距离乘数
+DEFAULT_HIGH_VOL_TP_MULT = 6.0               # 高波动币止盈乘数覆盖值
 
 # 市场价格提供者类型：接收 symbol，返回当前市场价格（None 或 <=0 表示不可用）
 MarketPriceProvider = Callable[[str], Optional[float]]
@@ -118,6 +121,10 @@ class Skill3Strategy(BaseSkill):
         min_net_rr_ratio: float = DEFAULT_MIN_NET_RR_RATIO,
         trading_rule_provider: Optional[TradingRuleProvider] = None,
         memory_store: Optional[MemoryStore] = None,
+        trailing_stop_ratio: float = DEFAULT_TRAILING_STOP_RATIO,
+        trailing_activation_mult: float = DEFAULT_TRAILING_ACTIVATION_MULT,
+        trailing_activation_mult_hv: float = DEFAULT_TRAILING_ACTIVATION_MULT_HV,
+        high_vol_tp_mult: float = DEFAULT_HIGH_VOL_TP_MULT,
     ) -> None:
         """
         初始化 Skill-3。
@@ -168,6 +175,10 @@ class Skill3Strategy(BaseSkill):
         self._fee_order_type = fee_order_type
         self._fee_vip_discount = fee_vip_discount
         self._min_net_rr_ratio = min_net_rr_ratio
+        self._trailing_stop_ratio = trailing_stop_ratio
+        self._trailing_activation_mult = trailing_activation_mult
+        self._trailing_activation_mult_hv = trailing_activation_mult_hv
+        self._high_vol_tp_mult = high_vol_tp_mult
         self._trading_rule_provider = trading_rule_provider
         self._memory_store = memory_store
 
@@ -452,8 +463,7 @@ class Skill3Strategy(BaseSkill):
         
         # 优化的高波动率追踪止盈逻辑 (Trailing Stop 强化)
         is_high_vol = atr_pct is not None and atr_pct >= 5.0
-        # 激活距离：大盘币（常规波动）为 1.0 倍止损距离；山寨币（高波动）为 1.5 倍止损距离，让利润多奔跑一会儿
-        activation_multiplier = 1.5 if is_high_vol else 1.0
+        activation_multiplier = self._trailing_activation_mult_hv if is_high_vol else self._trailing_activation_mult
         activation_dist = abs(entry_price - stop_loss_price) * activation_multiplier
         
         if direction == TradeDirection.LONG:
@@ -464,7 +474,7 @@ class Skill3Strategy(BaseSkill):
         plan["trailing_stop"] = {
             "activation_price": round(activation_price, 8),
             # Binance callbackRate 精度为 1 位小数（步进 0.1%），源头即规整
-            "trail_pct": round(sl_dist_pct * DEFAULT_TRAILING_STOP_RATIO * 100, 1),
+            "trail_pct": round(sl_dist_pct * self._trailing_stop_ratio * 100, 1),
         }
         return plan
 
@@ -607,8 +617,7 @@ class Skill3Strategy(BaseSkill):
     def _get_dynamic_multipliers(self, atr_pct: float) -> tuple[float, float]:
         """对于高波动币种（ATR > 5%），动态放宽止损乘数以防止被插针扫损"""
         if atr_pct >= 5.0:
-            # 止盈乘数放大至 6.0，实质上弱化硬性止盈，主要依靠追踪止损(Trailing Stop)让利润奔跑
-            return max(self._atr_stop_mult, 2.0), max(self._atr_tp_mult, 6.0)
+            return max(self._atr_stop_mult, 2.0), max(self._atr_tp_mult, self._high_vol_tp_mult)
         return self._atr_stop_mult, self._atr_tp_mult
 
     def _normalize_quantity_for_exchange(

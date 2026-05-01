@@ -320,6 +320,11 @@ def run_report(args: argparse.Namespace) -> dict:
                     trading_rule_provider=trading_rule_provider,
                     risk_ratio=risk_ratio,
                     require_market_price=True,
+                    # ── 超买做空策略参数 ──
+                    # 做空回落通常比反弹快，48h 持仓，盈亏比 2.3:1
+                    max_hold_hours=48.0,
+                    atr_tp_mult=3.5,
+                    trailing_stop_ratio=0.45,
                 )
                 s3_input_id = state_store.save("skill3_input", {"input_state_id": s2_id})
                 s3_id = skill3.execute(s3_input_id)

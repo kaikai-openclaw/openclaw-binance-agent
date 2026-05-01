@@ -14,12 +14,12 @@ log = logging.getLogger(__name__)
 # ── 策略来源定义 ──────────────────────────────────────────
 # strategy_tag → (emoji, 中文标签)
 STRATEGY_TAG_MAP: dict[str, tuple[str, str]] = {
-    "crypto_oversold_long":    ("🌀", "超跌"),
-    "crypto_oversold_short":   ("🌀", "超跌"),
-    "crypto_reversal_long":    ("🔄", "反转"),
-    "crypto_reversal_short":   ("🔄", "反转"),
-    "crypto_overbought_long":  ("📉", "做空"),
-    "crypto_overbought_short": ("📉", "做空"),
+    "crypto_oversold_long":    ("🌀", "超跌长"),
+    "crypto_oversold_short":   ("🌀", "超跌短"),
+    "crypto_reversal_long":    ("🔄", "反转长"),
+    "crypto_reversal_short":   ("🔄", "反转短"),
+    "crypto_overbought_long":  ("📉", "做空长"),
+    "crypto_overbought_short": ("📉", "做空短"),
     "crypto_generic":          ("⚙️", "通用"),
 }
 
@@ -485,8 +485,8 @@ def render_warnings_markdown(warnings: list[str], errors: list[str]) -> list[str
 
 # ── Telegram 安全截断 ─────────────────────────────────────
 
-# Telegram sendMessage 上限 4096 字符，预留 500 给 agent 可能添加的前缀/后缀
-TELEGRAM_SAFE_LIMIT = 3500
+# Telegram sendMessage 上限 4096 字符，预留 900 给 agent 可能添加的前缀/后缀和 markdown 渲染膨胀
+TELEGRAM_SAFE_LIMIT = 3000
 
 
 def truncate_for_telegram(text: str, limit: int = TELEGRAM_SAFE_LIMIT) -> str:

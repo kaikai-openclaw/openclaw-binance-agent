@@ -1124,10 +1124,35 @@ class Skill4Execute(BaseSkill):
                 f"algoId={result.order_id}"
             )
         except Exception as exc:
-            log.warning(
-                f"[{self.name}] {symbol} 服务端移动止损单挂载失败: {exc}，"
-                f"将依赖本地轮询兜底"
-            )
+            # 激活价可能已被市场价穿过（-2021），降级为不带激活价重试
+            if normalized_activation is not None:
+                log.warning(
+                    f"[{self.name}] {symbol} 带激活价挂载失败: {exc}，"
+                    f"降级为不带激活价重试（立即追踪）"
+                )
+                try:
+                    result = self._binance_client.place_trailing_stop_market_order(
+                        symbol=symbol,
+                        side=close_side,
+                        quantity=quantity,
+                        callback_rate=callback_rate,
+                        activation_price=None,
+                        close_position=True,
+                    )
+                    log.info(
+                        f"[{self.name}] {symbol} 服务端移动止损单已挂载（无激活价）: "
+                        f"callbackRate={callback_rate}%, algoId={result.order_id}"
+                    )
+                except Exception as retry_exc:
+                    log.warning(
+                        f"[{self.name}] {symbol} 移动止损单重试仍失败: {retry_exc}，"
+                        f"将依赖本地轮询兜底"
+                    )
+            else:
+                log.warning(
+                    f"[{self.name}] {symbol} 服务端移动止损单挂载失败: {exc}，"
+                    f"将依赖本地轮询兜底"
+                )
 
     def _protect_existing_positions(self, account: AccountState) -> None:
         """

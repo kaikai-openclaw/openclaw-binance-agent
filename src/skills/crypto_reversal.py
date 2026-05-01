@@ -170,7 +170,7 @@ LT_W_KDJ_CROSS = 8         # KDJ 低位金叉
 LT_W_SHADOW = 7            # 长下影线
 
 DEFAULT_MIN_QUOTE_VOLUME = 10_000_000
-DEFAULT_MIN_REVERSAL_SCORE = 40
+DEFAULT_MIN_REVERSAL_SCORE = 55
 DEFAULT_MAX_CANDIDATES = 20
 
 
@@ -377,6 +377,11 @@ class _CryptoReversalBase(BaseSkill):
                 )
 
                 if result["reversal_score"] < min_score and not target_symbols:
+                    continue
+
+                # 1h 模式硬性门槛：必须有放量信号，否则跳过
+                # （1h 级别弱信号太容易凑分，放量是反转的核心确认）
+                if interval == "1h" and result.get("volume_surge_ratio", 0) < vol_thresh:
                     continue
 
                 returns_map[symbol] = calc_returns(closes)

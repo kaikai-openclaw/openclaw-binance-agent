@@ -257,9 +257,14 @@ def detect_wick_in_recent(
     lookback: int = 3,
 ) -> Optional[Dict[str, Any]]:
     """
-    在最近 N 根 K 线中检测最强的插针形态。
+    在最近 N 根 K 线中检测最强的插针形态，并验证插针后价格确认。
 
-    返回最强插针（shadow_ratio 最大）的信息，或 None。
+    插针后确认规则：
+      - 下插针（做多）：插针之后的 K 线收盘价必须 ≥ 插针 K 线收盘价（价格企稳或反弹）
+      - 上插针（做空）：插针之后的 K 线收盘价必须 ≤ 插针 K 线收盘价
+      - 最后一根 K 线的插针不要求确认（刚发生，还没有后续 K 线）
+
+    返回最强的已确认插针，或 None。
     """
     best: Optional[Dict[str, Any]] = None
     n = len(closes)
@@ -269,6 +274,18 @@ def detect_wick_in_recent(
         wick = detect_wick(opens[i], highs[i], lows[i], closes[i])
         if wick is None:
             continue
+
+        # 插针后价格确认（最后一根不要求，因为还没有后续 K 线）
+        if i < n - 1:
+            wick_close = closes[i]
+            latest_close = closes[-1]
+            if wick["direction"] == "long" and latest_close < wick_close * 0.995:
+                # 插针后价格继续下跌，不是有效插针
+                continue
+            if wick["direction"] == "short" and latest_close > wick_close * 1.005:
+                # 插针后价格继续上涨，不是有效插针
+                continue
+
         if best is None or wick["shadow_ratio"] > best["shadow_ratio"]:
             best = wick
             best["candle_index"] = i - n  # 负索引，-1 = 最后一根

@@ -1298,9 +1298,9 @@ class Skill4Execute(BaseSkill):
             has_tp = valid_tp_count > 0
             if protection_order_count > 0:
                 log.warning(
-                    f"[{self.name}] {symbol} 已有保护单触发价不匹配，撤销后重挂"
+                    f"[{self.name}] {symbol} 已有 SL/TP 触发价不匹配，撤销 SL/TP 后重挂（保留 Trailing Stop）"
                 )
-                self._cancel_algo_orders_safe(symbol)
+                self._cancel_sl_tp_orders_only(symbol, close_side, algo_orders)
                 has_sl = False
                 has_tp = False
 
@@ -1528,11 +1528,12 @@ class Skill4Execute(BaseSkill):
         return count
 
     def _protection_algo_order_count(self, orders: list, side: str) -> int:
+        """统计 SL + TP 保护单数量（不含 Trailing Stop，它是额外保护层）。"""
         count = 0
         for order in orders:
             if (
                 str(order.get("side", "")).upper() == side
-                and self._looks_like_protection_algo_order(order)
+                and self._looks_like_sl_tp_order(order)
             ):
                 count += 1
         return count
@@ -1573,6 +1574,32 @@ class Skill4Execute(BaseSkill):
                 or order.get("stopPrice")
                 or order.get("callbackRate")  # TRAILING_STOP_MARKET 标识字段
             )
+        )
+
+    @staticmethod
+    def _looks_like_sl_tp_order(order: dict) -> bool:
+        """判断是否为 SL 或 TP 条件单（不含 Trailing Stop）。
+
+        用于 _protection_algo_order_count，避免 Trailing Stop 干扰
+        SL/TP 完整性判断，防止"SL+TP+Trail=3 != 2"触发误撤。
+        """
+        sl_tp_types = {"STOP_MARKET", "TAKE_PROFIT_MARKET"}
+        raw_type = (
+            order.get("type")
+            or order.get("origType")
+            or order.get("orderType")
+        )
+        if raw_type:
+            return str(raw_type).upper() in sl_tp_types
+
+        # Binance Algo Service 可能不返回明确 type，但 Trailing Stop
+        # 会有 callbackRate 字段，排除它
+        if order.get("callbackRate"):
+            return False
+
+        return (
+            str(order.get("algoType", "")).upper() == "CONDITIONAL"
+            and bool(order.get("triggerPrice") or order.get("stopPrice"))
         )
 
     @staticmethod
@@ -1756,6 +1783,34 @@ class Skill4Execute(BaseSkill):
             log.info(f"[{self.name}] {symbol} 已清理 Algo 条件单")
         except Exception as exc:
             log.warning(f"[{self.name}] {symbol} 清理 Algo 条件单失败: {exc}")
+
+    def _cancel_sl_tp_orders_only(
+        self, symbol: str, close_side: str, algo_orders: list,
+    ) -> None:
+        """只撤销 SL/TP 条件单，保留 Trailing Stop。
+
+        用于 _protect_existing_positions 的"触发价不匹配 → 撤销重挂"场景，
+        避免把开仓时挂的 Trailing Stop 一起撤掉。
+        """
+        for order in algo_orders:
+            if str(order.get("side", "")).upper() != close_side.upper():
+                continue
+            if not self._looks_like_sl_tp_order(order):
+                continue
+            algo_id = order.get("algoId", "")
+            if algo_id:
+                try:
+                    self._binance_client.cancel_algo_order(
+                        symbol=symbol, algo_id=int(algo_id),
+                    )
+                    log.info(
+                        f"[{self.name}] {symbol} 已撤销 SL/TP 条件单 algoId={algo_id}"
+                    )
+                except Exception as exc:
+                    log.warning(
+                        f"[{self.name}] {symbol} 撤销 SL/TP 条件单失败 "
+                        f"algoId={algo_id}: {exc}"
+                    )
 
     def _cancel_entry_order(self, symbol: str) -> None:
         """在入场未成交超时场景主动撤销挂单。"""

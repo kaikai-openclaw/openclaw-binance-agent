@@ -1082,18 +1082,21 @@ class TestEmptyPlans:
                 "side": "SELL",
                 "triggerPrice": "74447.5",
                 "quantity": "0.001",
+                "algoId": "301",
             },
             {
                 "algoType": "CONDITIONAL",
                 "side": "SELL",
                 "triggerPrice": "74447.5",
                 "quantity": "0.001",
+                "algoId": "302",
             },
             {
                 "algoType": "CONDITIONAL",
                 "side": "SELL",
                 "triggerPrice": "81355.0",
                 "quantity": "0.001",
+                "algoId": "303",
             },
         ]
         upstream = _make_upstream_data([])
@@ -1107,7 +1110,8 @@ class TestEmptyPlans:
         )
         skill.run({"input_state_id": state_id})
 
-        mock_binance.cancel_all_algo_orders.assert_called_with(symbol="BTCUSDT")
+        # 重复 SL 条件单 → 逐个撤销 SL/TP 后重挂（保留 Trailing Stop）
+        assert mock_binance.cancel_algo_order.call_count == 3
         mock_binance.place_stop_market_order.assert_called_once_with(
             symbol="BTCUSDT",
             side="SELL",
@@ -1142,11 +1146,12 @@ class TestEmptyPlans:
             mark_price=76500.0,
         )
         mock_binance.get_open_algo_orders.return_value = [
-            {"type": "STOP_MARKET", "side": "SELL", "triggerPrice": "70000"},
+            {"type": "STOP_MARKET", "side": "SELL", "triggerPrice": "70000", "algoId": "111"},
             {
                 "type": "TAKE_PROFIT_MARKET",
                 "side": "SELL",
                 "triggerPrice": "90000",
+                "algoId": "222",
             },
         ]
         upstream = _make_upstream_data([])
@@ -1160,7 +1165,8 @@ class TestEmptyPlans:
         )
         skill.run({"input_state_id": state_id})
 
-        mock_binance.cancel_all_algo_orders.assert_called_with(symbol="BTCUSDT")
+        # SL/TP 触发价不匹配时，逐个撤销 SL/TP（保留 Trailing Stop）
+        assert mock_binance.cancel_algo_order.call_count == 2
         mock_binance.place_stop_market_order.assert_called_once_with(
             symbol="BTCUSDT",
             side="SELL",

@@ -1400,6 +1400,9 @@ class Skill4Execute(BaseSkill):
         非阻塞生产路径下，止损/止盈由 Binance 服务端触发；另一侧条件单
         可能在本地进程未监控时残留。每轮执行开始时按当前持仓扫描一次，
         对无持仓币种的保护单整组撤销，避免后续触发反向开仓。
+
+        安全措施：跳过创建时间不足 120 秒的条件单，避免清理掉另一个
+        并发 cron 刚刚挂上的保护单（入场单可能还未成交，持仓暂时为 0）。
         """
         if self._risk_controller.is_paper_mode() or account.is_paper_mode:
             return
@@ -1411,13 +1414,31 @@ class Skill4Execute(BaseSkill):
             log.warning(f"[{self.name}] 查询全量 Algo 条件单失败: {exc}")
             return
 
+        now_ms = int(time.time() * 1000)
+        grace_period_ms = 120_000  # 2 分钟宽限期
+
         orphan_symbols: set[str] = set()
         for order in algo_orders:
             symbol = str(order.get("symbol", ""))
             if not symbol or symbol in active_symbols:
                 continue
-            if self._looks_like_protection_algo_order(order):
-                orphan_symbols.add(symbol)
+            if not self._looks_like_protection_algo_order(order):
+                continue
+
+            # 跳过刚创建的条件单，避免清理并发 cron 的新保护单
+            book_time = order.get("bookTime") or order.get("createTime") or 0
+            try:
+                book_time = int(book_time)
+            except (TypeError, ValueError):
+                book_time = 0
+            if book_time > 0 and (now_ms - book_time) < grace_period_ms:
+                log.debug(
+                    f"[{self.name}] {symbol} 保护条件单创建不足 {grace_period_ms // 1000}s，"
+                    f"跳过孤儿清理"
+                )
+                continue
+
+            orphan_symbols.add(symbol)
 
         for symbol in sorted(orphan_symbols):
             log.warning(f"[{self.name}] {symbol} 无持仓但存在保护条件单，清理残留")

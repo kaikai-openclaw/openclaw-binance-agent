@@ -531,42 +531,40 @@ class BinanceFapiClient:
         价格在激活价触发后，跟踪最优价格，当回调幅度达到 callback_rate 时
         以市价平仓，锁住已实现盈利。
 
-        注意：条件单已迁移至 Algo Service，使用 POST /fapi/v1/algoOrder 端点。
+        注意：使用普通订单端点 POST /fapi/v1/order（而非 Algo Service），
+        因为 Algo Service 的 TRAILING_STOP_MARKET 不支持 closePosition
+        也不支持 reduceOnly，触发后会开反向新仓而非平仓。
+        普通端点支持 reduceOnly=true，确保只减仓不开新仓。
 
         参数:
             symbol: 交易对符号（如 \"BTCUSDT\"）
             side: 买卖方向（做多持仓平仓用 \"SELL\"，做空持仓平仓用 \"BUY\"）
-            quantity: 下单数量（close_position=True 时忽略）
+            quantity: 下单数量
             callback_rate: 回调比例（%），取值范围 0.1 ~ 5.0
             activation_price: 激活价格（可选），达到此价格才开始追踪；
                               不传则立即从当前价格开始追踪
-            close_position: 是否全仓平仓（True 时忽略 quantity）
+            close_position: 是否仅减仓（True 时设置 reduceOnly=true）
         """
         params: dict = {
-            "algoType": "CONDITIONAL",
             "symbol": symbol,
             "side": side,
             "type": "TRAILING_STOP_MARKET",
             "callbackRate": format_decimal_param(callback_rate),
+            "quantity": format_decimal_param(quantity),
         }
         if activation_price is not None and activation_price > 0:
             params["activationPrice"] = format_decimal_param(activation_price)
         if close_position:
-            # TRAILING_STOP_MARKET 被币安拒绝使用 closePosition=true
-            # 必须使用 reduceOnly=true 并显式提供数量
             params["reduceOnly"] = "true"
-            params["quantity"] = format_decimal_param(quantity)
-        else:
-            params["quantity"] = format_decimal_param(quantity)
 
-        data = self._request_with_retry("POST", "/fapi/v1/algoOrder", params)
+        data = self._request_with_retry("POST", "/fapi/v1/order", params)
         return OrderResult(
-            order_id=str(data.get("algoId", "")),
+            order_id=str(data.get("orderId", "")),
             symbol=data.get("symbol", symbol),
             side=data.get("side", side),
-            price=float(data.get("activationPrice", activation_price or 0)),
-            quantity=float(data.get("quantity", quantity)),
-            status=data.get("algoStatus", ""),
+            price=float(data.get("activatePrice", activation_price or 0)),
+            quantity=float(data.get("origQty", quantity)),
+            status=data.get("status", ""),
             raw=data,
         )
 

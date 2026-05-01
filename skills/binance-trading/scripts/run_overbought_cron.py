@@ -271,6 +271,8 @@ def run_report(args: argparse.Namespace) -> dict:
         rating_threshold, risk_ratio = memory_store.get_evolved_params(
             strategy_tag=strategy_tag,
         )
+        # 做空风险不对称（亏损理论上无限），使用更保守的仓位
+        risk_ratio = min(risk_ratio, 0.015)
         s1_data: dict = {"candidates": [], "filter_summary": {}}
         s2_data: dict = {"ratings": [], "filtered_count": 0, "failed_symbols": []}
         s3_data: dict = {"trade_plans": [], "pipeline_status": "no_opportunity"}

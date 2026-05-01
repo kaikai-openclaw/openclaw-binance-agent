@@ -124,24 +124,24 @@ ST_W_SHADOW = 7            # 长下影线
 H1_INTERVAL = "1h"
 H1_MIN_KLINES = 80
 H1_BOTTOM_LOOKBACK = 72                 # 近期最低点回看 72 根 1h = 3 天
-H1_PRICE_STABLE_WINDOW = 8             # 企稳观察窗口 8 根 1h = 8 小时
+H1_PRICE_STABLE_WINDOW = 12            # 企稳观察窗口 12 根 1h = 12 小时（从 8 收紧）
 H1_DROP_LOOKBACK = 120                  # 前期跌幅回看 120 根 1h = 5 天
-H1_VOLUME_SURGE_THRESHOLD = 2.5         # 放量倍数阈值（1h 噪音多，要求更高）
-H1_VOLUME_SURGE_STRONG = 4.0            # 强放量
+H1_VOLUME_SURGE_THRESHOLD = 3.5         # 放量倍数阈值（从 2.5 收紧，过滤 1h 噪音）
+H1_VOLUME_SURGE_STRONG = 5.0            # 强放量（从 4.0 收紧）
 H1_DIST_BOTTOM_IDEAL_MIN = 2.0          # 距底部理想距离下限（%）
-H1_DIST_BOTTOM_IDEAL_MAX = 8.0          # 距底部理想距离上限（%，1h 波动小）
-H1_SHADOW_RATIO_THRESHOLD = 2.0         # 下影线长度 / 实体长度 ≥ 2 倍
+H1_DIST_BOTTOM_IDEAL_MAX = 6.0          # 距底部理想距离上限（%，从 8 收紧，避免追高）
+H1_SHADOW_RATIO_THRESHOLD = 2.5         # 下影线长度 / 实体长度 ≥ 2.5 倍（从 2.0 收紧）
 
-# 超短期评分权重 — 侧重放量和资金费率
-H1_W_VOLUME_SURGE = 20     # 底部放量（核心信号）
-H1_W_PRICE_STABLE = 12     # 价格企稳
-H1_W_MA_TURN = 10          # 均线拐头
-H1_W_FUNDING = 18          # 资金费率回归（1h 级别更敏感）
-H1_W_MACD_REVERSAL = 5     # MACD 反转信号（1h 可靠性低）
-H1_W_DIST_BOTTOM = 10      # 距底部距离
-H1_W_PRIOR_DROP = 8        # 前期跌幅深度
-H1_W_KDJ_CROSS = 10        # KDJ 低位金叉（1h 级别金叉更频繁但更快）
-H1_W_SHADOW = 7            # 长下影线
+# 超短期评分权重 — 提高核心信号权重，降低弱信号权重
+H1_W_VOLUME_SURGE = 25     # 底部放量（核心，从 20 提高）
+H1_W_PRICE_STABLE = 15     # 价格企稳（从 12 提高，企稳是反转确认的关键）
+H1_W_MA_TURN = 12          # 均线拐头（从 10 提高）
+H1_W_FUNDING = 15          # 资金费率回归（从 18 降低，1h 费率信号噪音大）
+H1_W_MACD_REVERSAL = 3     # MACD 反转信号（从 5 降低，1h 可靠性很低）
+H1_W_DIST_BOTTOM = 8       # 距底部距离（从 10 降低）
+H1_W_PRIOR_DROP = 10       # 前期跌幅深度（从 8 提高，要求更深的跌幅才算反转）
+H1_W_KDJ_CROSS = 7         # KDJ 低位金叉（从 10 降低，1h 金叉太频繁）
+H1_W_SHADOW = 5            # 长下影线（从 7 降低）
 
 # ══════════════════════════════════════════════════════════
 # 长期反转参数（1d K 线）
@@ -170,7 +170,7 @@ LT_W_KDJ_CROSS = 8         # KDJ 低位金叉
 LT_W_SHADOW = 7            # 长下影线
 
 DEFAULT_MIN_QUOTE_VOLUME = 10_000_000
-DEFAULT_MIN_REVERSAL_SCORE = 30
+DEFAULT_MIN_REVERSAL_SCORE = 40
 DEFAULT_MAX_CANDIDATES = 20
 
 

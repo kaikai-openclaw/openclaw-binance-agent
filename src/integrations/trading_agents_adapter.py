@@ -135,19 +135,11 @@ def _call_fast_llm(prompt: str, model: Optional[str] = None) -> str:
         from google.genai import Client
         from google.genai import types as genai_types
         client = Client(api_key=google_key)
-        # 加 config 防止 thinking 占满输出、提升 JSON 稳定性：
-        #   - max_output_tokens=2048：与 OpenAI 兼容分支对称，避免截断
-        #   - temperature=0.3：降低随机性，让 JSON 格式更稳定
-        # 注意 thinking_config 只在部分 gemini 模型支持，gemini-3.1-pro-preview
-        # 的 thinking summaries 不会出现在 response.text，但保守起见不额外配置，
-        # 依赖 _extract_json 的 <think> 清洗作为防线。
+        # Google SDK 不接受 "google/" 前缀，直接剥离
+        sdk_model = model.split("/", 1)[1] if model.startswith("google/") else model
         response = client.models.generate_content(
-            model=model,
+            model=sdk_model,
             contents=[{"role": "user", "parts": [{"text": prompt}]}],
-            config=genai_types.GenerateContentConfig(
-                max_output_tokens=2048,
-                temperature=0.3,
-            ),
         )
         return response.text
 

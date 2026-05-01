@@ -320,7 +320,8 @@ class Skill3Strategy(BaseSkill):
             return None
         entry_price, entry_upper, entry_lower, price_source = entry_range
 
-        if self._should_skip_for_excessive_volatility(atr_pct, symbol):
+        # 插针策略有 wick_tip_price 作为天然止损位，不依赖 ATR，跳过波动率检查
+        if not wick_tip_price and self._should_skip_for_excessive_volatility(atr_pct, symbol):
             return None
 
         # 计算止损和止盈价格（优先级：wick_tip > ATR 动态 > 固定百分比）

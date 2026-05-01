@@ -364,13 +364,35 @@ def render_positions_markdown(
     positions: list[dict],
     source_map: Optional[dict] = None,
     max_detail: int = 5,
+    compact: bool = False,
 ) -> list[str]:
     """渲染持仓明细 Markdown 段落。
 
-    超过 max_detail 笔时，只展示前 max_detail 笔详情 + 其余摘要，
-    防止 Telegram 4096 字符限制导致发送失败。
+    compact=True 时每行一个持仓，适合 Telegram 投递。
+    超过 max_detail 笔时，只展示前 max_detail 笔详情 + 其余摘要。
     """
     source_map = source_map or {}
+    if compact:
+        lines = ["持仓:"]
+        if not positions:
+            lines.append("- 无")
+            return lines
+        shown = positions[:max_detail]
+        rest = positions[max_detail:]
+        for pos in shown:
+            tag = tag_symbol_or_default(pos["symbol"], source_map)
+            pnl = pos["unrealized_pnl"]
+            roi = pos["roi_on_margin_pct"]
+            lines.append(
+                f"{pos['symbol']} {pos['direction']}({tag}) "
+                f"{pnl:+.2f}({roi:+.1f}%)"
+            )
+        if rest:
+            rest_pnl = sum(p["unrealized_pnl"] for p in rest)
+            symbols = ", ".join(p["symbol"] for p in rest)
+            lines.append(f"其余{len(rest)}笔 {rest_pnl:+.2f}: {symbols}")
+        return lines
+
     lines = ["当前持仓:"]
     if not positions:
         lines.append("- 当前无持仓")
@@ -475,22 +497,25 @@ def render_account_markdown(account: dict, risk: Optional[dict] = None) -> list[
     return lines
 
 
-def render_warnings_markdown(warnings: list[str], errors: list[str]) -> list[str]:
+def render_warnings_markdown(warnings: list[str], errors: list[str], max_items: int = 3) -> list[str]:
     """渲染异常与注意事项 Markdown 段落。"""
     if not warnings and not errors:
         return []
     lines = ["异常与注意事项:"]
-    for w in warnings:
+    for w in warnings[:max_items]:
         lines.append(f"- WARNING: {w}")
-    for e in errors:
+    for e in errors[:max_items]:
         lines.append(f"- ERROR: {e}")
+    rest = len(warnings) + len(errors) - max_items * 2
+    if rest > 0:
+        lines.append(f"- 其余 {rest} 项异常已省略")
     return lines
 
 
 # ── Telegram 安全截断 ─────────────────────────────────────
 
 # Telegram sendMessage 上限 4096 字符，预留 900 给 agent 可能添加的前缀/后缀和 markdown 渲染膨胀
-TELEGRAM_SAFE_LIMIT = 3000
+TELEGRAM_SAFE_LIMIT = 2500
 
 
 def truncate_for_telegram(text: str, limit: int = TELEGRAM_SAFE_LIMIT) -> str:

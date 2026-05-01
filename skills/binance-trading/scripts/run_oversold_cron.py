@@ -158,16 +158,15 @@ def render_markdown(report: dict) -> str:
         f"- 最终输出: {scan['filter_summary'].get('output_count', 0)}",
     ]
 
-    for item in scan["candidates"][:10]:
+    for item in scan["candidates"][:3]:
         lines.append(
-            "- {symbol}: 超跌评分 {score}/100, 24h {change:+.2f}%, "
-            "RSI {rsi}, 费率 {funding}, 信号 {signals}".format(
+            "- {symbol}: {score}/100, 24h {change:+.2f}%, RSI {rsi}, 费率 {funding}, {sig}".format(
                 symbol=item.get("symbol", ""),
                 score=item.get("oversold_score", 0),
                 change=safe_float(item.get("price_change_pct")),
                 rsi=_fmt_optional(item.get("rsi")),
                 funding=_fmt_optional(item.get("funding_rate"), suffix="%"),
-                signals=item.get("signal_details", ""),
+                sig=item.get("signal_details", "")[:50],
             )
         )
 
@@ -179,7 +178,7 @@ def render_markdown(report: dict) -> str:
         f"- 评级门槛: {analysis['rating_threshold']}",
     ])
     display_ratings = analysis.get("all_ratings") or analysis["ratings"]
-    for rating in display_ratings[:10]:
+    for rating in display_ratings[:3]:
         passed = "达标" if rating.get("rating_score", 0) >= analysis["rating_threshold"] else "未达标"
         lines.append(
             f"- {rating.get('symbol')}: {rating.get('rating_score')}/10, "
@@ -203,9 +202,9 @@ def render_markdown(report: dict) -> str:
         )
 
     lines.append("")
-    lines.extend(render_positions_markdown(report["positions"]))
+    lines.extend(render_positions_markdown(report["positions"], max_detail=3, compact=True))
     lines.append("")
-    lines.extend(render_protection_markdown(report["protection_orders"]))
+    lines.extend(render_protection_markdown(report["protection_orders"], max_detail=3))
     lines.append("")
     lines.extend(render_account_markdown(account, risk))
     warn_lines = render_warnings_markdown(report.get("warnings", []), report.get("errors", []))

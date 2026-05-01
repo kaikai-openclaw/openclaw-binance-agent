@@ -157,13 +157,11 @@ def render_markdown(report: dict) -> str:
         f"- 最终输出: {scan['filter_summary'].get('output_count', 0)}",
     ]
 
-    for item in scan["candidates"][:10]:
+    for item in scan["candidates"][:3]:
         direction_emoji = "📈" if item.get("direction") == "long" else "📉"
         lines.append(
-            "- {emoji} {symbol}: {wick_type} 评分 {score}/100, "
-            "影线比率 {ratio:.1f}x, 深度 {depth:.1f}%, "
-            "量比 {vol}, 费率 {funding}, "
-            "信号 {signals}".format(
+            "- {emoji} {symbol}: {wick_type} {score}/100, "
+            "影线{ratio:.1f}x, 深{depth:.1f}%, 量{vol}, 费{funding}".format(
                 emoji=direction_emoji,
                 symbol=item.get("symbol", ""),
                 wick_type="下插针" if item.get("wick_type") == "lower_wick" else "上插针",
@@ -172,7 +170,6 @@ def render_markdown(report: dict) -> str:
                 depth=safe_float(item.get("wick_depth_pct")),
                 vol=_fmt_optional(item.get("volume_surge"), suffix="x"),
                 funding=_fmt_optional(item.get("funding_rate"), suffix="%"),
-                signals=item.get("signal_details", ""),
             )
         )
 
@@ -183,7 +180,7 @@ def render_markdown(report: dict) -> str:
         "自动评级（跳过 TradingAgents）:",
         f"- 评级数量: {len(ratings)}",
     ])
-    for rating in ratings[:10]:
+    for rating in ratings[:3]:
         lines.append(
             f"- {rating.get('symbol')}: {rating.get('rating_score')}/10, "
             f"信号 {rating.get('signal')}, 置信度 {rating.get('confidence', 0):.0f}%"
@@ -205,9 +202,9 @@ def render_markdown(report: dict) -> str:
         )
 
     lines.append("")
-    lines.extend(render_positions_markdown(report["positions"]))
+    lines.extend(render_positions_markdown(report["positions"], max_detail=3, compact=True))
     lines.append("")
-    lines.extend(render_protection_markdown(report["protection_orders"]))
+    lines.extend(render_protection_markdown(report["protection_orders"], max_detail=3))
     lines.append("")
     lines.extend(render_account_markdown(account, risk))
     warn_lines = render_warnings_markdown(report.get("warnings", []), report.get("errors", []))

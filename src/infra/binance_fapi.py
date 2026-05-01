@@ -531,21 +531,21 @@ class BinanceFapiClient:
         价格在激活价触发后，跟踪最优价格，当回调幅度达到 callback_rate 时
         以市价平仓，锁住已实现盈利。
 
-        注意：使用普通订单端点 POST /fapi/v1/order（而非 Algo Service），
-        因为 Algo Service 的 TRAILING_STOP_MARKET 不支持 closePosition
-        也不支持 reduceOnly，触发后会开反向新仓而非平仓。
-        普通端点支持 reduceOnly=true，确保只减仓不开新仓。
+        注意：Binance 强制 TRAILING_STOP_MARKET 走 Algo Service 端点，
+        该端点不支持 closePosition=true 也不支持 reduceOnly=true。
+        为防止触发后开反向新仓，必须确保 quantity 精确等于当前持仓量。
 
         参数:
             symbol: 交易对符号（如 \"BTCUSDT\"）
             side: 买卖方向（做多持仓平仓用 \"SELL\"，做空持仓平仓用 \"BUY\"）
-            quantity: 下单数量
+            quantity: 下单数量（必须精确等于持仓量，防止反向开仓）
             callback_rate: 回调比例（%），取值范围 0.1 ~ 5.0
             activation_price: 激活价格（可选），达到此价格才开始追踪；
                               不传则立即从当前价格开始追踪
-            close_position: 是否仅减仓（True 时设置 reduceOnly=true）
+            close_position: 未使用（Algo Service 不支持），保留参数兼容性
         """
         params: dict = {
+            "algoType": "CONDITIONAL",
             "symbol": symbol,
             "side": side,
             "type": "TRAILING_STOP_MARKET",
@@ -554,17 +554,15 @@ class BinanceFapiClient:
         }
         if activation_price is not None and activation_price > 0:
             params["activationPrice"] = format_decimal_param(activation_price)
-        if close_position:
-            params["reduceOnly"] = "true"
 
-        data = self._request_with_retry("POST", "/fapi/v1/order", params)
+        data = self._request_with_retry("POST", "/fapi/v1/algoOrder", params)
         return OrderResult(
-            order_id=str(data.get("orderId", "")),
+            order_id=str(data.get("algoId", "")),
             symbol=data.get("symbol", symbol),
             side=data.get("side", side),
-            price=float(data.get("activatePrice", activation_price or 0)),
-            quantity=float(data.get("origQty", quantity)),
-            status=data.get("status", ""),
+            price=float(data.get("activationPrice", activation_price or 0)),
+            quantity=float(data.get("quantity", quantity)),
+            status=data.get("algoStatus", ""),
             raw=data,
         )
 

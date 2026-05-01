@@ -1107,14 +1107,11 @@ class Skill4Execute(BaseSkill):
                 f"将依赖本地轮询兜底"
             )
 
-        # 挂移动止损单 (TRAILING_STOP_MARKET)
-        if trailing_stop:
-            self._place_server_trailing_stop(
-                symbol=symbol,
-                close_side=close_side,
-                quantity=quantity,
-                trailing_stop=trailing_stop,
-            )
+        # 移动止损单 (TRAILING_STOP_MARKET) 已禁用
+        # Binance Algo Service 不支持 reduceOnly/closePosition，
+        # 当 SL/TP 触发平仓后，残留的 TRAILING_STOP_MARKET 会开反向新仓。
+        # 非阻塞模式下无法实时撤销残留单，因此禁用服务端移动止损。
+        # 盈利保护完全依赖 TAKE_PROFIT_MARKET。
 
         return success
 
@@ -1322,13 +1319,10 @@ class Skill4Execute(BaseSkill):
         algo_orders: list,
     ) -> None:
         """
-        校验已有 TRAILING_STOP_MARKET 的 quantity 是否与当前持仓量一致。
+        清理残留的 TRAILING_STOP_MARKET 条件单。
 
-        Binance Algo Service 的 TRAILING_STOP_MARKET 不支持 reduceOnly，
-        如果挂单后持仓量发生变化（部分平仓、加仓），触发时的 quantity
-        可能与实际持仓不匹配，导致开反向仓或平仓不完整。
-
-        每轮 cron 执行时检查并修正偏差：撤销旧单，用当前持仓量重挂。
+        服务端 TRAILING_STOP_MARKET 已禁用（不支持 reduceOnly，会开反向仓）。
+        此方法仅撤销历史残留的 trailing stop 单，不再补挂或重挂。
         """
         trailing_orders = [
             o for o in algo_orders
@@ -1341,48 +1335,12 @@ class Skill4Execute(BaseSkill):
             )
         ]
 
-        if not trailing_orders:
-            # 没有移动止损单，补挂一张
-            sl_dist_pct = EXISTING_POSITION_STOP_LOSS_PCT
-            trail_pct = round(sl_dist_pct * 0.5 * 100, 1)
-            if trail_pct > 0:
-                log.info(
-                    f"[{self.name}] {symbol} 补挂移动止损: "
-                    f"qty={quantity}, trail_pct={trail_pct}%"
-                )
-                self._place_server_trailing_stop(
-                    symbol=symbol,
-                    close_side=close_side,
-                    quantity=quantity,
-                    trailing_stop={"trail_pct": trail_pct, "activation_price": 0},
-                )
-            return
-
-        # 检查 quantity 是否匹配
-        for order in trailing_orders:
-            order_qty = abs(float(order.get("quantity", 0) or 0))
-            if order_qty > 0 and abs(order_qty - quantity) / quantity > 0.01:
-                # 偏差超过 1%，撤销重挂
-                algo_id = order.get("algoId", "")
-                callback_rate = float(order.get("callbackRate", 0) or 0)
-                if callback_rate <= 0:
-                    callback_rate = 1.5  # 默认回调比例
-                log.warning(
-                    f"[{self.name}] {symbol} 移动止损 quantity 偏差: "
-                    f"挂单={order_qty}, 实际持仓={quantity}, "
-                    f"撤销 algoId={algo_id} 并重挂"
-                )
-                self._cancel_algo_orders_for_trailing(symbol, trailing_orders)
-                self._place_server_trailing_stop(
-                    symbol=symbol,
-                    close_side=close_side,
-                    quantity=quantity,
-                    trailing_stop={
-                        "trail_pct": callback_rate,
-                        "activation_price": 0,
-                    },
-                )
-                return  # 只需处理一次
+        if trailing_orders:
+            log.warning(
+                f"[{self.name}] {symbol} 发现 {len(trailing_orders)} 张残留"
+                f"移动止损单（已禁用），撤销以防反向开仓"
+            )
+            self._cancel_algo_orders_for_trailing(symbol, trailing_orders)
 
     def _cancel_algo_orders_for_trailing(
         self, symbol: str, trailing_orders: list

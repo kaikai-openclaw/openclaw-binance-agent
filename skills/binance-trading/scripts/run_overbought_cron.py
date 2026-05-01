@@ -37,7 +37,7 @@ from src.infra.state_store import StateStore
 from src.infra.trade_sync import BinanceTradeSyncer
 from src.integrations.trading_agents_adapter import create_trading_agents_analyzer
 from src.models.types import AccountState
-from src.skills.crypto_overbought import LongTermOverboughtSkill, ShortTermOverboughtSkill
+from src.skills.crypto_overbought import LongTermOverboughtSkill, ShortTermOverboughtSkill, HourlyOverboughtSkill
 from src.skills.skill2_analyze import Skill2Analyze, TradingAgentsModule
 from src.skills.skill3_strategy import Skill3Strategy
 from src.skills.skill4_execute import Skill4Execute
@@ -158,7 +158,7 @@ def render_markdown(report: dict) -> str:
         f"- 最终输出: {scan['filter_summary'].get('output_count', 0)}",
     ]
 
-    for item in scan["candidates"][:10]:
+    for item in scan["candidates"][:5]:
         lines.append(
             "- {symbol}: 超买评分 {score}/100, 24h {change:+.2f}%, "
             "RSI {rsi}, 费率 {funding}, 信号 {signals}".format(
@@ -179,7 +179,7 @@ def render_markdown(report: dict) -> str:
         f"- 评级门槛: {analysis['rating_threshold']}",
     ])
     display_ratings = analysis.get("all_ratings") or analysis["ratings"]
-    for rating in display_ratings[:10]:
+    for rating in display_ratings[:5]:
         passed = "达标" if rating.get("rating_score", 0) >= analysis["rating_threshold"] else "未达标"
         lines.append(
             f"- {rating.get('symbol')}: {rating.get('rating_score')}/10, "
@@ -203,9 +203,9 @@ def render_markdown(report: dict) -> str:
         )
 
     lines.append("")
-    lines.extend(render_positions_markdown(report["positions"]))
+    lines.extend(render_positions_markdown(report["positions"], max_detail=3))
     lines.append("")
-    lines.extend(render_protection_markdown(report["protection_orders"]))
+    lines.extend(render_protection_markdown(report["protection_orders"], max_detail=5))
     lines.append("")
     lines.extend(render_account_markdown(account, risk))
     warn_lines = render_warnings_markdown(report.get("warnings", []), report.get("errors", []))
@@ -245,6 +245,11 @@ def run_report(args: argparse.Namespace) -> dict:
 
         if args.mode == "long":
             overbought_skill = LongTermOverboughtSkill(
+                state_store, load_schema("crypto_overbought_input.json"),
+                load_schema("crypto_overbought_output.json"), public_client
+            )
+        elif args.mode == "1h":
+            overbought_skill = HourlyOverboughtSkill(
                 state_store, load_schema("crypto_overbought_input.json"),
                 load_schema("crypto_overbought_output.json"), public_client
             )
@@ -323,10 +328,11 @@ def run_report(args: argparse.Namespace) -> dict:
                     risk_ratio=risk_ratio,
                     require_market_price=True,
                     # ── 超买做空策略参数 ──
-                    # 做空回落通常比反弹快，48h 持仓，盈亏比 2.3:1
-                    max_hold_hours=48.0,
-                    atr_tp_mult=3.5,
-                    trailing_stop_ratio=0.45,
+                    # 1h 模式：快速做空，12h 持仓
+                    # 4h/1d 模式：48h 持仓，盈亏比 2.3:1
+                    max_hold_hours=12.0 if args.mode == "1h" else 48.0,
+                    atr_tp_mult=2.5 if args.mode == "1h" else 3.5,
+                    trailing_stop_ratio=0.5 if args.mode == "1h" else 0.45,
                 )
                 s3_input_id = state_store.save("skill3_input", {"input_state_id": s2_id})
                 s3_id = skill3.execute(s3_input_id)
@@ -457,7 +463,7 @@ def run_report(args: argparse.Namespace) -> dict:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="超买交易定时任务固定报告")
-    parser.add_argument("--mode", choices=["short", "long"], default="short")
+    parser.add_argument("--mode", choices=["short", "long", "1h"], default="short")
     parser.add_argument("--min-score", type=int, default=25)
     parser.add_argument("--max-candidates", type=int, default=20)
     parser.add_argument("--symbols", type=str, default="")

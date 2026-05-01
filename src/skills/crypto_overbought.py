@@ -119,6 +119,31 @@ ST_W_SHADOW = 5          # 长上影线
 ST_W_SQUEEZE_RISK = -8   # 轧空风险扣分
 
 # ══════════════════════════════════════════════════════════
+# 超短期超买参数（1h K 线）
+# ══════════════════════════════════════════════════════════
+
+H1_INTERVAL = "1h"
+H1_MIN_KLINES = 60
+H1_RSI_THRESHOLD = 82.0          # 1h RSI > 82 = 极端超买（比 4h 更严格）
+H1_BIAS_THRESHOLD = 8.0          # 1h 乖离率 > +8%（1h 波动小，阈值收窄）
+H1_CONSECUTIVE_UP = 8            # 连续上涨 ≥ 8 根 1h（8 小时）
+H1_RALLY_PCT = 10.0              # 近 N 根累计涨幅 > +10%
+H1_RALLY_LOOKBACK = 24           # 回看 24 根 1h = 1 天
+H1_RISE_LOOKBACK = 72            # 距低点涨幅回看 72 根 1h = 3 天
+
+# 超短期评分权重 — 侧重即时超买信号和资金费率
+H1_W_RSI = 18            # RSI（1h 级别超买更敏感）
+H1_W_FUNDING = 20        # 资金费率（最强信号）
+H1_W_BIAS = 10           # 乖离率
+H1_W_VOL_DIV = 12        # 量价背离
+H1_W_BOLL = 8            # 布林带
+H1_W_RALLY = 8           # 连续暴涨
+H1_W_KDJ = 7             # KDJ
+H1_W_MACD_DIV = 4        # MACD 顶背离（1h 可靠性低）
+H1_W_SHADOW = 5          # 长上影线
+H1_W_SQUEEZE_RISK = -10  # 轧空风险扣分（1h 更容易被轧）
+
+# ══════════════════════════════════════════════════════════
 # 长期超买参数（1d K 线）
 # ══════════════════════════════════════════════════════════
 
@@ -404,6 +429,40 @@ class ShortTermOverboughtSkill(_CryptoOverboughtBase):
                 "kdj": ST_W_KDJ, "macd_div": ST_W_MACD_DIV,
                 "shadow": ST_W_SHADOW,
                 "squeeze_risk": ST_W_SQUEEZE_RISK,
+            },
+        )
+
+
+class HourlyOverboughtSkill(_CryptoOverboughtBase):
+    """超短期超买做空筛选（1h K 线）。
+
+    捕捉小时级别的 FOMO 见顶，适合快速做空（4h~24h 持仓）。
+    核心信号：1h RSI 极端超买 + 资金费率极端正值 + 量价背离。
+    比 4h 模式更敏感，轧空风险扣分更重。
+    """
+
+    def __init__(self, state_store, input_schema, output_schema, client) -> None:
+        super().__init__(state_store, input_schema, output_schema, client)
+        self.name = "crypto_overbought_1h"
+
+    def run(self, input_data: dict) -> dict:
+        return self._run_scan(
+            input_data,
+            interval=H1_INTERVAL,
+            min_klines=H1_MIN_KLINES,
+            rsi_thresh=H1_RSI_THRESHOLD,
+            bias_thresh=H1_BIAS_THRESHOLD,
+            consec_thresh=H1_CONSECUTIVE_UP,
+            rally_thresh=H1_RALLY_PCT,
+            rally_lookback=H1_RALLY_LOOKBACK,
+            rise_lookback=H1_RISE_LOOKBACK,
+            weights={
+                "rsi": H1_W_RSI, "funding": H1_W_FUNDING,
+                "bias": H1_W_BIAS, "vol_div": H1_W_VOL_DIV,
+                "boll": H1_W_BOLL, "rally": H1_W_RALLY,
+                "kdj": H1_W_KDJ, "macd_div": H1_W_MACD_DIV,
+                "shadow": H1_W_SHADOW,
+                "squeeze_risk": H1_W_SQUEEZE_RISK,
             },
         )
 

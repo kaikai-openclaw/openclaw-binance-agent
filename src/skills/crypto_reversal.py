@@ -118,6 +118,32 @@ ST_W_KDJ_CROSS = 8         # KDJ 低位金叉
 ST_W_SHADOW = 7            # 长下影线
 
 # ══════════════════════════════════════════════════════════
+# 超短期反转参数（1h K 线）
+# ══════════════════════════════════════════════════════════
+
+H1_INTERVAL = "1h"
+H1_MIN_KLINES = 80
+H1_BOTTOM_LOOKBACK = 72                 # 近期最低点回看 72 根 1h = 3 天
+H1_PRICE_STABLE_WINDOW = 8             # 企稳观察窗口 8 根 1h = 8 小时
+H1_DROP_LOOKBACK = 120                  # 前期跌幅回看 120 根 1h = 5 天
+H1_VOLUME_SURGE_THRESHOLD = 2.5         # 放量倍数阈值（1h 噪音多，要求更高）
+H1_VOLUME_SURGE_STRONG = 4.0            # 强放量
+H1_DIST_BOTTOM_IDEAL_MIN = 2.0          # 距底部理想距离下限（%）
+H1_DIST_BOTTOM_IDEAL_MAX = 8.0          # 距底部理想距离上限（%，1h 波动小）
+H1_SHADOW_RATIO_THRESHOLD = 2.0         # 下影线长度 / 实体长度 ≥ 2 倍
+
+# 超短期评分权重 — 侧重放量和资金费率
+H1_W_VOLUME_SURGE = 20     # 底部放量（核心信号）
+H1_W_PRICE_STABLE = 12     # 价格企稳
+H1_W_MA_TURN = 10          # 均线拐头
+H1_W_FUNDING = 18          # 资金费率回归（1h 级别更敏感）
+H1_W_MACD_REVERSAL = 5     # MACD 反转信号（1h 可靠性低）
+H1_W_DIST_BOTTOM = 10      # 距底部距离
+H1_W_PRIOR_DROP = 8        # 前期跌幅深度
+H1_W_KDJ_CROSS = 10        # KDJ 低位金叉（1h 级别金叉更频繁但更快）
+H1_W_SHADOW = 7            # 长下影线
+
+# ══════════════════════════════════════════════════════════
 # 长期反转参数（1d K 线）
 # ══════════════════════════════════════════════════════════
 
@@ -385,6 +411,49 @@ class ShortTermReversalSkill(_CryptoReversalBase):
                 "prior_drop": ST_W_PRIOR_DROP,
                 "kdj_cross": ST_W_KDJ_CROSS,
                 "shadow": ST_W_SHADOW,
+            },
+        )
+
+
+# ══════════════════════════════════════════════════════════
+# 超短期反转 Skill（1h）
+# ══════════════════════════════════════════════════════════
+
+class HourlyReversalSkill(_CryptoReversalBase):
+    """超短期底部放量反转筛选（1h K 线）。
+
+    捕捉小时级别底部放量后的快速反转，适合 4h~24h 持仓。
+    核心信号：底部放量 + 价格企稳 + KDJ 金叉 + 资金费率回归。
+    比 4h 模式更敏感，放量要求更高以过滤噪音。
+    """
+
+    def __init__(self, state_store, input_schema, output_schema, client) -> None:
+        super().__init__(state_store, input_schema, output_schema, client)
+        self.name = "crypto_reversal_1h"
+
+    def run(self, input_data: dict) -> dict:
+        return self._run_scan(
+            input_data,
+            interval=H1_INTERVAL,
+            min_klines=H1_MIN_KLINES,
+            bottom_lookback=H1_BOTTOM_LOOKBACK,
+            price_stable_window=H1_PRICE_STABLE_WINDOW,
+            drop_lookback=H1_DROP_LOOKBACK,
+            vol_thresh=H1_VOLUME_SURGE_THRESHOLD,
+            vol_strong=H1_VOLUME_SURGE_STRONG,
+            dist_min=H1_DIST_BOTTOM_IDEAL_MIN,
+            dist_max=H1_DIST_BOTTOM_IDEAL_MAX,
+            shadow_ratio=H1_SHADOW_RATIO_THRESHOLD,
+            weights={
+                "volume_surge": H1_W_VOLUME_SURGE,
+                "price_stable": H1_W_PRICE_STABLE,
+                "ma_turn": H1_W_MA_TURN,
+                "funding": H1_W_FUNDING,
+                "macd_reversal": H1_W_MACD_REVERSAL,
+                "dist_bottom": H1_W_DIST_BOTTOM,
+                "prior_drop": H1_W_PRIOR_DROP,
+                "kdj_cross": H1_W_KDJ_CROSS,
+                "shadow": H1_W_SHADOW,
             },
         )
 

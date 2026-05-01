@@ -1061,7 +1061,7 @@ class TestEmptyPlans:
     def test_existing_position_with_duplicate_algo_service_orders_is_replaced(
         self, state_store, mock_binance, mock_risk_controller
     ):
-        """同一保护价出现多张 Algo 条件单时，应清理后重挂单组保护。"""
+        """同一保护价出现多张 Algo 条件单时，只要 SL+TP 各≥1 就不撤销重挂。"""
         account = _make_account(
             positions=[{
                 "symbol": "BTCUSDT",
@@ -1110,27 +1110,16 @@ class TestEmptyPlans:
         )
         skill.run({"input_state_id": state_id})
 
-        # 重复 SL 条件单 → 逐个撤销 SL/TP 后重挂（保留 Trailing Stop）
-        assert mock_binance.cancel_algo_order.call_count == 3
-        mock_binance.place_stop_market_order.assert_called_once_with(
-            symbol="BTCUSDT",
-            side="SELL",
-            quantity=0.001,
-            stop_price=74447.5,
-            close_position=True,
-        )
-        mock_binance.place_take_profit_market_order.assert_called_once_with(
-            symbol="BTCUSDT",
-            side="SELL",
-            quantity=0.001,
-            stop_price=81355.0,
-            close_position=True,
-        )
+        # 新逻辑：SL≥1 且 TP≥1 → 保护完整，不撤销不重挂
+        mock_binance.cancel_algo_order.assert_not_called()
+        mock_binance.cancel_all_algo_orders.assert_not_called()
+        mock_binance.place_stop_market_order.assert_not_called()
+        mock_binance.place_take_profit_market_order.assert_not_called()
 
     def test_existing_position_with_wrong_algo_prices_is_replaced(
         self, state_store, mock_binance, mock_risk_controller
     ):
-        """已有保护单触发价不匹配时应撤销并按当前规则重挂。"""
+        """已有保护单触发价和固定 3%/6% 不同，但 SL+TP 各≥1 就不撤销重挂。"""
         account = _make_account(
             positions=[{
                 "symbol": "BTCUSDT",
@@ -1165,22 +1154,11 @@ class TestEmptyPlans:
         )
         skill.run({"input_state_id": state_id})
 
-        # SL/TP 触发价不匹配时，逐个撤销 SL/TP（保留 Trailing Stop）
-        assert mock_binance.cancel_algo_order.call_count == 2
-        mock_binance.place_stop_market_order.assert_called_once_with(
-            symbol="BTCUSDT",
-            side="SELL",
-            quantity=0.001,
-            stop_price=74447.5,
-            close_position=True,
-        )
-        mock_binance.place_take_profit_market_order.assert_called_once_with(
-            symbol="BTCUSDT",
-            side="SELL",
-            quantity=0.001,
-            stop_price=81355.0,
-            close_position=True,
-        )
+        # 新逻辑：SL=1 且 TP=1 → 保护完整，不撤销不重挂（尊重原始策略的触发价）
+        mock_binance.cancel_algo_order.assert_not_called()
+        mock_binance.cancel_all_algo_orders.assert_not_called()
+        mock_binance.place_stop_market_order.assert_not_called()
+        mock_binance.place_take_profit_market_order.assert_not_called()
 
 
 # ══════════════════════════════════════════════════════════

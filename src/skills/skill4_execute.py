@@ -1269,44 +1269,32 @@ class Skill4Execute(BaseSkill):
                 log.warning(f"[{self.name}] {symbol} 查询 Algo 条件单失败: {exc}")
                 algo_orders = []
 
-            valid_sl_count = self._valid_algo_order_count(
-                algo_orders,
-                close_side,
-                "STOP_MARKET",
-                stop_loss_price,
-                quantity,
+            # 统计已有的 SL/TP 保护单数量（不含 Trailing Stop）
+            sl_count = self._count_algo_orders_by_type(
+                algo_orders, close_side, "STOP_MARKET",
             )
-            valid_tp_count = self._valid_algo_order_count(
-                algo_orders,
-                close_side,
-                "TAKE_PROFIT_MARKET",
-                take_profit_price,
-                quantity,
+            tp_count = self._count_algo_orders_by_type(
+                algo_orders, close_side, "TAKE_PROFIT_MARKET",
             )
-            protection_order_count = self._protection_algo_order_count(
-                algo_orders,
-                close_side,
-            )
-            if (
-                valid_sl_count == 1
-                and valid_tp_count == 1
-                and protection_order_count == 2
-            ):
+
+            # 核心逻辑：只要 SL 和 TP 各有至少一张，就认为保护完整，不动它。
+            # 不比对触发价——原始策略（ATR/wick_tip/固定）的止损距离各不相同，
+            # 用固定 3%/6% 去比对只会导致每轮都误撤重挂。
+            if sl_count >= 1 and tp_count >= 1:
+                # 保护完整，只做 Trailing Stop 数量校验
+                self._reconcile_trailing_stop(
+                    symbol=symbol,
+                    close_side=close_side,
+                    quantity=quantity,
+                    algo_orders=algo_orders,
+                )
                 continue
 
-            has_sl = valid_sl_count > 0
-            has_tp = valid_tp_count > 0
-            if protection_order_count > 0:
-                log.warning(
-                    f"[{self.name}] {symbol} 已有 SL/TP 触发价不匹配，撤销 SL/TP 后重挂（保留 Trailing Stop）"
-                )
-                self._cancel_sl_tp_orders_only(symbol, close_side, algo_orders)
-                has_sl = False
-                has_tp = False
-
+            # SL 或 TP 缺失，用固定 3%/6% 补挂缺失的那一张
             log.warning(
-                f"[{self.name}] {symbol} 已有持仓缺少服务端保护单，"
-                f"补挂 SL={stop_loss_price}, TP={take_profit_price}, qty={quantity}"
+                f"[{self.name}] {symbol} 已有持仓保护不完整"
+                f"（SL={sl_count}, TP={tp_count}），"
+                f"补挂缺失保护单 SL={stop_loss_price}, TP={take_profit_price}"
             )
             self._place_missing_existing_protection(
                 symbol=symbol,
@@ -1314,12 +1302,11 @@ class Skill4Execute(BaseSkill):
                 quantity=quantity,
                 stop_loss_price=stop_loss_price,
                 take_profit_price=take_profit_price,
-                place_sl=not has_sl,
-                place_tp=not has_tp,
+                place_sl=sl_count == 0,
+                place_tp=tp_count == 0,
             )
 
             # 检查 TRAILING_STOP_MARKET 的 quantity 是否与实际持仓一致
-            # Algo Service 不支持 reduceOnly，quantity 偏差会导致触发时开反向仓
             self._reconcile_trailing_stop(
                 symbol=symbol,
                 close_side=close_side,
@@ -1534,6 +1521,19 @@ class Skill4Execute(BaseSkill):
             if (
                 str(order.get("side", "")).upper() == side
                 and self._looks_like_sl_tp_order(order)
+            ):
+                count += 1
+        return count
+
+    def _count_algo_orders_by_type(
+        self, orders: list, side: str, order_type: str,
+    ) -> int:
+        """统计指定方向和类型的条件单数量（不校验触发价）。"""
+        count = 0
+        for order in orders:
+            if (
+                str(order.get("side", "")).upper() == side
+                and self._algo_order_type_matches(order, order_type)
             ):
                 count += 1
         return count

@@ -261,6 +261,47 @@ class _CryptoReversalBase(BaseSkill):
             return self._client.get_klines_cached(symbol, interval, limit)
         return self._client.get_klines(symbol, interval, limit)
 
+    def _get_market_regime(self, input_data: dict) -> dict:
+        """
+        判断当前市场是否适合做趋势反转。
+
+        BTC 短期暴跌时阻断（瀑布式下跌中的反弹是假信号）。
+        """
+        if input_data.get("ignore_market_regime"):
+            return {"status": "enabled", "reason": "ignore_market_regime=true"}
+
+        symbol = "BTCUSDT"
+        try:
+            klines = self._fetch_klines(symbol, "4h", 80)
+        except Exception as exc:
+            log.warning("[%s] 市场状态获取失败: %s", self.name, exc)
+            return {"status": "unknown", "reason": f"fetch_failed:{exc}"}
+
+        if not klines or len(klines) < 60:
+            return {"status": "unknown", "reason": "insufficient_market_klines"}
+
+        closes = [float(k[4]) for k in klines]
+        last_close = closes[-1]
+        lookback = 12
+        recent_return_pct = (
+            (last_close - closes[-lookback]) / closes[-lookback] * 100
+            if len(closes) > lookback and closes[-lookback] > 0
+            else 0.0
+        )
+        if recent_return_pct <= -8.0:
+            return {
+                "status": "blocked",
+                "reason": f"BTC 短期暴跌 {recent_return_pct:.2f}%，反转信号不可靠",
+                "symbol": symbol,
+                "recent_return_pct": round(recent_return_pct, 4),
+            }
+        return {
+            "status": "enabled",
+            "reason": "market_regime_ok",
+            "symbol": symbol,
+            "recent_return_pct": round(recent_return_pct, 4),
+        }
+
 
     def _run_scan(
         self, input_data: dict, interval: str, min_klines: int,
@@ -281,6 +322,25 @@ class _CryptoReversalBase(BaseSkill):
         total_count = len(tickers)
         funding_map = self._build_funding_map()
         tradable = self._get_tradable_symbols()
+        market_regime = self._get_market_regime(input_data)
+        if market_regime.get("status") == "blocked":
+            log.warning(
+                "[%s] 市场状态阻断反转交易: %s",
+                self.name,
+                market_regime.get("reason", ""),
+            )
+            return {
+                "state_id": str(uuid.uuid4()),
+                "candidates": [],
+                "pipeline_run_id": pipeline_run_id,
+                "filter_summary": {
+                    "total_tickers": total_count,
+                    "after_base_filter": 0,
+                    "after_reversal_filter": 0,
+                    "output_count": 0,
+                },
+                "market_regime": market_regime,
+            }
 
         if target_symbols:
             pool = self._build_target_pool(tickers, target_symbols)
@@ -364,6 +424,7 @@ class _CryptoReversalBase(BaseSkill):
             "state_id": str(uuid.uuid4()),
             "candidates": candidates,
             "pipeline_run_id": pipeline_run_id,
+            "market_regime": market_regime,
             "filter_summary": {
                 "total_tickers": total_count,
                 "after_base_filter": len(pool),

@@ -289,9 +289,11 @@ class TestNormalExecution:
         self, state_store, mock_binance, mock_risk_controller
     ):
         """定时任务模式下，开仓后挂好保护即返回，不等待平仓。"""
-        mock_binance.get_position_risk.return_value = _make_position_risk(
-            mark_price=100.0, position_amt=10.0, entry_price=100.0
-        )
+        # side_effect: 第 1 次调用（下单前查持仓）返回 0，第 2 次（确认成交）返回 10
+        mock_binance.get_position_risk.side_effect = [
+            _make_position_risk(mark_price=100.0, position_amt=0.0, entry_price=0.0),
+            _make_position_risk(mark_price=100.0, position_amt=10.0, entry_price=100.0),
+        ]
         upstream = _make_upstream_data([_make_trade_plan()])
         state_id = state_store.save("skill3_strategy", upstream)
 
@@ -315,9 +317,10 @@ class TestNormalExecution:
         self, state_store, mock_binance, mock_risk_controller
     ):
         """非阻塞模式下，入场成交但保护单全失败时应立即平仓。"""
-        mock_binance.get_position_risk.return_value = _make_position_risk(
-            mark_price=100.0, position_amt=10.0, entry_price=100.0
-        )
+        mock_binance.get_position_risk.side_effect = [
+            _make_position_risk(mark_price=100.0, position_amt=0.0, entry_price=0.0),
+            _make_position_risk(mark_price=100.0, position_amt=10.0, entry_price=100.0),
+        ]
         mock_binance.place_stop_market_order.side_effect = Exception("SL 异常")
         mock_binance.place_take_profit_market_order.side_effect = Exception("TP 异常")
         mock_binance.place_market_order.return_value = _make_order_result(
@@ -1334,12 +1337,15 @@ class TestServerSideSlTp:
             min_notional=Decimal("5"),
             tick_size=Decimal("0.0000100"),
         )
-        mock_binance.get_position_risk.return_value = _make_position_risk(
-            symbol="ZKPUSDT",
-            mark_price=0.095,
-            position_amt=989.0,
-            entry_price=0.0952514054601,
-        )
+        mock_binance.get_position_risk.side_effect = [
+            _make_position_risk(symbol="ZKPUSDT", mark_price=0.095, position_amt=0.0, entry_price=0.0),
+            _make_position_risk(
+                symbol="ZKPUSDT",
+                mark_price=0.095,
+                position_amt=989.0,
+                entry_price=0.0952514054601,
+            ),
+        ]
 
         plan = _make_trade_plan(
             symbol="ZKPUSDT",

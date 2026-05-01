@@ -755,78 +755,56 @@ class Skill4Execute(BaseSkill):
             if pos_risk is not None:
                 position_amt = abs(pos_risk.position_amt)
                 if position_amt > 0:
-                    # 判断是否是本次入场导致的持仓变化：
-                    # 1. 持仓量比下单前增加了 → 新入场成交
-                    # 2. 下单前无仓位（initial=0）→ 有仓位就是新入场
-                    # 3. 入场单已不在挂单列表中 → 已成交（兼容加仓场景）
-                    position_increased = position_amt > initial_position_amt * 1.001
+                    # 核心判断：持仓量是否因本次入场而增加。
+                    # 只有持仓量确实增加了（或从零开仓），才清理旧保护单并重挂。
+                    # 如果持仓量没变（入场单未成交），绝不动已有保护单。
                     was_flat = initial_position_amt <= 0
-                    entry_order_gone = not self._is_order_open(symbol, order_id)
-                    is_new_entry = position_increased or was_flat or entry_order_gone
-
-                    if not is_new_entry:
-                        # 持仓量没有增加，说明入场单还没成交，
-                        # 这是之前就存在的仓位，不要动它的保护单
-                        elapsed = time.monotonic() - start_time
-                        if elapsed >= self._entry_confirm_timeout:
-                            if self._is_order_open(symbol, order_id):
-                                self._cancel_entry_order(symbol)
-                                return {
-                                    "status": OrderStatus.EXECUTION_FAILED.value,
-                                    "reason": "entry_not_filled_existing_position",
-                                    "entry_price": 0.0,
-                                    "quantity": 0.0,
-                                }
-                            return {
-                                "status": OrderStatus.EXECUTION_FAILED.value,
-                                "reason": "entry_order_gone_existing_position",
-                                "entry_price": 0.0,
-                                "quantity": 0.0,
-                            }
-                        if self._poll_interval > 0:
-                            time.sleep(min(ENTRY_CONFIRM_POLL_INTERVAL, self._entry_confirm_timeout - elapsed))
-                        continue
-
-                    # 本次入场成交，清理旧保护单并重挂
-                    self._cancel_conflicting_protection_orders(symbol, close_side)
-                    protection_placed = self._place_server_sl_tp(
-                        symbol=symbol,
-                        close_side=close_side,
-                        quantity=position_amt,
-                        stop_loss_price=stop_loss_price,
-                        take_profit_price=take_profit_price,
-                        trailing_stop=trailing_stop or {},
+                    position_increased = (
+                        not was_flat
+                        and position_amt > initial_position_amt * 1.001
                     )
-                    if not protection_placed:
-                        log.critical(
-                            f"[{self.name}] {symbol} 入场已成交但服务端保护单全部挂载失败，"
-                            f"立即平仓以避免裸仓"
-                        )
-                        close_result = self._close_position(
+
+                    if was_flat or position_increased:
+                        # 本次入场成交（或从零开仓），清理旧保护单并重挂
+                        self._cancel_conflicting_protection_orders(symbol, close_side)
+                        protection_placed = self._place_server_sl_tp(
                             symbol=symbol,
-                            side=close_side,
+                            close_side=close_side,
                             quantity=position_amt,
-                            reason="protection_failed",
-                            start_time=start_time,
+                            stop_loss_price=stop_loss_price,
+                            take_profit_price=take_profit_price,
+                            trailing_stop=trailing_stop or {},
                         )
+                        if not protection_placed:
+                            log.critical(
+                                f"[{self.name}] {symbol} 入场已成交但服务端保护单全部挂载失败，"
+                                f"立即平仓以避免裸仓"
+                            )
+                            close_result = self._close_position(
+                                symbol=symbol,
+                                side=close_side,
+                                quantity=position_amt,
+                                reason="protection_failed",
+                                start_time=start_time,
+                            )
+                            return {
+                                "status": close_result.get(
+                                    "status", OrderStatus.EXECUTION_FAILED.value
+                                ),
+                                "reason": (
+                                    "protection_failed_closed"
+                                    if close_result.get("status") == OrderStatus.FILLED.value
+                                    else "protection_failed_close_failed"
+                                ),
+                                "entry_price": pos_risk.entry_price,
+                                "quantity": position_amt,
+                            }
                         return {
-                            "status": close_result.get(
-                                "status", OrderStatus.EXECUTION_FAILED.value
-                            ),
-                            "reason": (
-                                "protection_failed_closed"
-                                if close_result.get("status") == OrderStatus.FILLED.value
-                                else "protection_failed_close_failed"
-                            ),
+                            "status": OrderStatus.OPEN.value,
+                            "reason": "entry_filled_protection_placed",
                             "entry_price": pos_risk.entry_price,
                             "quantity": position_amt,
                         }
-                    return {
-                        "status": OrderStatus.OPEN.value,
-                        "reason": "entry_filled_protection_placed",
-                        "entry_price": pos_risk.entry_price,
-                        "quantity": position_amt,
-                    }
 
             elapsed = time.monotonic() - start_time
             if elapsed >= self._entry_confirm_timeout:

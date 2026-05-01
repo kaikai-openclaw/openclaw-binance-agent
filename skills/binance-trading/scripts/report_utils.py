@@ -358,15 +358,23 @@ def protection_warnings(protection: dict) -> list[str]:
 def render_positions_markdown(
     positions: list[dict],
     source_map: Optional[dict] = None,
+    max_detail: int = 5,
 ) -> list[str]:
-    """渲染持仓明细 Markdown 段落。"""
+    """渲染持仓明细 Markdown 段落。
+
+    超过 max_detail 笔时，只展示前 max_detail 笔详情 + 其余摘要，
+    防止 Telegram 4096 字符限制导致发送失败。
+    """
     source_map = source_map or {}
     lines = ["当前持仓:"]
     if not positions:
         lines.append("- 当前无持仓")
         return lines
 
-    for pos in positions:
+    detail_positions = positions[:max_detail]
+    rest_positions = positions[max_detail:]
+
+    for pos in detail_positions:
         tag = tag_symbol_or_default(pos["symbol"], source_map)
         lines.extend([
             f"- {pos['symbol']} {pos['direction']} ({tag})",
@@ -383,21 +391,55 @@ def render_positions_markdown(
         ])
         if pos.get("liquidation_price") and pos["liquidation_price"] > 0:
             lines.append(f"  强平价: {pos['liquidation_price']}")
+
+    if rest_positions:
+        rest_pnl = sum(p["unrealized_pnl"] for p in rest_positions)
+        rest_margin = sum(p["initial_margin"] for p in rest_positions)
+        symbols = ", ".join(p["symbol"] for p in rest_positions)
+        lines.append(
+            f"- 其余 {len(rest_positions)} 笔: "
+            f"保证金 {rest_margin:.2f}, 浮盈亏 {rest_pnl:+.2f} "
+            f"({symbols})"
+        )
+
     return lines
 
 
-def render_protection_markdown(protection: dict) -> list[str]:
-    """渲染保护单状态 Markdown 段落。"""
+def render_protection_markdown(protection: dict, max_detail: int = 8) -> list[str]:
+    """渲染保护单状态 Markdown 段落。超过 max_detail 个币种时只显示异常项。"""
     lines = ["保护单状态:"]
-    for symbol, health in protection.get("health", {}).items():
-        duplicate = health.get("duplicate_protection_orders", 0)
-        detail = (
-            f"止损 {health['stop_loss_count']} 张, "
-            f"止盈 {health['take_profit_count']} 张"
-        )
+    health = protection.get("health", {})
+    if not health:
+        lines.append("- 无保护单")
+        return lines
+
+    # 优先显示有问题的
+    warning_items = {s: h for s, h in health.items() if h.get("status") != "ok"}
+    ok_items = {s: h for s, h in health.items() if h.get("status") == "ok"}
+
+    shown = 0
+    for symbol, h in warning_items.items():
+        if shown >= max_detail:
+            break
+        duplicate = h.get("duplicate_protection_orders", 0)
+        detail = f"止损 {h['stop_loss_count']} 张, 止盈 {h['take_profit_count']} 张"
         if duplicate:
-            detail += f", 重复保护单 {duplicate} 张"
-        lines.append(f"- {symbol}: {health['status']} ({detail})")
+            detail += f", 重复 {duplicate} 张"
+        lines.append(f"- {symbol}: {h['status']} ({detail})")
+        shown += 1
+
+    for symbol, h in ok_items.items():
+        if shown >= max_detail:
+            break
+        lines.append(
+            f"- {symbol}: ok (止损 {h['stop_loss_count']}, 止盈 {h['take_profit_count']})"
+        )
+        shown += 1
+
+    remaining = len(health) - shown
+    if remaining > 0:
+        lines.append(f"- 其余 {remaining} 个币种保护单正常")
+
     return lines
 
 

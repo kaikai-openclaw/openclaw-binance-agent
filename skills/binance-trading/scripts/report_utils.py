@@ -14,16 +14,16 @@ log = logging.getLogger(__name__)
 # ── 策略来源定义 ──────────────────────────────────────────
 # strategy_tag → (emoji, 中文标签)
 STRATEGY_TAG_MAP: dict[str, tuple[str, str]] = {
-    "crypto_oversold_long":    ("🌀", "超跌长"),
-    "crypto_oversold_short":   ("🌀", "超跌短"),
-    "crypto_reversal_long":    ("🔄", "反转长"),
-    "crypto_reversal_short":   ("🔄", "反转短"),
+    "crypto_oversold_long":    ("🌀", "超跌1d"),
+    "crypto_oversold_short":   ("🌀", "超跌4h"),
+    "crypto_reversal_long":    ("🔄", "反转1d"),
+    "crypto_reversal_short":   ("🔄", "反转4h"),
     "crypto_reversal_1h":      ("🔄", "反转1h"),
-    "crypto_overbought_long":  ("📉", "做空长"),
-    "crypto_overbought_short": ("📉", "做空短"),
+    "crypto_overbought_long":  ("📉", "做空1d"),
+    "crypto_overbought_short": ("📉", "做空4h"),
     "crypto_overbought_1h":    ("📉", "做空1h"),
-    "crypto_wick_short":       ("🪡", "插针短"),
-    "crypto_wick_long":        ("🪡", "插针长"),
+    "crypto_wick_short":       ("🪡", "插针4h"),
+    "crypto_wick_long":        ("🪡", "插针1d"),
     "crypto_generic":          ("⚙️", "通用"),
 }
 

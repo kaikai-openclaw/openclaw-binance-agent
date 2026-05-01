@@ -43,7 +43,7 @@ skill2 = Skill2Analyze(
     input_schema=in_schema,
     output_schema=out_schema,
     trading_agents=ta_module,
-    rating_threshold=6,
+    rating_threshold=7,
 )
 
 # 4. 使用 Skill-1 的输出作为输入

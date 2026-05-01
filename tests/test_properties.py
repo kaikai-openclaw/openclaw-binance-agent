@@ -890,9 +890,9 @@ class TestStrategyStatsAndTuning:
             f"胜率不匹配: got {result.win_rate}, expected {expected_win_rate}"
         )
 
-        # 核心不变量：新评级阈值 >= 默认阈值（6）
-        assert result.suggested_rating_threshold >= 6, (
-            f"调优后评级阈值 {result.suggested_rating_threshold} 应 >= 默认值 6"
+        # 核心不变量：新评级阈值 >= 默认阈值（7）
+        assert result.suggested_rating_threshold >= 7, (
+            f"调优后评级阈值 {result.suggested_rating_threshold} 应 >= 默认值 7"
         )
 
         # 核心不变量：新风险比例 <= 默认风险比例（0.02）
@@ -950,9 +950,9 @@ class TestStrategyStatsAndTuning:
         win_rate = winning_count / total * 100
 
         if win_rate > 60:
-            # 放松：阈值应 <= 默认值 6，风险应 >= 默认值 0.02
-            assert result.suggested_rating_threshold <= 6, (
-                f"胜率 {win_rate:.1f}% > 60% 时评级阈值应 <= 6，"
+            # 放松：阈值应 <= 默认值 7，风险应 >= 默认值 0.02
+            assert result.suggested_rating_threshold <= 7, (
+                f"胜率 {win_rate:.1f}% > 60% 时评级阈值应 <= 7，"
                 f"实际为 {result.suggested_rating_threshold}"
             )
             assert result.suggested_risk_ratio >= 0.02, (
@@ -969,8 +969,8 @@ class TestStrategyStatsAndTuning:
             )
         else:
             # 40%-60% 区间：维持默认参数
-            assert result.suggested_rating_threshold == 6, (
-                f"胜率 {win_rate:.1f}% 在正常区间时评级阈值应为默认值 6，"
+            assert result.suggested_rating_threshold == 7, (
+                f"胜率 {win_rate:.1f}% 在正常区间时评级阈值应为默认值 7，"
                 f"实际为 {result.suggested_rating_threshold}"
             )
             assert result.suggested_risk_ratio == 0.02, (

@@ -25,7 +25,7 @@ log = logging.getLogger(__name__)
 AnalyzerFn = Callable[[str, Dict[str, Any]], Dict[str, Any]]
 
 # 默认评级过滤阈值
-DEFAULT_RATING_THRESHOLD = 6
+DEFAULT_RATING_THRESHOLD = 7
 
 # TradingAgents 分析超时（秒），30 分钟以满足多智能体深度辩论
 ANALYSIS_TIMEOUT = 1800

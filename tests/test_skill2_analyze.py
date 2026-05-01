@@ -228,7 +228,7 @@ class TestRatingFilter:
         state_id = state_store.save("skill1_collect", upstream)
 
         analyzer = MagicMock(return_value={
-            "rating_score": 6, "signal": "hold", "confidence": 50.0,
+            "rating_score": 7, "signal": "hold", "confidence": 50.0,
         })
 
         skill = _make_skill(state_store, analyzer)

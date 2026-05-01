@@ -47,7 +47,7 @@ def main():
         input_schema=in_schema,
         output_schema=out_schema,
         trading_agents=ta_module,
-        rating_threshold=6,
+        rating_threshold=7,
     )
 
     # 4. 伪造 Skill-1 输出（只测 BTC，减少 API 消耗）

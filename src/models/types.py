@@ -261,7 +261,7 @@ def calculate_pnl_ratio(
 
 def compute_evolution_adjustment(
     trades: List[TradeRecord],
-    current_rating_threshold: int = 6,
+    current_rating_threshold: int = 7,
     current_risk_ratio: float = 0.02,
     strategy_tag: str = "",
 ) -> Optional[ReflectionLog]:

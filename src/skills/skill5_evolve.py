@@ -30,7 +30,7 @@ from src.skills.base import BaseSkill
 log = logging.getLogger(__name__)
 
 # 默认策略参数
-DEFAULT_RATING_THRESHOLD = 6
+DEFAULT_RATING_THRESHOLD = 7
 DEFAULT_RISK_RATIO = 0.02
 
 # 账户状态提供者类型

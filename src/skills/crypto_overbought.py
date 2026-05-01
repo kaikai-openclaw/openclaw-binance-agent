@@ -124,24 +124,24 @@ ST_W_SQUEEZE_RISK = -8   # 轧空风险扣分
 
 H1_INTERVAL = "1h"
 H1_MIN_KLINES = 60
-H1_RSI_THRESHOLD = 82.0          # 1h RSI > 82 = 极端超买（比 4h 更严格）
-H1_BIAS_THRESHOLD = 8.0          # 1h 乖离率 > +8%（1h 波动小，阈值收窄）
-H1_CONSECUTIVE_UP = 8            # 连续上涨 ≥ 8 根 1h（8 小时）
-H1_RALLY_PCT = 10.0              # 近 N 根累计涨幅 > +10%
+H1_RSI_THRESHOLD = 85.0          # 1h RSI > 85 = 极端超买（从 82 收紧）
+H1_BIAS_THRESHOLD = 10.0         # 1h 乖离率 > +10%（从 8 收紧）
+H1_CONSECUTIVE_UP = 10           # 连续上涨 ≥ 10 根 1h = 10 小时（从 8 收紧）
+H1_RALLY_PCT = 12.0              # 近 N 根累计涨幅 > +12%（从 10 收紧）
 H1_RALLY_LOOKBACK = 24           # 回看 24 根 1h = 1 天
 H1_RISE_LOOKBACK = 72            # 距低点涨幅回看 72 根 1h = 3 天
 
-# 超短期评分权重 — 侧重即时超买信号和资金费率
-H1_W_RSI = 18            # RSI（1h 级别超买更敏感）
-H1_W_FUNDING = 20        # 资金费率（最强信号）
-H1_W_BIAS = 10           # 乖离率
-H1_W_VOL_DIV = 12        # 量价背离
-H1_W_BOLL = 8            # 布林带
-H1_W_RALLY = 8           # 连续暴涨
-H1_W_KDJ = 7             # KDJ
-H1_W_MACD_DIV = 4        # MACD 顶背离（1h 可靠性低）
-H1_W_SHADOW = 5          # 长上影线
-H1_W_SQUEEZE_RISK = -10  # 轧空风险扣分（1h 更容易被轧）
+# 超短期评分权重 — 提高核心信号，加重轧空惩罚
+H1_W_RSI = 20            # RSI（核心，从 18 提高）
+H1_W_FUNDING = 22        # 资金费率（做空最强信号，从 20 提高）
+H1_W_BIAS = 12           # 乖离率（从 10 提高）
+H1_W_VOL_DIV = 15        # 量价背离（从 12 提高，顶部缩量是关键确认）
+H1_W_BOLL = 6            # 布林带（从 8 降低）
+H1_W_RALLY = 6           # 连续暴涨（从 8 降低，涨多不一定跌）
+H1_W_KDJ = 5             # KDJ（从 7 降低，1h 噪音大）
+H1_W_MACD_DIV = 3        # MACD 顶背离（从 4 降低，1h 可靠性很低）
+H1_W_SHADOW = 3          # 长上影线（从 5 降低）
+H1_W_SQUEEZE_RISK = -15  # 轧空风险扣分（从 -10 加重，1h 做空被轧风险极高）
 
 # ══════════════════════════════════════════════════════════
 # 长期超买参数（1d K 线）
@@ -170,7 +170,7 @@ LT_W_SHADOW = 5          # 长上影线
 LT_W_SQUEEZE_RISK = -4   # 轧空风险扣分（长期看风险降低）
 
 DEFAULT_MIN_QUOTE_VOLUME = 10_000_000
-DEFAULT_MIN_OVERBOUGHT_SCORE = 25
+DEFAULT_MIN_OVERBOUGHT_SCORE = 40
 DEFAULT_MAX_CANDIDATES = 20
 # 轧空风险：成交额低于此值且 OI/成交额比过高 → 扣分
 SQUEEZE_RISK_QV_THRESHOLD = 50_000_000

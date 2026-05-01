@@ -570,6 +570,16 @@ def calc_overbought_score(
         score += w["shadow"]
         signals.append("长上影线")
 
+    # ── 9.5 距近期高点回撤检查 ──
+    # 如果价格已经从高点大幅回落，说明做空最佳时机已过，扣分
+    drawdown_from_high = _calc_drawdown_from_high(closes, rally_lookback)
+    drawdown_penalty_pct = w.get("drawdown_penalty_pct", -5.0)  # 默认回撤 5% 开始扣分
+    if drawdown_from_high is not None and drawdown_from_high < drawdown_penalty_pct:
+        # 回撤越深扣分越多，最多扣 20 分
+        penalty = min(20.0, abs(drawdown_from_high - drawdown_penalty_pct) * 2.0)
+        score -= penalty
+        signals.append(f"⚠️已回撤{drawdown_from_high:.1f}%(扣{penalty:.0f}分)")
+
     # ── 10. 轧空风险扣分 ──
     squeeze_risk = False
     if oi_value and quote_volume_24h > 0:
@@ -638,6 +648,25 @@ def _calc_rise_from_low(closes: List[float], lookback: int) -> Optional[float]:
     window = closes[-min(lookback, len(closes)):]
     low = min(window)
     return (closes[-1] - low) / low * 100 if low > 0 else None
+
+
+def _calc_drawdown_from_high(closes: List[float], lookback: int) -> Optional[float]:
+    """计算当前价格距近期最高点的回撤幅度（负值表示回撤）。
+
+    用于判断做空时机是否已过：如果价格已经从高点大幅回落，
+    做空的盈亏比变差（下跌空间已被消耗）。
+
+    返回:
+        回撤百分比（负值），如 -5.0 表示从高点回撤了 5%。
+        None 表示数据不足。
+    """
+    if len(closes) < 2:
+        return None
+    window = closes[-min(lookback, len(closes)):]
+    high = max(window)
+    if high <= 0:
+        return None
+    return (closes[-1] - high) / high * 100
 
 
 def _check_above_boll_upper(closes: List[float]) -> bool:

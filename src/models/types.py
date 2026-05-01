@@ -138,6 +138,7 @@ class ReflectionLog:
     suggested_rating_threshold: int       # 建议的评级过滤阈值
     suggested_risk_ratio: float           # 建议的风险比例
     reasoning: str                        # 调优推理过程
+    strategy_tag: str = ""                # 策略标签，空字符串表示全局
 
 
 @dataclass
@@ -262,6 +263,7 @@ def compute_evolution_adjustment(
     trades: List[TradeRecord],
     current_rating_threshold: int = 6,
     current_risk_ratio: float = 0.02,
+    strategy_tag: str = "",
 ) -> Optional[ReflectionLog]:
     """
     基于最近 50 笔交易计算策略调优建议（渐进式双向调整）。
@@ -277,6 +279,7 @@ def compute_evolution_adjustment(
         trades: 交易记录列表（按平仓时间倒序排列）
         current_rating_threshold: 当前评级过滤阈值（从上一轮反思日志读取）
         current_risk_ratio: 当前风险比例（从上一轮反思日志读取）
+        strategy_tag: 策略标签，写入 ReflectionLog 用于按策略隔离
 
     返回:
         ReflectionLog 调优建议，或 None（记录不足 10 笔时）
@@ -334,6 +337,7 @@ def compute_evolution_adjustment(
         suggested_rating_threshold=new_threshold,
         suggested_risk_ratio=new_risk_ratio,
         reasoning=reasoning,
+        strategy_tag=strategy_tag,
     )
 
 

@@ -313,7 +313,9 @@ class Skill4Execute(BaseSkill):
             quantity=quantity,
             leverage=self._leverage,
         )
-        validation = self._risk_controller.validate_order(order_request, account)
+        validation = self._risk_controller.validate_order(
+            order_request, account, strategy_tag=strategy_tag,
+        )
 
         if not validation.passed:
             log.warning(
@@ -406,6 +408,7 @@ class Skill4Execute(BaseSkill):
             quantity=quantity,
             order_id=order_result.order_id,
             trailing_stop=trailing_stop,
+            strategy_tag=strategy_tag,
         )
 
         executed_at = datetime.now(timezone.utc).isoformat()
@@ -448,6 +451,7 @@ class Skill4Execute(BaseSkill):
         quantity: float,
         order_id: str,
         trailing_stop: dict | None = None,
+        strategy_tag: str = "",
     ) -> dict:
         """
         轮询监控持仓，检查止损/止盈/超时平仓条件。
@@ -603,7 +607,7 @@ class Skill4Execute(BaseSkill):
                 )
                 # 记录止损事件，启动冷却期
                 self._risk_controller.record_stop_loss(
-                    symbol, direction.value
+                    symbol, direction.value, strategy_tag=strategy_tag
                 )
                 self._cancel_algo_orders_safe(symbol)
                 return self._close_position(
@@ -1161,7 +1165,7 @@ class Skill4Execute(BaseSkill):
                     f"[{self.name}] {symbol} 已有持仓触发保护性止损: "
                     f"当前价={current_price}, 止损价={stop_loss_price}"
                 )
-                self._risk_controller.record_stop_loss(symbol, direction.value)
+                self._risk_controller.record_stop_loss(symbol, direction.value, strategy_tag="")
                 self._cancel_algo_orders_safe(symbol)
                 self._close_position(
                     symbol, close_side, quantity, "existing_stop_loss", time.monotonic()

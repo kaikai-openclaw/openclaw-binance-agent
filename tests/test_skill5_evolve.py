@@ -339,7 +339,7 @@ class TestLowWinRate:
         skill = _make_skill(state_store, memory_store)
         skill.run({})
 
-        reflection = memory_store.get_latest_reflection()
+        reflection = memory_store.get_latest_reflection(strategy_tag="unknown")
         assert reflection is not None
         assert reflection.win_rate == 20.0
 

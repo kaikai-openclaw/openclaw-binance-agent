@@ -265,7 +265,10 @@ def run_report(args: argparse.Namespace) -> dict:
         scan_symbols = [c["symbol"] for c in scan_data.get("candidates", [])]
         source_map = {symbol: f"超买{args.mode}" for symbol in scan_symbols}
 
-        rating_threshold, risk_ratio = memory_store.get_evolved_params()
+        strategy_tag = f"crypto_overbought_{args.mode}"
+        rating_threshold, risk_ratio = memory_store.get_evolved_params(
+            strategy_tag=strategy_tag,
+        )
         s1_data: dict = {"candidates": [], "filter_summary": {}}
         s2_data: dict = {"ratings": [], "filtered_count": 0, "failed_symbols": []}
         s3_data: dict = {"trade_plans": [], "pipeline_status": "no_opportunity"}

@@ -48,7 +48,8 @@ class RiskController:
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
             symbol      TEXT NOT NULL,
             direction   TEXT NOT NULL,
-            recorded_at TEXT NOT NULL
+            recorded_at TEXT NOT NULL,
+            strategy_tag TEXT NOT NULL DEFAULT ''
         )
     """
 
@@ -65,6 +66,12 @@ class RiskController:
         )
     """
 
+    # 在线迁移：为旧表补充 strategy_tag 列
+    _ADD_COOLDOWN_STRATEGY_TAG_SQL = (
+        "ALTER TABLE stop_loss_cooldowns "
+        "ADD COLUMN strategy_tag TEXT NOT NULL DEFAULT ''"
+    )
+
     def __init__(self, db_path: Optional[str] = None) -> None:
         """
         初始化 RiskController。
@@ -75,6 +82,8 @@ class RiskController:
         """
         # 模拟盘模式标志；db_path 模式会从 risk_runtime_state 恢复。
         self._paper_mode: bool = False
+        # 按策略独立的 Paper Mode：strategy_tag → bool
+        self._strategy_paper_modes: dict[str, bool] = {}
 
         # 持久化模式
         self._db_path = db_path
@@ -83,7 +92,7 @@ class RiskController:
         self._thread_local = threading.local()
 
         # 内存回退（无 db_path 时使用，兼容旧行为和测试）
-        self._stop_loss_records: list[tuple[str, str, datetime]] = []
+        self._stop_loss_records: list[tuple[str, str, str, datetime]] = []
 
         if db_path is not None:
             db_dir = os.path.dirname(db_path)
@@ -95,9 +104,11 @@ class RiskController:
             self._thread_local.conn.execute(self._CREATE_COOLDOWN_TABLE_SQL)
             self._thread_local.conn.execute(self._CREATE_COOLDOWN_INDEX_SQL)
             self._thread_local.conn.execute(self._CREATE_RUNTIME_STATE_TABLE_SQL)
+            self._migrate_cooldown_strategy_tag(self._thread_local.conn)
             self._thread_local.conn.commit()
             self._conn = self._thread_local.conn  # 保留引用供 __del__ 使用
             self._paper_mode = self._load_paper_mode()
+            self._strategy_paper_modes = self._load_strategy_paper_modes()
 
     def _get_conn(self) -> Optional[sqlite3.Connection]:
         """
@@ -117,23 +128,34 @@ class RiskController:
         new_conn.execute(self._CREATE_COOLDOWN_TABLE_SQL)
         new_conn.execute(self._CREATE_COOLDOWN_INDEX_SQL)
         new_conn.execute(self._CREATE_RUNTIME_STATE_TABLE_SQL)
+        self._migrate_cooldown_strategy_tag(new_conn)
         new_conn.commit()
         self._thread_local.conn = new_conn
         return new_conn
 
     def validate_order(
-        self, order: OrderRequest, account: AccountState
+        self, order: OrderRequest, account: AccountState,
+        strategy_tag: str = "",
     ) -> ValidationResult:
         """
         对单笔订单执行全部风控断言校验。
 
         校验项：
-        1. 单笔保证金 <= 总资金 × 20%
-        2. 单币累计持仓 <= 总资金 × 30%
-        3. 止损冷却期内禁止同方向开仓
+        1. 单笔保证金 <= 总资金 × 35%
+        2. 单币累计持仓 <= 总资金 × 40%
+        3. 止损冷却期内禁止同方向开仓（按 strategy_tag 隔离）
+        4. 该策略是否处于 Paper Mode
 
         任一断言失败即拒绝订单。
         """
+        # 断言 0：策略级 Paper Mode 检查
+        if strategy_tag and self.is_strategy_paper_mode(strategy_tag):
+            reason = (
+                f"策略 {strategy_tag} 处于模拟盘模式，拒绝实盘下单"
+            )
+            log.warning(f"风控拒绝: {reason}")
+            return ValidationResult(passed=False, reason=reason)
+
         total_balance = account.total_balance
 
         # 断言 1：单笔保证金 <= 总资金 20%
@@ -160,16 +182,17 @@ class RiskController:
             log.warning(f"风控拒绝: {reason}")
             return ValidationResult(passed=False, reason=reason)
 
-        # 断言 3：止损冷却期检查
+        # 断言 3：止损冷却期检查（按策略隔离）
         direction_str = (
             order.direction.value
             if hasattr(order.direction, "value")
             else str(order.direction)
         )
-        if self._is_in_cooldown(order.symbol, direction_str):
+        if self._is_in_cooldown(order.symbol, direction_str, strategy_tag):
             reason = (
                 f"{order.symbol} {direction_str} 处于止损冷却期"
                 f"（{self.STOP_LOSS_COOLDOWN_HOURS} 小时内禁止同方向开仓）"
+                + (f"，策略={strategy_tag}" if strategy_tag else "")
             )
             log.warning(f"风控拒绝: {reason}")
             return ValidationResult(passed=False, reason=reason)
@@ -194,14 +217,15 @@ class RiskController:
         return loss_ratio >= self.DAILY_LOSS_THRESHOLD
 
     def execute_degradation(
-        self, account: AccountState, binance_client=None
+        self, account: AccountState, binance_client=None,
+        strategy_tag: str = "",
     ) -> None:
         """
         执行降级流程：
-        1. 取消所有未成交挂单
+        1. 取消所有未成交挂单（仅全局降级时）
         2. 停止实盘下单
         3. 发出告警通知
-        4. 切换至 Paper_Trading_Mode
+        4. 切换至 Paper_Trading_Mode（按策略或全局）
         """
         loss_ratio = (
             abs(account.daily_realized_pnl) / account.total_balance
@@ -209,27 +233,34 @@ class RiskController:
             else 0
         )
 
-        # 步骤 1：取消所有未成交挂单
-        if binance_client is not None:
+        # 步骤 1：取消所有未成交挂单（仅全局降级时执行）
+        if not strategy_tag and binance_client is not None:
             try:
                 cancelled = binance_client.cancel_all_orders()
                 log.info(f"降级流程: 已取消 {cancelled} 笔挂单")
             except Exception as e:
                 log.error(f"降级流程: 取消挂单失败 - {e}")
 
-        # 步骤 2：停止实盘下单（切换 paper mode 即可阻止实盘）
-        # 步骤 3：发出告警通知
+        tag_info = f"策略={strategy_tag}" if strategy_tag else "全局"
+
+        # 步骤 2 & 3：告警
         log.critical(
-            f"风控降级触发: 日亏损达 {loss_ratio:.2%}，"
+            f"风控降级触发 [{tag_info}]: 日亏损达 {loss_ratio:.2%}，"
             f"已触及 {self.DAILY_LOSS_THRESHOLD:.0%} 阈值，"
-            f"系统降级至模拟盘"
+            f"降级至模拟盘"
         )
 
         # 步骤 4：切换至 Paper_Trading_Mode
-        self.enable_paper_mode("daily_loss_degradation")
+        if strategy_tag:
+            self.enable_strategy_paper_mode(
+                strategy_tag, f"daily_loss_degradation_{strategy_tag}"
+            )
+        else:
+            self.enable_paper_mode("daily_loss_degradation")
 
         log.warning(
-            f"风控降级完成: 日亏损 {loss_ratio:.2%}，当前模式=Paper_Trading"
+            f"风控降级完成 [{tag_info}]: 日亏损 {loss_ratio:.2%}，"
+            f"当前模式=Paper_Trading"
         )
 
     def is_paper_mode(self) -> bool:
@@ -248,33 +279,57 @@ class RiskController:
         self._persist_runtime_state("paper_mode", "false", reason)
         log.warning(f"Paper Mode 已关闭: reason={reason}")
 
-    def record_stop_loss(self, symbol: str, direction: str) -> None:
+    # ── 策略级 Paper Mode ─────────────────────────────────
+
+    def is_strategy_paper_mode(self, strategy_tag: str) -> bool:
+        """检查指定策略是否处于模拟盘模式。全局 Paper Mode 优先。"""
+        if self._paper_mode:
+            return True
+        return self._strategy_paper_modes.get(strategy_tag, False)
+
+    def enable_strategy_paper_mode(self, strategy_tag: str, reason: str = "manual") -> None:
+        """将指定策略切换到模拟盘模式。"""
+        self._strategy_paper_modes[strategy_tag] = True
+        key = f"paper_mode:{strategy_tag}"
+        self._persist_runtime_state(key, "true", reason)
+        log.warning(f"策略 Paper Mode 已启用: strategy={strategy_tag}, reason={reason}")
+
+    def disable_strategy_paper_mode(self, strategy_tag: str, reason: str = "manual") -> None:
+        """将指定策略恢复实盘模式。"""
+        self._strategy_paper_modes[strategy_tag] = False
+        key = f"paper_mode:{strategy_tag}"
+        self._persist_runtime_state(key, "false", reason)
+        log.warning(f"策略 Paper Mode 已关闭: strategy={strategy_tag}, reason={reason}")
+
+    def record_stop_loss(self, symbol: str, direction: str, strategy_tag: str = "") -> None:
         """
         记录某币种某方向的止损事件，启动 24 小时冷却期。
 
         持久化到 SQLite（若已配置），同时写入内存列表作为回退。
+        冷却期按 (symbol, direction, strategy_tag) 隔离，不同策略互不影响。
 
         参数:
             symbol: 币种交易对符号，如 "BTCUSDT"
             direction: 交易方向，"long" 或 "short"
+            strategy_tag: 策略标签，如 "crypto_oversold_long"
         """
         now = datetime.now(timezone.utc)
 
         # 内存记录（兼容无 db_path 场景）
-        self._stop_loss_records.append((symbol, direction, now))
+        self._stop_loss_records.append((symbol, direction, strategy_tag, now))
 
         conn = self._get_conn()
         if conn is not None:
             conn.execute(
                 "INSERT INTO stop_loss_cooldowns "
-                "(symbol, direction, recorded_at) VALUES (?, ?, ?)",
-                (symbol, direction, now.isoformat()),
+                "(symbol, direction, strategy_tag, recorded_at) VALUES (?, ?, ?, ?)",
+                (symbol, direction, strategy_tag, now.isoformat()),
             )
             conn.commit()
 
         log.info(
-            f"止损记录: {symbol} {direction} 于 {now.isoformat()}，"
-            f"冷却期 {self.STOP_LOSS_COOLDOWN_HOURS} 小时"
+            f"止损记录: {symbol} {direction} strategy={strategy_tag} "
+            f"于 {now.isoformat()}，冷却期 {self.STOP_LOSS_COOLDOWN_HOURS} 小时"
         )
 
     # ----------------------------------------------------------------
@@ -310,10 +365,11 @@ class RiskController:
 
         return total_value
 
-    def _is_in_cooldown(self, symbol: str, direction: str) -> bool:
+    def _is_in_cooldown(self, symbol: str, direction: str, strategy_tag: str = "") -> bool:
         """
-        检查指定币种和方向是否处于止损冷却期内。
+        检查指定币种、方向和策略是否处于止损冷却期内。
 
+        冷却期按 (symbol, direction, strategy_tag) 隔离。
         优先查询 SQLite（若已配置），否则回退到内存列表。
         """
         now = datetime.now(timezone.utc)
@@ -323,16 +379,20 @@ class RiskController:
             cutoff = (now - timedelta(hours=self.STOP_LOSS_COOLDOWN_HOURS)).isoformat()
             cursor = conn.execute(
                 "SELECT 1 FROM stop_loss_cooldowns "
-                "WHERE symbol = ? AND direction = ? AND recorded_at > ? "
-                "LIMIT 1",
-                (symbol, direction, cutoff),
+                "WHERE symbol = ? AND direction = ? AND strategy_tag = ? "
+                "AND recorded_at > ? LIMIT 1",
+                (symbol, direction, strategy_tag, cutoff),
             )
             return cursor.fetchone() is not None
 
         # 内存回退
         cooldown_delta = timedelta(hours=self.STOP_LOSS_COOLDOWN_HOURS)
-        for rec_symbol, rec_direction, rec_time in self._stop_loss_records:
-            if rec_symbol == symbol and rec_direction == direction:
+        for rec_symbol, rec_direction, rec_tag, rec_time in self._stop_loss_records:
+            if (
+                rec_symbol == symbol
+                and rec_direction == direction
+                and rec_tag == strategy_tag
+            ):
                 # 兼容 naive datetime（旧测试用 datetime.now() 无时区）
                 if rec_time.tzinfo is None:
                     elapsed = datetime.now() - rec_time
@@ -370,6 +430,33 @@ class RiskController:
         )
         conn.commit()
         log.info(f"风控运行时状态已保存: {key}={value}, reason={reason}")
+
+    def _load_strategy_paper_modes(self) -> dict[str, bool]:
+        """从 SQLite 运行时状态恢复所有策略级 Paper Mode。"""
+        modes: dict[str, bool] = {}
+        conn = self._get_conn()
+        if conn is None:
+            return modes
+        cursor = conn.execute(
+            "SELECT key, value FROM risk_runtime_state WHERE key LIKE 'paper_mode:%'",
+        )
+        for key, value in cursor.fetchall():
+            # key 格式: "paper_mode:crypto_oversold_long"
+            strategy_tag = key.split(":", 1)[1] if ":" in key else ""
+            if strategy_tag:
+                modes[strategy_tag] = value.lower() == "true"
+        return modes
+
+    @staticmethod
+    def _migrate_cooldown_strategy_tag(conn: sqlite3.Connection) -> None:
+        """在线迁移：为旧 stop_loss_cooldowns 表补充 strategy_tag 列。"""
+        cursor = conn.execute("PRAGMA table_info(stop_loss_cooldowns)")
+        columns = {row[1] for row in cursor.fetchall()}
+        if "strategy_tag" not in columns:
+            conn.execute(
+                "ALTER TABLE stop_loss_cooldowns "
+                "ADD COLUMN strategy_tag TEXT NOT NULL DEFAULT ''"
+            )
 
     def close(self) -> None:
         """关闭数据库连接（若有）。"""

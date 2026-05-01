@@ -54,7 +54,7 @@ class MemoryStore:
         ON trade_records(closed_at DESC)
     """
 
-    # 反思日志表建表 SQL
+    # 反思日志表建表 SQL（含 strategy_tag 用于按策略独立进化）
     _CREATE_REFLECTIONS_TABLE_SQL = """
         CREATE TABLE IF NOT EXISTS reflection_logs (
             id                          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -63,7 +63,8 @@ class MemoryStore:
             avg_pnl_ratio               REAL NOT NULL,
             suggested_rating_threshold  INTEGER NOT NULL,
             suggested_risk_ratio        REAL NOT NULL,
-            reasoning                   TEXT NOT NULL
+            reasoning                   TEXT NOT NULL,
+            strategy_tag                TEXT NOT NULL DEFAULT ''
         )
     """
 
@@ -106,6 +107,7 @@ class MemoryStore:
         cursor.execute(self._CREATE_REFLECTIONS_INDEX_SQL)
         cursor.execute(self._CREATE_TRADE_SYNC_KEYS_TABLE_SQL)
         self._ensure_trade_records_strategy_tag(cursor)
+        self._ensure_reflection_logs_strategy_tag(cursor)
         self._conn.commit()
 
     @staticmethod
@@ -118,6 +120,13 @@ class MemoryStore:
             cursor.execute(
                 "ALTER TABLE trade_records "
                 "ADD COLUMN strategy_tag TEXT NOT NULL DEFAULT 'unknown'"
+            )
+
+    def _ensure_reflection_logs_strategy_tag(self, cursor) -> None:
+        if not self._has_column(cursor, "reflection_logs", "strategy_tag"):
+            cursor.execute(
+                "ALTER TABLE reflection_logs "
+                "ADD COLUMN strategy_tag TEXT NOT NULL DEFAULT ''"
             )
 
     def record_trade(self, trade: TradeRecord) -> None:
@@ -225,6 +234,34 @@ class MemoryStore:
             for row in rows
         ]
 
+    def get_recent_trades_by_strategy(
+        self, strategy_tag: str, limit: int = 50
+    ) -> List[TradeRecord]:
+        """获取指定策略最近 N 笔交易记录，按平仓时间倒序。"""
+        cursor = self._conn.execute(
+            "SELECT symbol, direction, entry_price, exit_price, pnl_amount, "
+            "hold_duration_hours, rating_score, position_size_pct, closed_at, strategy_tag "
+            "FROM trade_records WHERE strategy_tag = ? "
+            "ORDER BY closed_at DESC LIMIT ?",
+            (strategy_tag, limit),
+        )
+        rows = cursor.fetchall()
+        return [
+            TradeRecord(
+                symbol=row[0],
+                direction=TradeDirection(row[1]),
+                entry_price=row[2],
+                exit_price=row[3],
+                pnl_amount=row[4],
+                hold_duration_hours=row[5],
+                rating_score=row[6],
+                position_size_pct=row[7],
+                closed_at=datetime.fromisoformat(row[8]),
+                strategy_tag=row[9],
+            )
+            for row in rows
+        ]
+
     def compute_stats_by_strategy(
         self,
         trades: List[TradeRecord],
@@ -281,11 +318,12 @@ class MemoryStore:
         参数:
             reflection: 反思日志数据对象
         """
+        strategy_tag = getattr(reflection, "strategy_tag", "") or ""
         self._conn.execute(
             "INSERT INTO reflection_logs "
             "(created_at, win_rate, avg_pnl_ratio, suggested_rating_threshold, "
-            "suggested_risk_ratio, reasoning) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "suggested_risk_ratio, reasoning, strategy_tag) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
                 reflection.created_at.isoformat(),
                 reflection.win_rate,
@@ -293,21 +331,28 @@ class MemoryStore:
                 reflection.suggested_rating_threshold,
                 reflection.suggested_risk_ratio,
                 reflection.reasoning,
+                strategy_tag,
             ),
         )
         self._conn.commit()
 
-    def get_latest_reflection(self) -> Optional[ReflectionLog]:
+    def get_latest_reflection(self, strategy_tag: str = "") -> Optional[ReflectionLog]:
         """
         获取最新的反思日志。
+
+        参数:
+            strategy_tag: 策略标签，空字符串表示全局（兼容旧行为）
 
         返回:
             最新的反思日志对象，若无记录则返回 None
         """
         cursor = self._conn.execute(
             "SELECT created_at, win_rate, avg_pnl_ratio, "
-            "suggested_rating_threshold, suggested_risk_ratio, reasoning "
-            "FROM reflection_logs ORDER BY created_at DESC LIMIT 1",
+            "suggested_rating_threshold, suggested_risk_ratio, reasoning, "
+            "strategy_tag "
+            "FROM reflection_logs WHERE strategy_tag = ? "
+            "ORDER BY created_at DESC LIMIT 1",
+            (strategy_tag,),
         )
         row = cursor.fetchone()
         if row is None:
@@ -320,26 +365,30 @@ class MemoryStore:
             suggested_rating_threshold=row[3],
             suggested_risk_ratio=row[4],
             reasoning=row[5],
+            strategy_tag=row[6] if len(row) > 6 else "",
         )
 
     def get_evolved_params(
         self,
         default_rating_threshold: int = 6,
         default_risk_ratio: float = 0.02,
+        strategy_tag: str = "",
     ) -> tuple[int, float]:
         """
         获取进化后的策略参数，供 Pipeline 编排层注入 Skill-2/3。
 
         从最新反思日志读取建议参数，若无记录则返回默认值。
+        支持按 strategy_tag 查询特定策略的参数。
 
         参数:
             default_rating_threshold: 默认评级过滤阈值
             default_risk_ratio: 默认风险比例
+            strategy_tag: 策略标签，空字符串表示全局（兼容旧行为）
 
         返回:
             (rating_threshold, risk_ratio) 元组
         """
-        reflection = self.get_latest_reflection()
+        reflection = self.get_latest_reflection(strategy_tag=strategy_tag)
         if reflection is None:
             return default_rating_threshold, default_risk_ratio
         return (

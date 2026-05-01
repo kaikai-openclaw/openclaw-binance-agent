@@ -616,7 +616,7 @@ class TestStopLoss:
         mock_binance.place_market_order.assert_called()
         # 应记录止损事件
         mock_risk_controller.record_stop_loss.assert_called_once_with(
-            "BTCUSDT", "long"
+            "BTCUSDT", "long", strategy_tag="unknown"
         )
 
     def test_short_stop_loss(
@@ -646,7 +646,7 @@ class TestStopLoss:
 
         assert result["execution_results"][0]["status"] == "filled"
         mock_risk_controller.record_stop_loss.assert_called_once_with(
-            "BTCUSDT", "short"
+            "BTCUSDT", "short", strategy_tag="unknown"
         )
 
 

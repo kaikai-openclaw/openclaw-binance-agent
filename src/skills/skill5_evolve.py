@@ -316,23 +316,30 @@ class Skill5Evolve(BaseSkill):
 
     def _compute_evolution(self) -> dict:
         """
-        计算策略统计并执行调优逻辑。
+        按策略独立计算统计并执行调优逻辑。
 
-        需求 5.4: 基于最近 50 笔交易计算胜率和平均盈亏比
-        需求 5.5: 胜率低于 40% 时收紧参数，高于 60% 时放松参数
-        需求 5.6: 基于反思日志调整评级阈值和风险比例
-        需求 5.7: 交易记录不足 10 笔时跳过进化计算
+        对每个 strategy_tag 独立执行：
+        - 获取该策略最近 50 笔交易
+        - 从该策略的反思日志读取当前参数
+        - 独立计算胜率并决定收紧/放松
+        - 独立判断 Paper Mode 恢复
 
         返回:
-            进化数据字典，符合 skill5_output.json 中 evolution 的 Schema
+            进化数据字典，包含全局汇总和按策略的独立结果
         """
-        # 获取最近 50 笔交易记录
+        # 获取全局最近交易用于汇总统计
         recent_trades = self._memory_store.get_recent_trades(limit=50)
         trade_count = len(recent_trades)
+        strategy_stats = self._strategy_stats_payload(recent_trades)
 
-        # 需求 5.7: 交易记录不足 10 笔时跳过
+        # 按策略分组
+        trades_by_strategy: dict[str, list] = {}
+        for t in recent_trades:
+            tag = t.strategy_tag or "unknown"
+            trades_by_strategy.setdefault(tag, []).append(t)
+
+        # 全局不足 10 笔时跳过
         if trade_count < 10:
-            strategy_stats = self._strategy_stats_payload(recent_trades)
             log.info(
                 f"[{self.name}] 交易记录不足 10 笔 "
                 f"({trade_count} 笔)，跳过进化计算"
@@ -351,55 +358,29 @@ class Skill5Evolve(BaseSkill):
                 "current_rating_threshold": DEFAULT_RATING_THRESHOLD,
                 "current_risk_ratio": DEFAULT_RISK_RATIO,
                 "strategy_stats": strategy_stats,
+                "per_strategy_evolution": {},
             }
 
-        # 需求 5.4: 计算策略统计
-        stats = self._memory_store.compute_stats(recent_trades)
-        strategy_stats = self._strategy_stats_payload(recent_trades)
-
-        # 从上一轮反思日志读取当前参数（闭合反馈环）
-        latest_reflection = self._memory_store.get_latest_reflection()
-        if latest_reflection is not None:
-            current_threshold = latest_reflection.suggested_rating_threshold
-            current_risk = latest_reflection.suggested_risk_ratio
-        else:
-            current_threshold = DEFAULT_RATING_THRESHOLD
-            current_risk = DEFAULT_RISK_RATIO
-
-        # 需求 5.5 & 5.6: 渐进式双向调优
-        reflection = compute_evolution_adjustment(
-            recent_trades,
-            current_rating_threshold=current_threshold,
-            current_risk_ratio=current_risk,
-        )
-
-        adjustment_applied = False
-        adjustment_detail = "胜率正常，维持当前策略参数"
-
-        if reflection is not None:
-            # 保存反思日志到 Memory_Store
-            try:
-                self._memory_store.save_reflection(reflection)
-            except Exception as exc:
-                log.error(
-                    f"[{self.name}] 保存反思日志失败: {exc}"
-                )
-
-            # 需求 5.6: 判断是否需要调整参数
-            if (
-                reflection.suggested_rating_threshold != current_threshold
-                or reflection.suggested_risk_ratio != current_risk
-            ):
-                adjustment_applied = True
-                adjustment_detail = reflection.reasoning
-            else:
-                adjustment_detail = reflection.reasoning
-
-        # P0-4：额外计算净胜率/净均盈亏（不改动毛统计，确保不篡改原始数据）
+        # 全局统计
+        global_stats = self._memory_store.compute_stats(recent_trades)
         net_win_rate, net_avg_pnl = self._compute_net_stats(recent_trades)
 
+        # 按策略独立进化
+        per_strategy: dict[str, dict] = {}
+        any_adjustment = False
+        all_details: list[str] = []
+
+        for tag, tag_trades in trades_by_strategy.items():
+            per_result = self._evolve_single_strategy(tag, tag_trades)
+            per_strategy[tag] = per_result
+            if per_result.get("adjustment_applied"):
+                any_adjustment = True
+            detail = per_result.get("adjustment_detail", "")
+            if detail:
+                all_details.append(f"[{tag}] {detail}")
+
+        # 全局恢复检查（兼容旧行为）
         recovery_suggested = False
-        # 需求：乒乓效应防护滞后恢复，连续 5 笔模拟盘且胜率 >=60% 且净盈亏>0 则恢复
         account = self._account_state_provider()
         if account.is_paper_mode and self._risk_controller is not None:
             paper_trades = [t for t in recent_trades if getattr(t, "is_paper", False)]
@@ -409,28 +390,117 @@ class Skill5Evolve(BaseSkill):
                 total_pnl = sum(t.pnl_amount for t in recent_paper)
                 paper_win_rate = wins / len(recent_paper) * 100
                 if paper_win_rate >= 60.0 and total_pnl > 0:
-                    log.info(f"[{self.name}] 模拟盘近期 5 笔交易胜率达 {paper_win_rate}% 且净利润为正，满足滞后恢复条件，自动解除模拟盘！")
-                    self._risk_controller.disable_paper_mode(reason="auto_recovery_performance_met")
+                    log.info(
+                        f"[{self.name}] 全局模拟盘近期 5 笔胜率 {paper_win_rate}%，"
+                        f"净利为正，自动解除全局模拟盘"
+                    )
+                    self._risk_controller.disable_paper_mode(
+                        reason="auto_recovery_global"
+                    )
                     recovery_suggested = True
+
+        # 取全局最新反思日志的参数作为兼容输出
+        latest = self._memory_store.get_latest_reflection(strategy_tag="")
+        current_threshold = (
+            latest.suggested_rating_threshold if latest else DEFAULT_RATING_THRESHOLD
+        )
+        current_risk = (
+            latest.suggested_risk_ratio if latest else DEFAULT_RISK_RATIO
+        )
+
+        return {
+            "win_rate": round(global_stats.win_rate, 2),
+            "avg_pnl_ratio": round(global_stats.avg_pnl_ratio, 4),
+            "net_win_rate": round(net_win_rate, 2),
+            "net_avg_pnl_amount": round(net_avg_pnl, 4),
+            "trade_count": trade_count,
+            "adjustment_applied": any_adjustment,
+            "adjustment_detail": "; ".join(all_details) if all_details else "各策略参数维持不变",
+            "current_rating_threshold": current_threshold,
+            "current_risk_ratio": current_risk,
+            "strategy_stats": strategy_stats,
+            "per_strategy_evolution": per_strategy,
+            "recovery_suggested": recovery_suggested,
+        }
+
+    def _evolve_single_strategy(self, strategy_tag: str, trades: list) -> dict:
+        """对单个策略执行独立进化计算和 Paper Mode 恢复。"""
+        trade_count = len(trades)
+        stats = self._memory_store.compute_stats(trades)
+
+        if trade_count < 10:
+            return {
+                "win_rate": round(stats.win_rate, 2),
+                "trade_count": trade_count,
+                "adjustment_applied": False,
+                "adjustment_detail": f"交易不足 10 笔（{trade_count}），跳过",
+            }
+
+        # 读取该策略的反思日志
+        latest = self._memory_store.get_latest_reflection(strategy_tag=strategy_tag)
+        if latest is not None:
+            current_threshold = latest.suggested_rating_threshold
+            current_risk = latest.suggested_risk_ratio
+        else:
+            current_threshold = DEFAULT_RATING_THRESHOLD
+            current_risk = DEFAULT_RISK_RATIO
+
+        reflection = compute_evolution_adjustment(
+            trades,
+            current_rating_threshold=current_threshold,
+            current_risk_ratio=current_risk,
+            strategy_tag=strategy_tag,
+        )
+
+        adjustment_applied = False
+        adjustment_detail = "维持当前参数"
+
+        if reflection is not None:
+            try:
+                self._memory_store.save_reflection(reflection)
+            except Exception as exc:
+                log.error(f"[{self.name}] 保存 {strategy_tag} 反思日志失败: {exc}")
+
+            if (
+                reflection.suggested_rating_threshold != current_threshold
+                or reflection.suggested_risk_ratio != current_risk
+            ):
+                adjustment_applied = True
+            adjustment_detail = reflection.reasoning
+
+        # 策略级 Paper Mode 恢复
+        recovery = False
+        if self._risk_controller is not None:
+            if self._risk_controller.is_strategy_paper_mode(strategy_tag):
+                paper_trades = [t for t in trades if getattr(t, "is_paper", False)]
+                if len(paper_trades) >= 5:
+                    recent_paper = paper_trades[:5]
+                    wins = sum(1 for t in recent_paper if t.pnl_amount > 0)
+                    total_pnl = sum(t.pnl_amount for t in recent_paper)
+                    wr = wins / len(recent_paper) * 100
+                    if wr >= 60.0 and total_pnl > 0:
+                        log.info(
+                            f"[{self.name}] 策略 {strategy_tag} 模拟盘近 5 笔"
+                            f"胜率 {wr}%，净利为正，自动恢复实盘"
+                        )
+                        self._risk_controller.disable_strategy_paper_mode(
+                            strategy_tag,
+                            reason=f"auto_recovery_{strategy_tag}",
+                        )
+                        recovery = True
 
         return {
             "win_rate": round(stats.win_rate, 2),
-            "avg_pnl_ratio": round(stats.avg_pnl_ratio, 4),
-            "net_win_rate": round(net_win_rate, 2),
-            "net_avg_pnl_amount": round(net_avg_pnl, 4),
             "trade_count": trade_count,
             "adjustment_applied": adjustment_applied,
             "adjustment_detail": adjustment_detail,
             "current_rating_threshold": (
-                reflection.suggested_rating_threshold
-                if reflection else current_threshold
+                reflection.suggested_rating_threshold if reflection else current_threshold
             ),
             "current_risk_ratio": (
-                reflection.suggested_risk_ratio
-                if reflection else current_risk
+                reflection.suggested_risk_ratio if reflection else current_risk
             ),
-            "strategy_stats": strategy_stats,
-            "recovery_suggested": recovery_suggested,
+            "recovery_suggested": recovery,
         }
 
     def _strategy_stats_payload(self, trades: List[TradeRecord]) -> dict:

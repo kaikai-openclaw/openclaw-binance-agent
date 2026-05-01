@@ -327,7 +327,7 @@ def run_report(args: argparse.Namespace) -> dict:
                     trailing_stop_ratio=0.35 if args.mode == "long" else 0.5,
                     trailing_activation_mult=1.5 if args.mode == "long" else 1.0,
                     trailing_activation_mult_hv=2.0 if args.mode == "long" else 1.5,
-                    high_vol_tp_mult=8.0 if args.mode == "long" else 6.0,
+                    high_vol_tp_mult=4.0 if args.mode == "long" else 3.0,
                 )
                 s3_input_id = state_store.save("skill3_input", {"input_state_id": s2_id})
                 s3_id = skill3.execute(s3_input_id)

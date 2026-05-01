@@ -331,7 +331,7 @@ def run_report(args: argparse.Namespace) -> dict:
                     trailing_stop_ratio=0.5 if args.mode == "1h" else 0.4,
                     trailing_activation_mult=1.0 if args.mode == "1h" else 1.3,
                     trailing_activation_mult_hv=1.5 if args.mode == "1h" else 1.8,
-                    high_vol_tp_mult=6.0 if args.mode == "1h" else 7.0,
+                    high_vol_tp_mult=3.0 if args.mode == "1h" else 4.0,
                     max_trades=2 if args.mode == "1h" else 3,
                 )
                 s3_input_id = state_store.save("skill3_input", {"input_state_id": s2_id})

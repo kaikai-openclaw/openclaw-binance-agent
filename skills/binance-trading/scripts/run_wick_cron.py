@@ -327,7 +327,7 @@ def run_report(args: argparse.Namespace) -> dict:
                 trailing_stop_ratio=0.6,    # 更激进的追踪止损
                 trailing_activation_mult=0.8,
                 trailing_activation_mult_hv=1.2,
-                high_vol_tp_mult=5.0,
+                high_vol_tp_mult=3.0,
             )
             s3_input_id = state_store.save("skill3_input", {"input_state_id": s2_id})
             s3_id = skill3.execute(s3_input_id)

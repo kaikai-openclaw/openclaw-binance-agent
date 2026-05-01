@@ -65,7 +65,7 @@ TAKE_PROFIT_PCT = 0.06     # 止盈幅度 6%（盈亏比 2:1）
 DEFAULT_ATR_STOP_MULT = 1.5     # 止损距离 = ATR × 1.5
 DEFAULT_ATR_TP_MULT = 3.0       # 止盈距离 = ATR × 3.0（盈亏比 2:1）
 DEFAULT_MIN_STOP_PCT = 0.005    # 止损距离下限 0.5%（防止极低波动下 SL 贴得过近被秒扫）
-DEFAULT_MAX_STOP_PCT = 0.18     # 止损距离上限 18%（为超跌策略放宽，允许抄底极度恐慌的高波动山寨币）
+DEFAULT_MAX_STOP_PCT = 0.07     # 止损距离上限 7%（10x 杠杆下保证金最多亏 70%，留 30% 安全边际防滑点强平）
 
 # 入场区间宽度常量
 ENTRY_SPREAD_MIN = 0.01    # 最窄区间（置信度 100% 时）
@@ -79,7 +79,7 @@ DEFAULT_MIN_NET_RR_RATIO = 1.2
 DEFAULT_TRAILING_STOP_RATIO = 0.5
 DEFAULT_TRAILING_ACTIVATION_MULT = 1.0       # 常规币 trailing stop 激活距离 = 止损距离 × 此值
 DEFAULT_TRAILING_ACTIVATION_MULT_HV = 1.5    # 高波动币 trailing stop 激活距离乘数
-DEFAULT_HIGH_VOL_TP_MULT = 6.0               # 高波动币止盈乘数覆盖值
+DEFAULT_HIGH_VOL_TP_MULT = 3.0               # 高波动币止盈乘数（与常规币保持同等盈亏比，不再放大）
 
 # 市场价格提供者类型：接收 symbol，返回当前市场价格（None 或 <=0 表示不可用）
 MarketPriceProvider = Callable[[str], Optional[float]]
@@ -675,9 +675,12 @@ class Skill3Strategy(BaseSkill):
         return True
 
     def _get_dynamic_multipliers(self, atr_pct: float) -> tuple[float, float]:
-        """对于高波动币种（ATR > 5%），动态放宽止损乘数以防止被插针扫损"""
+        """对于高波动币种（ATR > 5%），使用配置的高波动止盈乘数。
+
+        止损乘数不再放大——max_stop_pct (7%) 会自动 clip 过大的止损距离。
+        """
         if atr_pct >= 5.0:
-            return max(self._atr_stop_mult, 2.0), max(self._atr_tp_mult, self._high_vol_tp_mult)
+            return self._atr_stop_mult, max(self._atr_tp_mult, self._high_vol_tp_mult)
         return self._atr_stop_mult, self._atr_tp_mult
 
     def _normalize_quantity_for_exchange(

@@ -156,6 +156,16 @@ class RiskController:
             log.warning(f"风控拒绝: {reason}")
             return ValidationResult(passed=False, reason=reason)
 
+        # 断言 0.5：同 symbol 已有持仓则拒绝（防止跨策略重复开仓）
+        existing_value = self._get_position_value(order.symbol, account)
+        if existing_value > 0:
+            reason = (
+                f"{order.symbol} 已有持仓（价值 {existing_value:.2f}），"
+                f"禁止重复开仓"
+            )
+            log.warning(f"风控拒绝: {reason}")
+            return ValidationResult(passed=False, reason=reason)
+
         total_balance = account.total_balance
 
         # 断言 1：单笔保证金 <= 总资金 20%
@@ -169,14 +179,12 @@ class RiskController:
             log.warning(f"风控拒绝: {reason}")
             return ValidationResult(passed=False, reason=reason)
 
-        # 断言 2：单币累计持仓 <= 总资金 30%
-        existing_value = self._get_position_value(order.symbol, account)
+        # 断言 2：单币累计持仓 <= 总资金 40%
         new_order_value = order.quantity * order.price
-        new_total = existing_value + new_order_value
         coin_limit = total_balance * self.MAX_SINGLE_COIN_RATIO
-        if new_total > coin_limit:
+        if new_order_value > coin_limit:
             reason = (
-                f"单币累计持仓 {new_total:.2f} 超过限额 {coin_limit:.2f}"
+                f"单币持仓价值 {new_order_value:.2f} 超过限额 {coin_limit:.2f}"
                 f"（总资金 {total_balance:.2f} × {self.MAX_SINGLE_COIN_RATIO:.0%}）"
             )
             log.warning(f"风控拒绝: {reason}")

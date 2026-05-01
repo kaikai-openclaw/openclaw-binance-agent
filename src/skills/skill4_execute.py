@@ -237,6 +237,7 @@ class Skill4Execute(BaseSkill):
                         status=OrderStatus.EXECUTION_FAILED.value,
                         executed_at=datetime.now(timezone.utc).isoformat(),
                         reason=f"concurrent_exception: {exc}",
+                        strategy_tag=plan.get("strategy_tag", "unknown"),
                     )
 
         return results
@@ -283,6 +284,7 @@ class Skill4Execute(BaseSkill):
                 status=OrderStatus.EXECUTION_FAILED.value,
                 executed_at=now_str,
                 reason="数量计算为零",
+                strategy_tag=strategy_tag,
             )
 
         normalized_quantity = self._normalize_quantity_for_exchange(
@@ -297,6 +299,7 @@ class Skill4Execute(BaseSkill):
                 status=OrderStatus.REJECTED_BY_RISK.value,
                 executed_at=now_str,
                 reason="数量不满足 Binance LOT_SIZE 或最小名义金额要求",
+                strategy_tag=strategy_tag,
             )
         if normalized_quantity != quantity:
             log.info(
@@ -327,6 +330,7 @@ class Skill4Execute(BaseSkill):
                 status=OrderStatus.REJECTED_BY_RISK.value,
                 executed_at=now_str,
                 reason=validation.reason,
+                strategy_tag=strategy_tag,
             )
 
         # 需求 4.12：Paper Mode 下不提交真实订单
@@ -351,6 +355,7 @@ class Skill4Execute(BaseSkill):
                 status=OrderStatus.EXECUTION_FAILED.value,
                 executed_at=now_str,
                 reason=f"设置 {symbol} 杠杆为 {self._leverage}x 失败",
+                strategy_tag=strategy_tag,
             )
 
         # 需求 4.3：提交限价订单
@@ -370,6 +375,7 @@ class Skill4Execute(BaseSkill):
                 status=OrderStatus.EXECUTION_FAILED.value,
                 executed_at=now_str,
                 reason=str(exc),
+                strategy_tag=strategy_tag,
             )
 
         if not self._monitor_until_close:

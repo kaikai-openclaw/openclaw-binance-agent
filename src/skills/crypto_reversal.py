@@ -322,6 +322,7 @@ class _CryptoReversalBase(BaseSkill):
                     "signal_details": result["signal_details"],
                     "atr_pct": atr_pct,
                     "signal_direction": "long",
+                    "strategy_tag": self.name,
                     "collected_at": datetime.now(timezone.utc).isoformat(),
                 })
             except Exception as exc:

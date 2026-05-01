@@ -346,6 +346,7 @@ class _CryptoOverboughtBase(BaseSkill):
                     "signal_details": result["signal_details"],
                     "atr_pct": atr_pct,
                     "signal_direction": "short",
+                    "strategy_tag": self.name,
                     "collected_at": datetime.now(timezone.utc).isoformat(),
                 })
             except Exception as exc:

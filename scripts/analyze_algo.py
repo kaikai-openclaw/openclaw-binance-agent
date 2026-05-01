@@ -43,7 +43,7 @@ skill2 = Skill2Analyze(
     input_schema=in_schema,
     output_schema=out_schema,
     trading_agents=ta_module,
-    rating_threshold=7,
+    rating_threshold=6,
 )
 
 # 4. 伪造 Skill-1 输出（只测 ALGOUSDT）

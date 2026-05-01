@@ -39,7 +39,7 @@ def main():
         input_schema=in_schema,
         output_schema=out_schema,
         trading_agents=ta_module,
-        rating_threshold=7  # 设置合格阈值
+        rating_threshold=6  # 设置合格阈值
     )
     
     # 2. 伪造 Skill-1 的输出

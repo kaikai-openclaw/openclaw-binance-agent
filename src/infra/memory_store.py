@@ -370,7 +370,7 @@ class MemoryStore:
 
     def get_evolved_params(
         self,
-        default_rating_threshold: int = 7,
+        default_rating_threshold: int = 6,
         default_risk_ratio: float = 0.02,
         strategy_tag: str = "",
     ) -> tuple[int, float]:

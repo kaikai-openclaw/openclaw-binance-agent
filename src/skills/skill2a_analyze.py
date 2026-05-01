@@ -28,7 +28,7 @@ log = logging.getLogger(__name__)
 
 AnalyzerFn = Callable[[str, Dict[str, Any]], Dict[str, Any]]
 
-DEFAULT_RATING_THRESHOLD = 7
+DEFAULT_RATING_THRESHOLD = 6
 ANALYSIS_TIMEOUT = 1800  # 30 分钟
 
 

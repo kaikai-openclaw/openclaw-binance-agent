@@ -55,7 +55,7 @@ print("\n🤖 [Skill-2] 初始化 TradingAgents (max_debate_rounds=0)...")
 analyzer = create_trading_agents_analyzer(max_debate_rounds=0)
 ta_module = TradingAgentsModule(analyzer=analyzer)
 skill2 = Skill2Analyze(state_store=store, input_schema=s2_in_schema, output_schema=s2_out_schema,
-                       trading_agents=ta_module, rating_threshold=7)
+                       trading_agents=ta_module, rating_threshold=6)
 
 print("🔍 [Skill-2] 开始深度分析...")
 t0 = time.time()

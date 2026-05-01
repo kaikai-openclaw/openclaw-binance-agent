@@ -149,7 +149,7 @@ class TestNormalExecution:
 
         analyzer = MagicMock(side_effect=[
             {"rating_score": 8, "signal": "long", "confidence": 85.0},
-            {"rating_score": 7, "signal": "short", "confidence": 60.0},
+            {"rating_score": 6, "signal": "short", "confidence": 60.0},
         ])
 
         skill = _make_skill(state_store, analyzer)
@@ -228,7 +228,7 @@ class TestRatingFilter:
         state_id = state_store.save("skill1_collect", upstream)
 
         analyzer = MagicMock(return_value={
-            "rating_score": 7, "signal": "hold", "confidence": 50.0,
+            "rating_score": 6, "signal": "hold", "confidence": 50.0,
         })
 
         skill = _make_skill(state_store, analyzer)
@@ -247,7 +247,7 @@ class TestRatingFilter:
         state_id = state_store.save("skill1_collect", upstream)
 
         analyzer = MagicMock(return_value={
-            "rating_score": 7, "signal": "long", "confidence": 70.0,
+            "rating_score": 6, "signal": "long", "confidence": 70.0,
         })
 
         # 阈值设为 8，rating_score=7 应被过滤
@@ -305,7 +305,7 @@ class TestErrorHandling:
         trading_agents_mock = MagicMock()
         trading_agents_mock.analyze.side_effect = [
             TimeoutError("BTCUSDT 分析超时"),
-            {"rating_score": 7, "signal": "long", "confidence": 70.0},
+            {"rating_score": 6, "signal": "long", "confidence": 70.0},
         ]
 
         skill = Skill2Analyze(
@@ -504,7 +504,7 @@ class TestEdgeCases:
         state_id = state_store.save("skill1_collect", upstream)
 
         analyzer = MagicMock(return_value={
-            "rating_score": 7.5, "signal": "long", "confidence": 85.0,
+            "rating_score": 6.5, "signal": "long", "confidence": 85.0,
         })
 
         skill = _make_skill(state_store, analyzer)

@@ -330,6 +330,7 @@ def metadata_by_symbol(execution_results: list[dict]) -> dict[str, dict[str, Any
             "rating_score": result.get("rating_score", 6),
             "position_size_pct": result.get("position_size_pct", 0.0),
             "hold_duration_hours": result.get("hold_duration_hours", 0.0),
+            "strategy_tag": result.get("strategy_tag", "unknown"),
         }
     return metadata
 

@@ -561,6 +561,7 @@ class Skill4Execute(BaseSkill):
                     quantity=position_amt,
                     stop_loss_price=stop_loss_price,
                     take_profit_price=take_profit_price,
+                    trailing_stop=trailing_stop or {},
                 )
             elif position_amt > 0:
                 position_opened = True

@@ -265,6 +265,17 @@ class BinanceFapiClient:
                 with self._network_lock:
                     self._network_was_down = True
                 last_error_detail = str(e)
+
+                # 安全措施：POST 请求（下单）超时后不自动重试，
+                # 因为订单可能已在 Binance 侧成功，重试会导致重复下单。
+                # 由调用方（Skill-4）通过查询挂单/持仓来判断是否需要重新下单。
+                if method.upper() == "POST" and isinstance(e, requests.exceptions.Timeout):
+                    log.error(
+                        f"POST 请求 {path} 超时，不自动重试以避免重复下单。"
+                        f"请通过查询接口确认订单状态。"
+                    )
+                    raise
+
                 backoff = calculate_backoff(attempt)
                 log.warning(
                     f"请求 {path} 失败（{type(e).__name__}），"

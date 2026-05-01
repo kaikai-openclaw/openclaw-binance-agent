@@ -361,6 +361,27 @@ class Skill4Execute(BaseSkill):
         # 需求 4.3：提交限价订单
         side = "BUY" if direction == TradeDirection.LONG else "SELL"
 
+        # 安全检查：如果该币种已有同方向挂单，跳过（防止并发 cron 或 API 超时重复下单）
+        try:
+            existing_orders = self._binance_client.get_open_orders(symbol)
+            for eo in existing_orders:
+                eo_dict = eo if isinstance(eo, dict) else (eo.raw if hasattr(eo, 'raw') else {})
+                if (str(eo_dict.get("side", "")).upper() == side
+                        and str(eo_dict.get("type", "")).upper() == "LIMIT"):
+                    log.warning(
+                        f"[{self.name}] {symbol} 已有同方向 LIMIT 挂单，跳过避免重复下单"
+                    )
+                    return self._make_result(
+                        symbol=symbol,
+                        direction=direction_str,
+                        status=OrderStatus.EXECUTION_FAILED.value,
+                        executed_at=now_str,
+                        reason="duplicate_entry_order_exists",
+                        strategy_tag=strategy_tag,
+                    )
+        except Exception as exc:
+            log.warning(f"[{self.name}] {symbol} 查询挂单失败，继续下单: {exc}")
+
         # 非阻塞模式下记录下单前的持仓量，用于判断入场是否成交（区分新仓 vs 旧仓），
         # 避免误清已有仓位的保护单。阻塞模式走 _monitor_position，不需要此检查。
         pre_order_position_amt = 0.0

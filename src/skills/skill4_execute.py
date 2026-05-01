@@ -360,6 +360,17 @@ class Skill4Execute(BaseSkill):
 
         # 需求 4.3：提交限价订单
         side = "BUY" if direction == TradeDirection.LONG else "SELL"
+
+        # 非阻塞模式下记录下单前的持仓量，用于判断入场是否成交（区分新仓 vs 旧仓），
+        # 避免误清已有仓位的保护单。阻塞模式走 _monitor_position，不需要此检查。
+        pre_order_position_amt = 0.0
+        if not self._monitor_until_close:
+            try:
+                pre_risk = self._binance_client.get_position_risk(symbol)
+                pre_order_position_amt = abs(pre_risk.position_amt)
+            except Exception:
+                pass
+
         try:
             order_result = self._binance_client.place_limit_order(
                 symbol=symbol,
@@ -388,6 +399,7 @@ class Skill4Execute(BaseSkill):
                 planned_quantity=quantity,
                 order_id=order_result.order_id,
                 trailing_stop=trailing_stop,
+                pre_order_position_amt=pre_order_position_amt,
             )
             return self._make_result(
                 symbol=symbol,
@@ -715,6 +727,7 @@ class Skill4Execute(BaseSkill):
         planned_quantity: float,
         order_id: str,
         trailing_stop: Optional[dict] = None,
+        pre_order_position_amt: float = 0.0,
     ) -> dict:
         """
         非阻塞执行模式：短暂确认入场成交，挂好服务端保护后返回。
@@ -722,11 +735,16 @@ class Skill4Execute(BaseSkill):
         若限价单在短时间内未成交，则主动撤单，避免本轮结束后订单才成交而
         暴露无保护仓位。
 
+        通过 pre_order_position_amt（下单前的持仓量）判断持仓是否因本次
+        入场而增加，避免误清已有仓位的保护单。
+
         若 trailing_stop 含有效配置（trail_pct > 0），在 SL/TP 挂单后
         同步向 Binance 提交 TRAILING_STOP_MARKET 条件单，使移动止损
         在非阻塞生产模式下也能由服务端执行（进程崩溃不丢失保护）。
         """
         start_time = time.monotonic()
+        initial_position_amt = pre_order_position_amt
+
         while True:
             try:
                 pos_risk = self._binance_client.get_position_risk(symbol)
@@ -737,8 +755,39 @@ class Skill4Execute(BaseSkill):
             if pos_risk is not None:
                 position_amt = abs(pos_risk.position_amt)
                 if position_amt > 0:
-                    # 入场成交后、挂保护单前：检测并清理已有同方向保护条件单，
-                    # 避免 closePosition=True 重复挂载触发 Binance -4130 冲突
+                    # 判断是否是本次入场导致的持仓变化：
+                    # 1. 持仓量比下单前增加了 → 新入场成交
+                    # 2. 下单前无仓位（initial=0）→ 有仓位就是新入场
+                    # 3. 入场单已不在挂单列表中 → 已成交（兼容加仓场景）
+                    position_increased = position_amt > initial_position_amt * 1.001
+                    was_flat = initial_position_amt <= 0
+                    entry_order_gone = not self._is_order_open(symbol, order_id)
+                    is_new_entry = position_increased or was_flat or entry_order_gone
+
+                    if not is_new_entry:
+                        # 持仓量没有增加，说明入场单还没成交，
+                        # 这是之前就存在的仓位，不要动它的保护单
+                        elapsed = time.monotonic() - start_time
+                        if elapsed >= self._entry_confirm_timeout:
+                            if self._is_order_open(symbol, order_id):
+                                self._cancel_entry_order(symbol)
+                                return {
+                                    "status": OrderStatus.EXECUTION_FAILED.value,
+                                    "reason": "entry_not_filled_existing_position",
+                                    "entry_price": 0.0,
+                                    "quantity": 0.0,
+                                }
+                            return {
+                                "status": OrderStatus.EXECUTION_FAILED.value,
+                                "reason": "entry_order_gone_existing_position",
+                                "entry_price": 0.0,
+                                "quantity": 0.0,
+                            }
+                        if self._poll_interval > 0:
+                            time.sleep(min(ENTRY_CONFIRM_POLL_INTERVAL, self._entry_confirm_timeout - elapsed))
+                        continue
+
+                    # 本次入场成交，清理旧保护单并重挂
                     self._cancel_conflicting_protection_orders(symbol, close_side)
                     protection_placed = self._place_server_sl_tp(
                         symbol=symbol,

@@ -92,8 +92,8 @@ MIN_SHADOW_RATIO = 2.0                  # 影线 / 实体 ≥ 2 倍才算插针
 STRONG_SHADOW_RATIO = 4.0               # ≥ 4 倍为强插针
 
 # 插针幅度阈值（影线尖端偏离收盘价的百分比）
-MIN_WICK_DEPTH_PCT = 2.0               # 最小插针深度 2%
-STRONG_WICK_DEPTH_PCT = 5.0            # 强插针深度 5%+
+MIN_WICK_DEPTH_PCT = 3.0               # 最小插针深度 3%
+STRONG_WICK_DEPTH_PCT = 8.0            # 强插针深度 8%+
 
 # 最低价格过滤（排除低价币精度问题导致的假插针）
 MIN_PRICE_FILTER = 0.05
@@ -200,8 +200,8 @@ def detect_wick(
     upper_shadow = high - max(open_price, close)
     lower_shadow = min(open_price, close) - low
 
-    # 硬门槛：影线深度必须 ≥ 1%（排除微波动十字星）
-    min_depth_abs = close * 0.01 if close > 0 else 0
+    # 硬门槛：影线深度必须 ≥ 2%（排除微波动和普通长影线）
+    min_depth_abs = close * 0.02 if close > 0 else 0
     if lower_shadow < min_depth_abs and upper_shadow < min_depth_abs:
         return None
 

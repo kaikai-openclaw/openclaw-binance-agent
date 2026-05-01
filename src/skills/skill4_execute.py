@@ -1165,7 +1165,7 @@ class Skill4Execute(BaseSkill):
                     f"[{self.name}] {symbol} 已有持仓触发保护性止损: "
                     f"当前价={current_price}, 止损价={stop_loss_price}"
                 )
-                self._risk_controller.record_stop_loss(symbol, direction.value, strategy_tag="")
+                self._risk_controller.record_stop_loss(symbol, direction.value, strategy_tag="existing_position")
                 self._cancel_algo_orders_safe(symbol)
                 self._close_position(
                     symbol, close_side, quantity, "existing_stop_loss", time.monotonic()

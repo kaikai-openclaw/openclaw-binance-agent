@@ -127,7 +127,7 @@ H1_MIN_KLINES = 60
 H1_RSI_THRESHOLD = 85.0          # 1h RSI > 85 = 极端超买（从 82 收紧）
 H1_BIAS_THRESHOLD = 10.0         # 1h 乖离率 > +10%（从 8 收紧）
 H1_CONSECUTIVE_UP = 10           # 连续上涨 ≥ 10 根 1h = 10 小时（从 8 收紧）
-H1_RALLY_PCT = 12.0              # 近 N 根累计涨幅 > +12%（从 10 收紧）
+H1_RALLY_PCT = 20.0              # 近 N 根累计涨幅 > +20%（从 12 收紧）
 H1_RALLY_LOOKBACK = 24           # 回看 24 根 1h = 1 天
 H1_RISE_LOOKBACK = 72            # 距低点涨幅回看 72 根 1h = 3 天
 

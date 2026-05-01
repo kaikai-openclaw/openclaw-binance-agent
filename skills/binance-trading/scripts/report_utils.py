@@ -481,3 +481,24 @@ def render_warnings_markdown(warnings: list[str], errors: list[str]) -> list[str
     for e in errors:
         lines.append(f"- ERROR: {e}")
     return lines
+
+
+# ── Telegram 安全截断 ─────────────────────────────────────
+
+# Telegram sendMessage 上限 4096 字符，预留 500 给 agent 可能添加的前缀/后缀
+TELEGRAM_SAFE_LIMIT = 3500
+
+
+def truncate_for_telegram(text: str, limit: int = TELEGRAM_SAFE_LIMIT) -> str:
+    """截断报告文本以适应 Telegram 消息长度限制。
+
+    在最后一个完整行处截断，并附加截断提示。
+    """
+    if len(text) <= limit:
+        return text
+    truncated = text[:limit]
+    # 在最后一个换行处截断，保持行完整
+    last_newline = truncated.rfind("\n")
+    if last_newline > limit * 0.5:
+        truncated = truncated[:last_newline]
+    return truncated + "\n\n[报告已截断，完整内容请查看日志]"

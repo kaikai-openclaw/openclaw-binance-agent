@@ -59,6 +59,7 @@ from report_utils import (
     render_protection_markdown,
     render_account_markdown,
     render_warnings_markdown,
+    truncate_for_telegram,
 )
 
 
@@ -212,7 +213,7 @@ def render_markdown(report: dict) -> str:
         lines.append("")
         lines.extend(warn_lines)
 
-    return "\n".join(lines)
+    return truncate_for_telegram("\n".join(lines))
 
 
 def run_report(args: argparse.Namespace) -> dict:

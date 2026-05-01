@@ -463,7 +463,8 @@ class Skill3Strategy(BaseSkill):
 
         plan["trailing_stop"] = {
             "activation_price": round(activation_price, 8),
-            "trail_pct": round(sl_dist_pct * DEFAULT_TRAILING_STOP_RATIO * 100, 4),
+            # Binance callbackRate 精度为 1 位小数（步进 0.1%），源头即规整
+            "trail_pct": round(sl_dist_pct * DEFAULT_TRAILING_STOP_RATIO * 100, 1),
         }
         return plan
 

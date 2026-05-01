@@ -234,7 +234,7 @@ class Skill4Execute(BaseSkill):
                     results[idx] = self._make_result(
                         symbol=symbol,
                         direction=plan.get("direction", "unknown"),
-                        status="EXECUTION_FAILED",
+                        status=OrderStatus.EXECUTION_FAILED.value,
                         executed_at=datetime.now(timezone.utc).isoformat(),
                         reason=f"concurrent_exception: {exc}",
                     )
@@ -803,7 +803,7 @@ class Skill4Execute(BaseSkill):
         """统一构造监控结果并补充持仓时长。"""
         elapsed_hours = max(0.0, (time.monotonic() - start_time) / 3600.0)
         return {
-            "status": status,
+            "status": status.lower() if isinstance(status, str) else status,
             "close_price": close_price,
             "fee": fee,
             "reason": reason,
@@ -1080,10 +1080,10 @@ class Skill4Execute(BaseSkill):
         trail_pct = float(trailing_stop.get("trail_pct") or 0)
         activation_price = float(trailing_stop.get("activation_price") or 0)
 
-        # Binance callbackRate 范围 0.1% ~ 5.0%
+        # Binance callbackRate 范围 0.1% ~ 5.0%，精度为 1 位小数（步进 0.1）
         if trail_pct <= 0:
             return
-        callback_rate = max(0.1, min(trail_pct, 5.0))
+        callback_rate = round(max(0.1, min(trail_pct, 5.0)), 1)
         if callback_rate != trail_pct:
             log.warning(
                 f"[{self.name}] {symbol} trail_pct={trail_pct} 超出 Binance "
@@ -1607,7 +1607,7 @@ class Skill4Execute(BaseSkill):
             "order_id": order_id or f"none_{uuid.uuid4().hex[:8]}",
             "symbol": symbol,
             "direction": direction,
-            "status": status,
+            "status": status.lower() if isinstance(status, str) else status,
             "executed_at": executed_at,
         }
         # 仅在有值时添加可选字段（Schema 中非 required）

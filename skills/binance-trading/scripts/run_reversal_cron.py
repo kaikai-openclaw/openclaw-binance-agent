@@ -19,6 +19,7 @@ PROJECT_ROOT = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 )
 sys.path.insert(0, PROJECT_ROOT)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from dotenv import load_dotenv
 
@@ -42,6 +43,23 @@ from src.skills.skill3_strategy import Skill3Strategy
 from src.skills.skill4_execute import Skill4Execute
 from src.skills.skill5_evolve import Skill5Evolve
 
+from report_utils import (
+    safe_float,
+    safe_int,
+    fmt_optional as _fmt_optional,
+    build_position_snapshots,
+    build_protection_report,
+    classify_protection_label,
+    build_account_summary,
+    build_decision,
+    metadata_by_symbol as _metadata_by_symbol,
+    protection_warnings as _protection_warnings,
+    render_positions_markdown,
+    render_protection_markdown,
+    render_account_markdown,
+    render_warnings_markdown,
+)
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -60,20 +78,6 @@ def load_schema(name: str) -> dict:
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def safe_float(value: Any, default: float = 0.0) -> float:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
-
-
-def safe_int(value: Any, default: int = 0) -> int:
-    try:
-        return int(float(value))
-    except (TypeError, ValueError):
-        return default
 
 
 def make_account_provider(
@@ -126,212 +130,6 @@ def make_market_price_provider(public_client: BinancePublicClient):
         return cache.get(symbol)
 
     return provider
-
-
-def build_position_snapshots(
-    total_balance: float,
-    positions: list[Any],
-    source_map: Optional[dict[str, str]] = None,
-) -> list[dict]:
-    source_map = source_map or {}
-    snapshots = []
-    for pos in positions:
-        raw = getattr(pos, "raw", {}) or {}
-        symbol = getattr(pos, "symbol", raw.get("symbol", ""))
-        amount = safe_float(getattr(pos, "position_amt", raw.get("positionAmt", 0)))
-        if amount == 0:
-            continue
-        entry = safe_float(getattr(pos, "entry_price", raw.get("entryPrice", 0)))
-        mark = safe_float(raw.get("markPrice"), entry)
-        unrealized = safe_float(
-            getattr(pos, "unrealized_pnl", raw.get("unRealizedProfit", 0))
-        )
-        leverage = safe_float(getattr(pos, "leverage", raw.get("leverage", 0)))
-        notional = abs(safe_float(raw.get("notional")))
-        if notional <= 0 and mark > 0:
-            notional = abs(amount) * mark
-        margin = safe_float(raw.get("initialMargin"))
-        if margin <= 0:
-            margin = safe_float(raw.get("positionInitialMargin"))
-        if margin <= 0 and leverage > 0:
-            margin = notional / leverage
-        if leverage <= 0 and margin > 0:
-            leverage = notional / margin
-
-        direction = "long" if amount > 0 else "short"
-        if entry > 0 and mark > 0:
-            if direction == "long":
-                price_change_pct = (mark - entry) / entry * 100
-            else:
-                price_change_pct = (entry - mark) / entry * 100
-        else:
-            price_change_pct = 0.0
-
-        snapshots.append({
-            "symbol": symbol,
-            "source": source_map.get(symbol, "手动/未知"),
-            "direction": direction,
-            "quantity": abs(amount),
-            "entry_price": entry,
-            "mark_price": mark,
-            "price_change_pct": round(price_change_pct, 4),
-            "unrealized_pnl": unrealized,
-            "notional_value": notional,
-            "initial_margin": margin,
-            "margin_pct_of_equity": round(
-                margin / total_balance * 100, 4
-            ) if total_balance > 0 else 0.0,
-            "leverage": round(leverage, 4),
-            "roi_on_margin_pct": round(
-                unrealized / margin * 100, 4
-            ) if margin > 0 else 0.0,
-            "liquidation_price": safe_float(raw.get("liquidationPrice")),
-        })
-    return sorted(snapshots, key=lambda p: p["initial_margin"], reverse=True)
-
-
-def build_protection_report(
-    positions: list[dict],
-    algo_orders: list[dict],
-) -> dict:
-    positions_by_symbol = {p["symbol"]: p for p in positions}
-    orders = []
-    health: dict[str, dict] = {}
-
-    for symbol in set(positions_by_symbol) | {
-        str(o.get("symbol", "")) for o in algo_orders if o.get("symbol")
-    }:
-        health[symbol] = {
-            "has_position": symbol in positions_by_symbol,
-            "has_stop_loss": False,
-            "has_take_profit": False,
-            "stop_loss_count": 0,
-            "take_profit_count": 0,
-            "duplicate_protection_orders": 0,
-            "status": "ok",
-        }
-
-    for order in algo_orders:
-        symbol = str(order.get("symbol", ""))
-        if not symbol:
-            continue
-        pos = positions_by_symbol.get(symbol)
-        entry = safe_float(pos.get("entry_price")) if pos else 0.0
-        side = str(order.get("side", "")).upper()
-        order_type = str(order.get("type", ""))
-        trigger = safe_float(order.get("triggerPrice"))
-        label = classify_protection_label(side, trigger, entry)
-
-        if label == "止损":
-            health[symbol]["has_stop_loss"] = True
-            health[symbol]["stop_loss_count"] += 1
-        elif label == "止盈":
-            health[symbol]["has_take_profit"] = True
-            health[symbol]["take_profit_count"] += 1
-
-        orders.append({
-            "symbol": symbol,
-            "type": order_type,
-            "label": label,
-            "side": side,
-            "trigger_price": trigger,
-            "entry_price": entry,
-            "distance_from_entry_pct": round(
-                (trigger - entry) / entry * 100, 4
-            ) if entry > 0 and trigger > 0 else 0.0,
-            "quantity": order.get("quantity", ""),
-            "close_position": str(order.get("closePosition", "")).lower() == "true"
-            or order.get("closePosition") is True,
-            "algo_id": str(order.get("algoId", order.get("orderId", ""))),
-        })
-
-    for item in health.values():
-        duplicate_count = max(item["stop_loss_count"] - 1, 0) + max(
-            item["take_profit_count"] - 1, 0
-        )
-        item["duplicate_protection_orders"] = duplicate_count
-        if not item["has_position"] and (item["has_stop_loss"] or item["has_take_profit"]):
-            item["status"] = "warning"
-        elif not item["has_stop_loss"] or not item["has_take_profit"] or duplicate_count > 0:
-            item["status"] = "warning"
-
-    return {
-        "orders": sorted(orders, key=lambda o: (o["symbol"], o["label"], o["trigger_price"])),
-        "health": dict(sorted(health.items())),
-    }
-
-
-def classify_protection_label(side: str, trigger: float, entry: float) -> str:
-    if entry <= 0 or trigger <= 0:
-        return "条件单"
-    if side == "SELL":
-        return "止盈" if trigger > entry else "止损"
-    if side == "BUY":
-        return "止盈" if trigger < entry else "止损"
-    return "条件单"
-
-
-def build_account_summary(account: Any, positions: list[dict], paper_mode: bool) -> dict:
-    total_balance = safe_float(getattr(account, "total_balance", 0))
-    total_margin = sum(p["initial_margin"] for p in positions)
-    total_notional = sum(p["notional_value"] for p in positions)
-    daily_realized_pnl = safe_float(getattr(account, "daily_realized_pnl", 0))
-    daily_loss_pct = (
-        abs(min(daily_realized_pnl, 0.0)) / total_balance * 100
-        if total_balance > 0
-        else 0.0
-    )
-    return {
-        "total_balance": total_balance,
-        "available_margin": safe_float(getattr(account, "available_balance", 0)),
-        "total_unrealized_pnl": safe_float(getattr(account, "total_unrealized_pnl", 0)),
-        "daily_realized_pnl": daily_realized_pnl,
-        "daily_loss_pct": round(daily_loss_pct, 4),
-        "position_count": len(positions),
-        "total_position_margin": round(total_margin, 8),
-        "total_position_margin_pct": round(
-            total_margin / total_balance * 100, 4
-        ) if total_balance > 0 else 0.0,
-        "total_notional_value": round(total_notional, 8),
-        "paper_mode": paper_mode,
-    }
-
-
-def build_decision(
-    ratings: list[dict],
-    plans: list[dict],
-    execution_results: list[dict],
-    rating_threshold: int,
-) -> dict:
-    executed_count = sum(
-        1 for r in execution_results if r.get("status") in {"open", "filled", "paper_trade"}
-    )
-    rejected_count = sum(
-        1 for r in execution_results if r.get("status") == "rejected_by_risk"
-    )
-    failed_count = sum(
-        1 for r in execution_results if r.get("status") == "execution_failed"
-    )
-    if executed_count > 0:
-        action = "trade"
-        reason = "存在已开仓或已成交结果"
-    elif not ratings:
-        action = "no_trade"
-        reason = f"无币种通过 {rating_threshold} 分评级门槛"
-    elif not plans:
-        action = "no_trade"
-        reason = "无交易计划通过策略或风控"
-    else:
-        action = "no_trade"
-        reason = "未产生可执行成交"
-    return {
-        "action": action,
-        "reason": reason,
-        "trade_plan_count": len(plans),
-        "risk_blocked_count": rejected_count,
-        "execution_failed_count": failed_count,
-        "executed_count": executed_count,
-    }
 
 
 def render_markdown(report: dict) -> str:
@@ -403,71 +201,17 @@ def render_markdown(report: dict) -> str:
         )
 
     lines.append("")
-    lines.append("当前持仓:")
-    if report["positions"]:
-        for pos in report["positions"]:
-            lines.extend([
-                f"- {pos['symbol']} {pos['direction']} ({pos['source']})",
-                f"  数量: {pos['quantity']}",
-                f"  入场价: {pos['entry_price']}",
-                f"  当前价: {pos['mark_price']}",
-                f"  价格涨跌: {pos['price_change_pct']:+.2f}%",
-                f"  浮盈亏: {pos['unrealized_pnl']:+.2f} USDT",
-                f"  名义价值: {pos['notional_value']:.2f} USDT",
-                f"  保证金: {pos['initial_margin']:.2f} USDT",
-                f"  资金占比: {pos['margin_pct_of_equity']:.2f}%",
-                f"  杠杆: {pos['leverage']:.2f}x",
-                f"  保证金收益率: {pos['roi_on_margin_pct']:+.2f}%",
-            ])
-    else:
-        lines.append("- 当前无持仓")
-
+    lines.extend(render_positions_markdown(report["positions"]))
     lines.append("")
-    lines.append("保护单状态:")
-    for symbol, health in report["protection_orders"]["health"].items():
-        duplicate = health["duplicate_protection_orders"]
-        detail = (
-            f"止损 {health['stop_loss_count']} 张, "
-            f"止盈 {health['take_profit_count']} 张"
-        )
-        if duplicate:
-            detail += f", 重复保护单 {duplicate} 张"
-        lines.append(f"- {symbol}: {health['status']} ({detail})")
-
-    lines.extend([
-        "",
-        "账户状态:",
-        f"- 总资金: {account['total_balance']:.2f} USDT",
-        f"- 可用保证金: {account['available_margin']:.2f} USDT",
-        f"- 未实现盈亏: {account['total_unrealized_pnl']:+.2f} USDT",
-        f"- 持仓保证金: {account['total_position_margin']:.2f} USDT",
-        f"- 持仓资金占比: {account['total_position_margin_pct']:.2f}%",
-        f"- 日亏损: {account['daily_loss_pct']:.2f}%",
-        "",
-        "风险状态:",
-        f"- 单笔保证金上限: {risk['single_trade_margin_limit_pct']}%",
-        f"- 单币种持仓上限: {risk['single_symbol_position_limit_pct']}%",
-        f"- 日亏损停止阈值: {risk['daily_loss_stop_pct']}%",
-        f"- 当前状态: {risk['risk_status']}",
-    ])
-
-    if report["warnings"] or report["errors"]:
+    lines.extend(render_protection_markdown(report["protection_orders"]))
+    lines.append("")
+    lines.extend(render_account_markdown(account, risk))
+    warn_lines = render_warnings_markdown(report.get("warnings", []), report.get("errors", []))
+    if warn_lines:
         lines.append("")
-        lines.append("异常与注意事项:")
-        for warning in report["warnings"]:
-            lines.append(f"- WARNING: {warning}")
-        for error in report["errors"]:
-            lines.append(f"- ERROR: {error}")
+        lines.extend(warn_lines)
 
     return "\n".join(lines)
-
-
-def _fmt_optional(value: Any, suffix: str = "") -> str:
-    if value is None:
-        return "N/A"
-    if isinstance(value, (int, float)):
-        return f"{value:.2f}{suffix}"
-    return f"{value}{suffix}"
 
 
 def run_report(args: argparse.Namespace) -> dict:
@@ -692,38 +436,6 @@ def run_report(args: argparse.Namespace) -> dict:
         memory_store.close()
         risk_controller.close()
         cache.close()
-
-
-def _metadata_by_symbol(execution_results: list[dict]) -> dict[str, dict[str, Any]]:
-    metadata: dict[str, dict[str, Any]] = {}
-    for result in execution_results:
-        symbol = result.get("symbol")
-        if not symbol:
-            continue
-        metadata[symbol] = {
-            "rating_score": result.get("rating_score", 6),
-            "position_size_pct": result.get("position_size_pct", 0.0),
-            "hold_duration_hours": result.get("hold_duration_hours", 0.0),
-        }
-    return metadata
-
-
-def _protection_warnings(protection: dict) -> list[str]:
-    warnings = []
-    for symbol, health in protection.get("health", {}).items():
-        if health.get("duplicate_protection_orders", 0) > 0:
-            warnings.append(
-                f"{symbol} 存在重复保护单 {health['duplicate_protection_orders']} 张"
-            )
-        if health.get("has_position") and not health.get("has_stop_loss"):
-            warnings.append(f"{symbol} 有持仓但缺少止损保护单")
-        if health.get("has_position") and not health.get("has_take_profit"):
-            warnings.append(f"{symbol} 有持仓但缺少止盈保护单")
-        if not health.get("has_position") and (
-            health.get("has_stop_loss") or health.get("has_take_profit")
-        ):
-            warnings.append(f"{symbol} 无持仓但存在残留保护条件单")
-    return warnings
 
 
 def parse_args() -> argparse.Namespace:

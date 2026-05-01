@@ -15,6 +15,7 @@ Risk_Controller 风控拦截层模块
 import logging
 import os
 import sqlite3
+import threading
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -78,6 +79,8 @@ class RiskController:
         # 持久化模式
         self._db_path = db_path
         self._conn: Optional[sqlite3.Connection] = None
+        # 线程本地存储：每个线程用自己的 SQLite 连接，避免跨线程访问冲突
+        self._thread_local = threading.local()
 
         # 内存回退（无 db_path 时使用，兼容旧行为和测试）
         self._stop_loss_records: list[tuple[str, str, datetime]] = []
@@ -86,13 +89,37 @@ class RiskController:
             db_dir = os.path.dirname(db_path)
             if db_dir:
                 os.makedirs(db_dir, exist_ok=True)
-            self._conn = sqlite3.connect(db_path)
-            self._conn.execute("PRAGMA journal_mode=WAL")
-            self._conn.execute(self._CREATE_COOLDOWN_TABLE_SQL)
-            self._conn.execute(self._CREATE_COOLDOWN_INDEX_SQL)
-            self._conn.execute(self._CREATE_RUNTIME_STATE_TABLE_SQL)
-            self._conn.commit()
+            # 主线程连接存入 thread_local，worker 线程通过 _get_conn() 各自创建
+            self._thread_local.conn = sqlite3.connect(db_path, check_same_thread=False)
+            self._thread_local.conn.execute("PRAGMA journal_mode=WAL")
+            self._thread_local.conn.execute(self._CREATE_COOLDOWN_TABLE_SQL)
+            self._thread_local.conn.execute(self._CREATE_COOLDOWN_INDEX_SQL)
+            self._thread_local.conn.execute(self._CREATE_RUNTIME_STATE_TABLE_SQL)
+            self._thread_local.conn.commit()
+            self._conn = self._thread_local.conn  # 保留引用供 __del__ 使用
             self._paper_mode = self._load_paper_mode()
+
+    def _get_conn(self) -> Optional[sqlite3.Connection]:
+        """
+        返回当前线程的 SQLite 连接。
+
+        主线程在 __init__ 中已初始化连接；worker 线程首次调用时
+        在该线程内创建新连接（延迟创建，复用同线程多次调用）。
+        """
+        if self._db_path is None:
+            return None
+        conn = getattr(self._thread_local, "conn", None)
+        if conn is not None:
+            return conn
+        # Worker 线程首次调用，创建属于该线程的独立连接并初始化表结构
+        new_conn = sqlite3.connect(self._db_path, check_same_thread=False)
+        new_conn.execute("PRAGMA journal_mode=WAL")
+        new_conn.execute(self._CREATE_COOLDOWN_TABLE_SQL)
+        new_conn.execute(self._CREATE_COOLDOWN_INDEX_SQL)
+        new_conn.execute(self._CREATE_RUNTIME_STATE_TABLE_SQL)
+        new_conn.commit()
+        self._thread_local.conn = new_conn
+        return new_conn
 
     def validate_order(
         self, order: OrderRequest, account: AccountState
@@ -236,13 +263,14 @@ class RiskController:
         # 内存记录（兼容无 db_path 场景）
         self._stop_loss_records.append((symbol, direction, now))
 
-        if self._conn is not None:
-            self._conn.execute(
+        conn = self._get_conn()
+        if conn is not None:
+            conn.execute(
                 "INSERT INTO stop_loss_cooldowns "
                 "(symbol, direction, recorded_at) VALUES (?, ?, ?)",
                 (symbol, direction, now.isoformat()),
             )
-            self._conn.commit()
+            conn.commit()
 
         log.info(
             f"止损记录: {symbol} {direction} 于 {now.isoformat()}，"
@@ -290,9 +318,10 @@ class RiskController:
         """
         now = datetime.now(timezone.utc)
 
-        if self._conn is not None:
+        conn = self._get_conn()
+        if conn is not None:
             cutoff = (now - timedelta(hours=self.STOP_LOSS_COOLDOWN_HOURS)).isoformat()
-            cursor = self._conn.execute(
+            cursor = conn.execute(
                 "SELECT 1 FROM stop_loss_cooldowns "
                 "WHERE symbol = ? AND direction = ? AND recorded_at > ? "
                 "LIMIT 1",
@@ -316,9 +345,10 @@ class RiskController:
 
     def _load_paper_mode(self) -> bool:
         """从 SQLite 运行时状态恢复 Paper Mode。"""
-        if self._conn is None:
+        conn = self._get_conn()
+        if conn is None:
             return self._paper_mode
-        cursor = self._conn.execute(
+        cursor = conn.execute(
             "SELECT value FROM risk_runtime_state WHERE key = ?",
             ("paper_mode",),
         )
@@ -327,17 +357,18 @@ class RiskController:
 
     def _persist_runtime_state(self, key: str, value: str, reason: str) -> None:
         """保存风控运行时状态；无数据库时保持内存行为。"""
-        if self._conn is None:
+        conn = self._get_conn()
+        if conn is None:
             return
         updated_at = datetime.now(timezone.utc).isoformat()
-        self._conn.execute(
+        conn.execute(
             "INSERT INTO risk_runtime_state (key, value, updated_at) "
             "VALUES (?, ?, ?) "
             "ON CONFLICT(key) DO UPDATE SET "
             "value = excluded.value, updated_at = excluded.updated_at",
             (key, value, updated_at),
         )
-        self._conn.commit()
+        conn.commit()
         log.info(f"风控运行时状态已保存: {key}={value}, reason={reason}")
 
     def close(self) -> None:

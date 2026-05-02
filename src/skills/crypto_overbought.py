@@ -124,24 +124,24 @@ ST_W_SQUEEZE_RISK = -8   # 轧空风险扣分
 
 H1_INTERVAL = "1h"
 H1_MIN_KLINES = 60
-H1_RSI_THRESHOLD = 85.0          # 1h RSI > 85 = 极端超买（从 82 收紧）
-H1_BIAS_THRESHOLD = 10.0         # 1h 乖离率 > +10%（从 8 收紧）
-H1_CONSECUTIVE_UP = 10           # 连续上涨 ≥ 10 根 1h = 10 小时（从 8 收紧）
-H1_RALLY_PCT = 20.0              # 近 N 根累计涨幅 > +20%（从 12 收紧）
+H1_RSI_THRESHOLD = 80.0          # 1h RSI > 80（从 85 放宽，与 4h 对齐）
+H1_BIAS_THRESHOLD = 10.0         # 1h 乖离率 > +10%
+H1_CONSECUTIVE_UP = 7            # 连续上涨 ≥ 7 根 1h = 7 小时（从 10 放宽）
+H1_RALLY_PCT = 20.0              # 近 N 根累计涨幅 > +20%
 H1_RALLY_LOOKBACK = 24           # 回看 24 根 1h = 1 天
 H1_RISE_LOOKBACK = 72            # 距低点涨幅回看 72 根 1h = 3 天
 
-# 超短期评分权重 — 提高核心信号，加重轧空惩罚
-H1_W_RSI = 20            # RSI（核心，从 18 提高）
-H1_W_FUNDING = 22        # 资金费率（做空最强信号，从 20 提高）
-H1_W_BIAS = 12           # 乖离率（从 10 提高）
-H1_W_VOL_DIV = 15        # 量价背离（从 12 提高，顶部缩量是关键确认）
-H1_W_BOLL = 6            # 布林带（从 8 降低）
-H1_W_RALLY = 6           # 连续暴涨（从 8 降低，涨多不一定跌）
-H1_W_KDJ = 5             # KDJ（从 7 降低，1h 噪音大）
-H1_W_MACD_DIV = 3        # MACD 顶背离（从 4 降低，1h 可靠性很低）
-H1_W_SHADOW = 3          # 长上影线（从 5 降低）
-H1_W_SQUEEZE_RISK = -15  # 轧空风险扣分（从 -10 加重，1h 做空被轧风险极高）
+# 超短期评分权重 — 提高核心信号，轧空惩罚与 4h 对齐
+H1_W_RSI = 20            # RSI（核心）
+H1_W_FUNDING = 22        # 资金费率（做空最强信号）
+H1_W_BIAS = 12           # 乖离率
+H1_W_VOL_DIV = 15        # 量价背离（顶部缩量是关键确认）
+H1_W_BOLL = 6            # 布林带
+H1_W_RALLY = 6           # 连续暴涨
+H1_W_KDJ = 5             # KDJ（1h 噪音大）
+H1_W_MACD_DIV = 3        # MACD 顶背离（1h 可靠性很低）
+H1_W_SHADOW = 3          # 长上影线
+H1_W_SQUEEZE_RISK = -8   # 轧空风险扣分（从 -15 放宽，与 4h 对齐）
 
 # ══════════════════════════════════════════════════════════
 # 长期超买参数（1d K 线）
@@ -173,8 +173,9 @@ DEFAULT_MIN_QUOTE_VOLUME = 10_000_000
 DEFAULT_MIN_OVERBOUGHT_SCORE = 40
 DEFAULT_MAX_CANDIDATES = 10
 # 轧空风险：成交额低于此值且 OI/成交额比过高 → 扣分
-SQUEEZE_RISK_QV_THRESHOLD = 50_000_000
-SQUEEZE_RISK_OI_RATIO = 0.5     # OI 价值 / 24h 成交额 > 50% = 拥挤
+# 阈值设为 2000 万：只对真正低流动性小币种扣分，避免误伤中等市值超买候选
+SQUEEZE_RISK_QV_THRESHOLD = 20_000_000
+SQUEEZE_RISK_OI_RATIO = 0.8     # OI 价值 / 24h 成交额 > 80% = 极度拥挤（从 50% 收紧）
 
 
 # ══════════════════════════════════════════════════════════
@@ -405,6 +406,27 @@ class _CryptoOverboughtBase(BaseSkill):
                 )
 
                 if result["overbought_score"] < min_score and not target_symbols:
+                    continue
+
+                # 顶部确认硬性门槛：价格必须已从近期高点回落 ≥ 2% 且 ≤ 12%（1h）/ ≤ 20%（4h/1d）
+                # - 回落不足 2%：价格仍在上涨途中，追空风险高（TAGUSDT/LABUSDT 案例）
+                # - 回落超过上限：做空空间已大幅消耗，盈亏比变差
+                # 且至少满足 KDJ 高位死叉 或 MACD 顶背离 之一
+                drawdown = _calc_drawdown_from_high(closes, rally_lookback, highs)
+                max_drawdown = -12.0 if interval == H1_INTERVAL else -20.0
+                has_drawdown = drawdown is not None and max_drawdown <= drawdown <= -2.0
+                has_reversal_confirm = result.get("macd_divergence") or (
+                    result.get("kdj_j") is not None and result["kdj_j"] > 80
+                    and _check_kdj_dead_cross(closes, highs, lows)
+                )
+                if not target_symbols and not (has_drawdown and has_reversal_confirm):
+                    log.info(
+                        "[%s] %s 顶部未确认，跳过: drawdown=%.2f%%, macd_div=%s, kdj_dead=%s",
+                        self.name, symbol,
+                        drawdown if drawdown is not None else 0.0,
+                        result.get("macd_divergence"),
+                        has_reversal_confirm,
+                    )
                     continue
 
                 returns_map[symbol] = calc_returns(closes)
@@ -694,7 +716,7 @@ def calc_overbought_score(
 
     # ── 9.5 距近期高点回撤检查 ──
     # 如果价格已经从高点大幅回落，说明做空最佳时机已过，扣分
-    drawdown_from_high = _calc_drawdown_from_high(closes, rally_lookback)
+    drawdown_from_high = _calc_drawdown_from_high(closes, rally_lookback, highs)
     drawdown_penalty_pct = w.get("drawdown_penalty_pct", -5.0)  # 默认回撤 5% 开始扣分
     if drawdown_from_high is not None and drawdown_from_high < drawdown_penalty_pct:
         # 回撤越深扣分越多，最多扣 20 分
@@ -772,11 +794,14 @@ def _calc_rise_from_low(closes: List[float], lookback: int) -> Optional[float]:
     return (closes[-1] - low) / low * 100 if low > 0 else None
 
 
-def _calc_drawdown_from_high(closes: List[float], lookback: int) -> Optional[float]:
-    """计算当前价格距近期最高点的回撤幅度（负值表示回撤）。
+def _calc_drawdown_from_high(closes: List[float], lookback: int, highs: Optional[List[float]] = None) -> Optional[float]:
+    """计算当前收盘价距近期最高价的回撤幅度（负值表示回撤）。
 
     用于判断做空时机是否已过：如果价格已经从高点大幅回落，
     做空的盈亏比变差（下跌空间已被消耗）。
+
+    优先使用 highs（K 线最高价）计算真实高点，
+    回退到 closes（收盘价）以兼容无 highs 数据的调用方。
 
     返回:
         回撤百分比（负值），如 -5.0 表示从高点回撤了 5%。
@@ -784,11 +809,14 @@ def _calc_drawdown_from_high(closes: List[float], lookback: int) -> Optional[flo
     """
     if len(closes) < 2:
         return None
-    window = closes[-min(lookback, len(closes)):]
-    high = max(window)
-    if high <= 0:
+    # 优先用最高价序列确定真实高点（捕捉长上影线顶部）
+    if highs and len(highs) >= 2:
+        window_high = max(highs[-min(lookback, len(highs)):])
+    else:
+        window_high = max(closes[-min(lookback, len(closes)):])
+    if window_high <= 0:
         return None
-    return (closes[-1] - high) / high * 100
+    return (closes[-1] - window_high) / window_high * 100
 
 
 def _check_above_boll_upper(closes: List[float]) -> bool:

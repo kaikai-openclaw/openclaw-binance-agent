@@ -126,10 +126,10 @@ H1_MIN_KLINES = 80
 H1_BOTTOM_LOOKBACK = 72                 # 近期最低点回看 72 根 1h = 3 天
 H1_PRICE_STABLE_WINDOW = 12            # 企稳观察窗口 12 根 1h = 12 小时（从 8 收紧）
 H1_DROP_LOOKBACK = 120                  # 前期跌幅回看 120 根 1h = 5 天
-H1_VOLUME_SURGE_THRESHOLD = 3.5         # 放量倍数阈值（从 2.5 收紧，过滤 1h 噪音）
-H1_VOLUME_SURGE_STRONG = 5.0            # 强放量（从 4.0 收紧）
+H1_VOLUME_SURGE_THRESHOLD = 4.5         # 放量倍数阈值（从 3.5 收紧，过滤 1h 噪音）
+H1_VOLUME_SURGE_STRONG = 6.5            # 强放量（从 5.0 收紧）
 H1_DIST_BOTTOM_IDEAL_MIN = 2.0          # 距底部理想距离下限（%）
-H1_DIST_BOTTOM_IDEAL_MAX = 6.0          # 距底部理想距离上限（%，从 8 收紧，避免追高）
+H1_DIST_BOTTOM_IDEAL_MAX = 4.0          # 距底部理想距离上限（%，从 6 收紧，避免追高）
 H1_SHADOW_RATIO_THRESHOLD = 2.5         # 下影线长度 / 实体长度 ≥ 2.5 倍（从 2.0 收紧）
 
 # 超短期评分权重 — 提高核心信号权重，降低弱信号权重
@@ -383,6 +383,37 @@ class _CryptoReversalBase(BaseSkill):
                 # （1h 级别弱信号太容易凑分，放量是反转的核心确认）
                 if interval == "1h" and result.get("volume_surge_ratio", 0) < vol_thresh:
                     continue
+
+                # 1h 模式追高过滤：24h 涨幅超过 15% 说明反转行情已走大半，跳过
+                if interval == "1h":
+                    price_change_pct = float(item.get("priceChangePercent", 0))
+                    if price_change_pct > 15.0:
+                        log.info(
+                            "[%s] %s 24h 涨幅 %.2f%% 超过 15%%，跳过（追高风险）",
+                            self.name, symbol, price_change_pct,
+                        )
+                        continue
+
+                # 1h 模式底部确认硬性门槛：价格必须已从近期最低点反弹 ≥ 2% 且 ≤ 4%
+                # - 反弹不足 2%：可能还在下跌途中，接刀风险高
+                # - 反弹超过 4%：反转行情已走大半，追多风险高（与 dist_max 对齐）
+                # 且至少满足 KDJ 低位金叉 或 MACD 底背离 之一
+                if interval == "1h" and not target_symbols:
+                    dist_bottom_pct = result.get("dist_bottom_pct")
+                    has_rise = dist_bottom_pct is not None and 2.0 <= dist_bottom_pct <= 4.0
+                    has_bottom_confirm = (
+                        result.get("macd_reversal_score", 0) > 0
+                        or result.get("kdj_score", 0) > 0
+                    )
+                    if not (has_rise and has_bottom_confirm):
+                        log.info(
+                            "[%s] %s 底部未确认，跳过: dist_bottom=%.2f%%, macd_rev=%s, kdj_cross=%s",
+                            self.name, symbol,
+                            dist_bottom_pct if dist_bottom_pct is not None else 0.0,
+                            result.get("macd_reversal_score", 0) > 0,
+                            result.get("kdj_score", 0) > 0,
+                        )
+                        continue
 
                 returns_map[symbol] = calc_returns(closes)
                 atr_val = calc_atr(highs, lows, closes, ATR_PERIOD)

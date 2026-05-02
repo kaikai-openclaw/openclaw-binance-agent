@@ -260,7 +260,9 @@ def run_report(args: argparse.Namespace) -> dict:
         scan_input = {
             "trigger_time": started_at,
             "min_reversal_score": args.min_score,
-            "max_candidates": args.max_candidates,
+            # 1h 模式只取评分最高的 5 个进入 LLM 分析（信号噪音大，严格筛选）
+            # 4h/1d 模式取 10 个
+            "max_candidates": 5 if args.mode == "1h" else min(args.max_candidates, 10),
         }
         if args.symbols:
             scan_input["target_symbols"] = [
@@ -274,6 +276,9 @@ def run_report(args: argparse.Namespace) -> dict:
         rating_threshold, risk_ratio = memory_store.get_evolved_params(
             strategy_tag=strategy_tag,
         )
+        # 1h 反转假信号较多，单笔资金占比降至 1%（4h/1d 保持 memory_store 进化值）
+        if args.mode == "1h":
+            risk_ratio = min(risk_ratio, 0.01)
         s1_data: dict = {"candidates": [], "filter_summary": {}}
         s2_data: dict = {"ratings": [], "filtered_count": 0, "failed_symbols": []}
         s3_data: dict = {"trade_plans": [], "pipeline_status": "no_opportunity"}
@@ -326,8 +331,12 @@ def run_report(args: argparse.Namespace) -> dict:
                     # ── 趋势反转策略参数 ──
                     # 1h 模式：快速反转，12h 持仓，盈亏比 2:1
                     # 4h/1d 模式：48h 持仓，盈亏比 2.7:1，trailing stop 适度延迟
-                    max_hold_hours=12.0 if args.mode == "1h" else 48.0,
-                    atr_tp_mult=3.0 if args.mode == "1h" else 4.0,
+                    # 反转候选 ATR 天然偏高，放宽 max_stop 避免系统性过滤
+                    # 单笔保证金 2% 总资金，10% 止损 = 最多亏 2% 总资金，远低于 5% 日损上限
+                    # 1h 短期交易：收窄止损止盈（ATR×1.2/2.4），盈亏比保持 2:1 但整体更紧
+                    max_stop_pct=0.10 if args.mode == "1h" else 0.12,
+                    atr_stop_mult=1.2 if args.mode == "1h" else 1.5,
+                    atr_tp_mult=2.4 if args.mode == "1h" else 4.0,
                     trailing_stop_ratio=0.5 if args.mode == "1h" else 0.4,
                     trailing_activation_mult=1.0 if args.mode == "1h" else 1.3,
                     trailing_activation_mult_hv=1.5 if args.mode == "1h" else 1.8,

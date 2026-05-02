@@ -204,6 +204,17 @@ class Skill2Analyze(BaseSkill):
                 "kdj_j": candidate.get("kdj_j"),
                 "distance_from_high_pct": candidate.get("distance_from_high_pct"),
                 "rise_from_low_pct": candidate.get("rise_from_low_pct"),
+                # 反转扫描层子维度数据（均线、企稳、MACD 等）
+                "ma_turn_score": candidate.get("ma_turn_score"),
+                "ma_turn_detail": candidate.get("ma_turn_detail"),
+                "price_stable_score": candidate.get("price_stable_score"),
+                "funding_reversal_score": candidate.get("funding_reversal_score"),
+                "macd_reversal_score": candidate.get("macd_reversal_score"),
+                "macd_detail": candidate.get("macd_detail"),
+                "dist_bottom_pct": candidate.get("dist_bottom_pct"),
+                "prior_drop_pct": candidate.get("prior_drop_pct"),
+                "kdj_score": candidate.get("kdj_score"),
+                "shadow_score": candidate.get("shadow_score"),
             }
 
             try:

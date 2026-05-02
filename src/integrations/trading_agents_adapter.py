@@ -76,13 +76,18 @@ def _build_strategy_guide(market_data: dict) -> str:
         return (
             "策略类型：超跌反弹做多\n"
             "交易逻辑：币种经历深度下跌后出现超卖信号，预期均值回归反弹。\n"
-            "核心确认信号（必须同时满足才给高分）：\n"
+            "核心确认信号（满足越多分数越高）：\n"
             "  1. RSI 处于超卖区（< 30 强信号，30-40 中等）\n"
             "  2. 资金费率为负值（空头拥挤，反弹动力）\n"
             "  3. MACD 底背离或 KDJ 低位金叉（动能转向）\n"
+            "  4. 布林带跌破下轨（极端超卖）\n"
+            "  5. 连续下跌多根 K 线（恐慌释放充分）\n"
+            "评分指引：\n"
+            "  - RSI 超卖 + 任意一个其他信号 → 给 long\n"
+            "  - 资金费率极端负值（< -0.1%）本身就是强信号 → 给 long\n"
+            "  - 仅轻微超卖且无其他确认 → 给 hold\n"
             "风险因素（出现则降分）：\n"
             "  - 大盘（BTC）处于下跌趋势，系统性风险高\n"
-            "  - 成交量持续萎缩，无资金承接\n"
             "  - 跌幅过深（>40%），可能是基本面恶化而非超卖"
         )
 
@@ -90,11 +95,17 @@ def _build_strategy_guide(market_data: dict) -> str:
         return (
             "策略类型：超买摸顶做空\n"
             "交易逻辑：币种短期暴涨后出现超买信号，预期回调。\n"
-            "核心确认信号（必须同时满足才给高分）：\n"
+            "核心确认信号（满足越多分数越高）：\n"
             "  1. RSI 处于超买区（> 80 强信号，75-80 中等）\n"
-            "  2. 资金费率极端正值（多头拥挤，做空有费率收益）\n"
-            "  3. 量价背离（价格创新高但成交量萎缩，上涨动能衰竭）\n"
-            "风险因素（出现则大幅降分）：\n"
+            "  2. 量价背离（价格创新高但成交量萎缩，上涨动能衰竭）\n"
+            "  3. MACD 顶背离或 KDJ 高位死叉\n"
+            "  4. 连续上涨多根 K 线（涨幅过快需要回调）\n"
+            "  5. 资金费率极端正值（多头拥挤，做空有费率收益）\n"
+            "评分指引：\n"
+            "  - RSI 超买 + 量价背离 → 给 short\n"
+            "  - 连续暴涨 + 任意一个超买信号 → 给 short\n"
+            "  - 仅轻微超买且趋势仍强 → 给 hold\n"
+            "风险因素（出现则降分）：\n"
             "  - 轧空风险：成交量低但持仓量高，容易被逼空\n"
             "  - 强势趋势中的回调做空胜率极低\n"
             "  - 价格已从高点回落超过 5%，做空最佳时机已过"
@@ -104,14 +115,19 @@ def _build_strategy_guide(market_data: dict) -> str:
         return (
             "策略类型：底部趋势反转做多\n"
             "交易逻辑：币种在底部区域出现趋势反转信号，预期新一轮上涨。\n"
-            "核心确认信号（必须同时满足才给高分）：\n"
-            "  1. 底部放量（成交量突增 ≥ 3x，资金入场）\n"
+            "核心确认信号（满足越多分数越高）：\n"
+            "  1. 底部放量（成交量突增 ≥ 3x，资金入场）— 最重要\n"
             "  2. 价格企稳（不再创新低 + 波动收窄）\n"
-            "  3. 均线拐头向上（EMA5 上穿 EMA10 金叉）\n"
+            "  3. 均线拐头向上（EMA5 上穿 EMA10 金叉，或 EMA5 拐头）\n"
+            "  4. 资金费率从负值回归正常（空头平仓信号）\n"
+            "  5. MACD 零轴下方金叉或底背离\n"
+            "评分指引：\n"
+            "  - 放量 + 企稳 + 任意一个其他信号 → 给 long\n"
+            "  - 仅放量但企稳不明显 → 给 long（放量是最核心信号）\n"
+            "  - 无放量 → 给 hold\n"
             "风险因素（出现则降分）：\n"
-            "  - 无放量确认的反转是假信号，不可信\n"
-            "  - 前期跌幅不够深（< 15%），反弹空间有限\n"
-            "  - 大盘处于恐慌下跌，个币反转容易被拖下水"
+            "  - 大盘（BTC）处于恐慌下跌，系统性风险高\n"
+            "  - 跌幅过深（>50%），可能是基本面恶化"
         )
 
     # 通用兜底
@@ -353,6 +369,25 @@ def create_fast_analyzer() -> callable:
         if market_data.get("rise_from_low_pct") is not None:
             deep_indicators += f"- 距近期低点涨幅: {market_data['rise_from_low_pct']}%\n"
 
+        # 反转扫描层子维度详情（均线、企稳、MACD 等）
+        reversal_details = ""
+        if market_data.get("ma_turn_detail"):
+            reversal_details += f"- 均线状态: {market_data['ma_turn_detail']}（{market_data.get('ma_turn_score', 0)}分）\n"
+        if market_data.get("price_stable_score") is not None:
+            reversal_details += f"- 价格企稳评分: {market_data['price_stable_score']}分\n"
+        if market_data.get("funding_reversal_score") is not None and market_data["funding_reversal_score"] > 0:
+            reversal_details += f"- 费率回归评分: {market_data['funding_reversal_score']}分\n"
+        if market_data.get("macd_detail"):
+            reversal_details += f"- MACD状态: {market_data['macd_detail']}（{market_data.get('macd_reversal_score', 0)}分）\n"
+        if market_data.get("dist_bottom_pct") is not None:
+            reversal_details += f"- 距底部距离: {market_data['dist_bottom_pct']}%\n"
+        if market_data.get("prior_drop_pct") is not None:
+            reversal_details += f"- 前期跌幅: {market_data['prior_drop_pct']}%\n"
+        if market_data.get("kdj_score") is not None and market_data["kdj_score"] > 0:
+            reversal_details += f"- KDJ低位金叉: 是（{market_data['kdj_score']}分）\n"
+        if market_data.get("shadow_score") is not None and market_data["shadow_score"] > 0:
+            reversal_details += f"- 长下影线: 是（{market_data['shadow_score']}分）\n"
+
         # 扫描层综合评分和信号摘要
         scan_summary = ""
         for score_key in ["oversold_score", "overbought_score", "reversal_score"]:
@@ -381,14 +416,19 @@ def create_fast_analyzer() -> callable:
 【量化筛选结果】
 {scan_summary if scan_summary else "暂无"}
 
-请严格基于以上数据评估，重点关注策略背景中提到的核心确认信号。
-如果多数核心信号已满足且无明显风险，返回策略方向（long 或 short）。
-如果核心信号不足或风险明显，返回 hold。
+{f"【反转子维度详情】{chr(10)}{reversal_details}" if reversal_details else ""}
+请严格基于以上数据评估。
+量化筛选系统已经完成了多维度信号确认，你的任务是判断是否存在明显的反向风险。
+如果没有明显风险因素，返回策略方向（long 或 short）。
+只有在发现明确的风险信号（如大盘崩盘、基本面恶化证据）时才返回 hold。
 直接返回 JSON（不要解释）：
 {{"signal": "<long|short|hold>"}}
 """
 
         # 从扫描层评分映射 rating_score（0-100 → 1-10）
+        # 使用非线性映射：扫描层 30-60 分是反转/超跌候选的主力区间，
+        # 线性 /10 会把它们压缩到 3-6 分，空间太窄。
+        # 新映射：25→4, 35→5, 45→6, 55→7, 65→8, 75+→9
         scan_score = None
         for key in ["oversold_score", "overbought_score", "reversal_score"]:
             val = market_data.get(key)
@@ -397,7 +437,21 @@ def create_fast_analyzer() -> callable:
                 break
         if scan_score is None:
             scan_score = 50
-        mapped_rating = max(1, min(10, round(scan_score / 10)))
+
+        if scan_score >= 75:
+            mapped_rating = 9
+        elif scan_score >= 65:
+            mapped_rating = 8
+        elif scan_score >= 55:
+            mapped_rating = 7
+        elif scan_score >= 45:
+            mapped_rating = 6
+        elif scan_score >= 35:
+            mapped_rating = 5
+        elif scan_score >= 25:
+            mapped_rating = 4
+        else:
+            mapped_rating = max(1, round(scan_score / 10))
 
         try:
             raw = _call_fast_llm(prompt)

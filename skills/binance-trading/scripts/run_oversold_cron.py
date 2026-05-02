@@ -242,7 +242,7 @@ def run_report(args: argparse.Namespace) -> dict:
             risk_controller.enable_paper_mode("oversold_cron_paper_flag")
         paper_mode = risk_controller.is_paper_mode()
 
-        if args.mode == "long":
+        if args.mode == "1d":
             oversold_skill = LongTermOversoldSkill(
                 state_store, load_schema("crypto_oversold_input.json"),
                 load_schema("crypto_oversold_output.json"), public_client
@@ -322,12 +322,12 @@ def run_report(args: argparse.Namespace) -> dict:
                     # ── 超跌策略参数 ──
                     # 短期(4h)：快进快出，保持默认
                     # 长期(1d)：波段反弹需要更多时间和空间
-                    max_hold_hours=72.0 if args.mode == "long" else 24.0,
-                    atr_tp_mult=4.5 if args.mode == "long" else 3.0,
-                    trailing_stop_ratio=0.35 if args.mode == "long" else 0.5,
-                    trailing_activation_mult=1.5 if args.mode == "long" else 1.0,
-                    trailing_activation_mult_hv=2.0 if args.mode == "long" else 1.5,
-                    high_vol_tp_mult=4.0 if args.mode == "long" else 3.0,
+                    max_hold_hours=72.0 if args.mode == "1d" else 24.0,
+                    atr_tp_mult=4.5 if args.mode == "1d" else 3.0,
+                    trailing_stop_ratio=0.35 if args.mode == "1d" else 0.5,
+                    trailing_activation_mult=1.5 if args.mode == "1d" else 1.0,
+                    trailing_activation_mult_hv=2.0 if args.mode == "1d" else 1.5,
+                    high_vol_tp_mult=4.0 if args.mode == "1d" else 3.0,
                 )
                 s3_input_id = state_store.save("skill3_input", {"input_state_id": s2_id})
                 s3_id = skill3.execute(s3_input_id)
@@ -459,7 +459,7 @@ def run_report(args: argparse.Namespace) -> dict:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="超跌交易定时任务固定报告")
-    parser.add_argument("--mode", choices=["short", "long"], default="short")
+    parser.add_argument("--mode", choices=["4h", "1d"], default="4h")
     parser.add_argument("--min-score", type=int, default=25)
     parser.add_argument("--max-candidates", type=int, default=20)
     parser.add_argument("--symbols", type=str, default="")

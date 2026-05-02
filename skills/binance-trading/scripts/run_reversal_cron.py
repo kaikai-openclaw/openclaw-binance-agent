@@ -241,7 +241,7 @@ def run_report(args: argparse.Namespace) -> dict:
             risk_controller.enable_paper_mode("reversal_cron_paper_flag")
         paper_mode = risk_controller.is_paper_mode()
 
-        if args.mode == "long":
+        if args.mode == "1d":
             reversal_skill = LongTermReversalSkill(
                 state_store, load_schema("crypto_reversal_input.json"),
                 load_schema("crypto_reversal_output.json"), public_client
@@ -463,7 +463,7 @@ def run_report(args: argparse.Namespace) -> dict:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="趋势反转交易定时任务固定报告")
-    parser.add_argument("--mode", choices=["short", "long", "1h"], default="short")
+    parser.add_argument("--mode", choices=["1h", "4h", "1d"], default="4h")
     parser.add_argument("--min-score", type=int, default=25)
     parser.add_argument("--max-candidates", type=int, default=20)
     parser.add_argument("--symbols", type=str, default="")

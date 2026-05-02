@@ -241,7 +241,7 @@ def run_report(args: argparse.Namespace) -> dict:
             risk_controller.enable_paper_mode("wick_cron_paper_flag")
         paper_mode = risk_controller.is_paper_mode()
 
-        if args.mode == "long":
+        if args.mode == "1d":
             wick_skill = LongTermWickSkill(
                 state_store, load_schema("crypto_wick_input.json"),
                 load_schema("crypto_wick_output.json"), public_client
@@ -319,7 +319,7 @@ def run_report(args: argparse.Namespace) -> dict:
                 risk_ratio=risk_ratio,
                 require_market_price=True,
                 # ── 插针策略专属参数 ──
-                max_hold_hours=12.0 if args.mode == "short" else 24.0,
+                max_hold_hours=12.0 if args.mode == "4h" else 24.0,
                 atr_stop_mult=1.0,          # 止损更紧（插针天然定义了止损位）
                 atr_tp_mult=2.5,            # 盈亏比 2.5:1
                 min_stop_pct=0.003,         # 最小止损 0.3%
@@ -459,7 +459,7 @@ def run_report(args: argparse.Namespace) -> dict:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="插针交易定时任务固定报告")
-    parser.add_argument("--mode", choices=["short", "long"], default="short")
+    parser.add_argument("--mode", choices=["4h", "1d"], default="4h")
     parser.add_argument("--min-score", type=int, default=35)
     parser.add_argument("--max-candidates", type=int, default=15)
     parser.add_argument("--symbols", type=str, default="")

@@ -382,22 +382,36 @@ def create_fast_analyzer() -> callable:
 {scan_summary if scan_summary else "暂无"}
 
 请严格基于以上数据评估，重点关注策略背景中提到的核心确认信号。
-如果核心信号不充分或存在明显风险，应给出低分或 hold 信号。
+你只需要判断方向：该币种当前是否适合按策略方向交易？
 直接返回 JSON（不要解释）：
-{{"rating_score": <int 1-10>, "signal": "<long|short|hold>", "confidence": <float 0-100>}}
+{{"signal": "<long|short|hold>"}}
+signal 说明：long=适合做多，short=适合做空，hold=不建议交易。
 """
+
+        # 从扫描层评分映射 rating_score（0-100 → 1-10）
+        scan_score = (
+            market_data.get("oversold_score")
+            or market_data.get("overbought_score")
+            or market_data.get("reversal_score")
+            or 50
+        )
+        mapped_rating = max(1, min(10, round(scan_score / 10)))
 
         try:
             raw = _call_fast_llm(prompt)
             cleaned = _clean_llm_text(raw)
             result = _extract_json(cleaned)
-            result["comment"] = f"[快速模式] {cleaned[:300]}"
-            log.info(f"[FastAnalyzer] {symbol} 分析完成，耗时 {time.time()-t0:.1f}s: {result}")
+            # 用扫描层评分替代 LLM 评分，LLM 只负责方向确认
+            result["rating_score"] = mapped_rating
+            result.setdefault("signal", "hold")
+            result["confidence"] = float(scan_score)  # 用扫描分作为置信度
+            result["comment"] = f"[快速模式] 扫描分={scan_score} LLM方向={result['signal']}"
+            log.info(f"[FastAnalyzer] {symbol} 完成 {time.time()-t0:.1f}s: score={mapped_rating}(扫描{scan_score}) signal={result['signal']}")
             return result
         except Exception as e:
             log.warning(f"[FastAnalyzer] {symbol} LLM 调用失败: {e}")
-            return {"rating_score": 5, "signal": "hold", "confidence": 50.0,
-                    "comment": f"[快速模式] 分析失败: {e}"}
+            return {"rating_score": mapped_rating, "signal": "hold", "confidence": float(scan_score),
+                    "comment": f"[快速模式] LLM失败，保留扫描分={scan_score}: {e}"}
 
     log.info("[FastAnalyzer] 快速分析器已初始化（单次 LLM 调用）")
     return analyzer

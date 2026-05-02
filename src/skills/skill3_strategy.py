@@ -256,7 +256,7 @@ class Skill3Strategy(BaseSkill):
         if len(ratings) > self._max_trades:
             ratings_sorted = sorted(
                 ratings,
-                key=lambda r: (r.get("rating_score", 0), r.get("confidence", 0)),
+                key=lambda r: r.get("rating_score", 0),
                 reverse=True,
             )
             skipped = ratings_sorted[self._max_trades:]

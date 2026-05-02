@@ -376,36 +376,11 @@ def render_positions_markdown(
     max_detail: int = 5,
     compact: bool = False,
 ) -> list[str]:
-    """渲染持仓明细 Markdown 段落。
-
-    compact=True 时每行一个持仓，适合 Telegram 投递。
-    超过 max_detail 笔时，只展示前 max_detail 笔详情 + 其余摘要。
-    """
+    """渲染持仓明细，使用 Telegram 友好的格式。"""
     source_map = source_map or {}
-    if compact:
-        lines = ["持仓:"]
-        if not positions:
-            lines.append("- 无")
-            return lines
-        shown = positions[:max_detail]
-        rest = positions[max_detail:]
-        for pos in shown:
-            tag = tag_symbol_or_default(pos["symbol"], source_map)
-            pnl = pos["unrealized_pnl"]
-            roi = pos["roi_on_margin_pct"]
-            lines.append(
-                f"{pos['symbol']} {pos['direction']}({tag}) "
-                f"{pnl:+.2f}({roi:+.1f}%)"
-            )
-        if rest:
-            rest_pnl = sum(p["unrealized_pnl"] for p in rest)
-            symbols = ", ".join(p["symbol"] for p in rest)
-            lines.append(f"其余{len(rest)}笔 {rest_pnl:+.2f}: {symbols}")
-        return lines
-
-    lines = ["当前持仓:"]
+    lines = ["📈 *持仓明细*"]
     if not positions:
-        lines.append("- 当前无持仓")
+        lines.append("当前无持仓")
         return lines
 
     detail_positions = positions[:max_detail]
@@ -413,109 +388,82 @@ def render_positions_markdown(
 
     for pos in detail_positions:
         tag = tag_symbol_or_default(pos["symbol"], source_map)
-        lines.extend([
-            f"- {pos['symbol']} {pos['direction']} ({tag})",
-            f"  数量: {pos['quantity']}",
-            f"  入场价: {pos['entry_price']}",
-            f"  当前价: {pos['mark_price']}",
-            f"  价格涨跌: {pos['price_change_pct']:+.2f}%",
-            f"  浮盈亏: {pos['unrealized_pnl']:+.2f} USDT",
-            f"  名义价值: {pos['notional_value']:.2f} USDT",
-            f"  保证金: {pos['initial_margin']:.2f} USDT",
-            f"  资金占比: {pos['margin_pct_of_equity']:.2f}%",
-            f"  杠杆: {pos['leverage']:.2f}x",
-            f"  保证金收益率: {pos['roi_on_margin_pct']:+.2f}%",
-        ])
-        if pos.get("liquidation_price") and pos["liquidation_price"] > 0:
-            lines.append(f"  强平价: {pos['liquidation_price']}")
+        d = "🟢" if pos["direction"] == "long" else "🔴"
+        pnl = pos["unrealized_pnl"]
+        roi = pos["roi_on_margin_pct"]
+        pnl_icon = "📈" if pnl >= 0 else "📉"
+        lines.append(
+            f"{d} *{pos['symbol']}* {tag}\n"
+            f"  入场 {pos['entry_price']} → 现价 {pos['mark_price']} ({pos['price_change_pct']:+.2f}%)\n"
+            f"  {pnl_icon} 浮盈亏 {pnl:+.2f} USDT (保证金收益 {roi:+.1f}%)\n"
+            f"  保证金 {pos['initial_margin']:.2f} ({pos['margin_pct_of_equity']:.1f}%) {pos['leverage']:.0f}x"
+        )
 
     if rest_positions:
         rest_pnl = sum(p["unrealized_pnl"] for p in rest_positions)
-        rest_margin = sum(p["initial_margin"] for p in rest_positions)
         symbols = ", ".join(p["symbol"] for p in rest_positions)
-        lines.append(
-            f"- 其余 {len(rest_positions)} 笔: "
-            f"保证金 {rest_margin:.2f}, 浮盈亏 {rest_pnl:+.2f} "
-            f"({symbols})"
-        )
+        lines.append(f"➕ 其余 {len(rest_positions)} 笔: 浮盈亏 {rest_pnl:+.2f} ({symbols})")
 
     return lines
 
 
 def render_protection_markdown(protection: dict, max_detail: int = 8) -> list[str]:
-    """渲染保护单状态 Markdown 段落。超过 max_detail 个币种时只显示异常项。"""
-    lines = ["保护单状态:"]
+    """渲染保护单状态，使用 Telegram 友好的格式。"""
+    lines = ["🛡️ *保护单*"]
     health = protection.get("health", {})
     if not health:
-        lines.append("- 无保护单")
+        lines.append("无保护单")
         return lines
 
-    # 优先显示有问题的
     warning_items = {s: h for s, h in health.items() if h.get("status") != "ok"}
-    ok_items = {s: h for s, h in health.items() if h.get("status") == "ok"}
+    ok_count = sum(1 for h in health.values() if h.get("status") == "ok")
 
-    shown = 0
     for symbol, h in warning_items.items():
-        if shown >= max_detail:
-            break
         duplicate = h.get("duplicate_protection_orders", 0)
-        detail = f"止损 {h['stop_loss_count']} 张, 止盈 {h['take_profit_count']} 张"
+        detail = f"SL={h['stop_loss_count']} TP={h['take_profit_count']}"
         if duplicate:
-            detail += f", 重复 {duplicate} 张"
-        lines.append(f"- {symbol}: {h['status']} ({detail})")
-        shown += 1
+            detail += f" ⚠️重复{duplicate}"
+        lines.append(f"⚠️ {symbol}: {detail}")
 
-    for symbol, h in ok_items.items():
-        if shown >= max_detail:
-            break
-        lines.append(
-            f"- {symbol}: ok (止损 {h['stop_loss_count']}, 止盈 {h['take_profit_count']})"
-        )
-        shown += 1
-
-    remaining = len(health) - shown
-    if remaining > 0:
-        lines.append(f"- 其余 {remaining} 个币种保护单正常")
+    if ok_count > 0:
+        lines.append(f"✅ {ok_count} 个币种保护正常")
 
     return lines
 
 
 def render_account_markdown(account: dict, risk: Optional[dict] = None) -> list[str]:
-    """渲染账户状态 + 风险状态 Markdown 段落。"""
+    """渲染账户状态，使用 Telegram 友好的格式。"""
+    pnl = account.get("total_unrealized_pnl", 0)
+    pnl_icon = "📈" if pnl >= 0 else "📉"
+    mode = "🟡模拟盘" if account["paper_mode"] else "🟢实盘"
+
     lines = [
-        "账户状态:",
-        f"- 总资金: {account['total_balance']:.2f} USDT",
-        f"- 可用保证金: {account['available_margin']:.2f} USDT",
-        f"- 未实现盈亏: {account['total_unrealized_pnl']:+.2f} USDT",
-        f"- 持仓数: {account.get('position_count', 0)}",
-        f"- 持仓保证金: {account['total_position_margin']:.2f} USDT",
-        f"- 持仓资金占比: {account['total_position_margin_pct']:.2f}%",
-        f"- 持仓名义价值: {account.get('total_notional_value', 0):.2f} USDT",
-        f"- 日已实现盈亏: {account.get('daily_realized_pnl', 0):+.2f} USDT",
-        f"- 日亏损比例: {account['daily_loss_pct']:.2f}%",
-        f"- Paper Mode: {str(account['paper_mode']).lower()}",
+        f"💰 *账户* {mode}",
+        f"总资金 {account['total_balance']:.2f} | 可用 {account['available_margin']:.2f}",
+        f"{pnl_icon} 浮盈亏 {pnl:+.2f} | 日盈亏 {account.get('daily_realized_pnl', 0):+.2f}",
+        f"持仓 {account.get('position_count', 0)} 笔 | 保证金 {account['total_position_margin']:.2f} ({account['total_position_margin_pct']:.1f}%)",
     ]
+    daily_loss = account.get("daily_loss_pct", 0)
+    if daily_loss > 1.0:
+        lines.append(f"⚠️ 日亏损 {daily_loss:.2f}%")
+
     if risk:
-        lines.extend([
-            "",
-            "风险状态:",
-            f"- 单笔保证金上限: {risk['single_trade_margin_limit_pct']}%",
-            f"- 单币种持仓上限: {risk['single_symbol_position_limit_pct']}%",
-            f"- 日亏损停止阈值: {risk['daily_loss_stop_pct']}%",
-            f"- 当前状态: {risk['risk_status']}",
-        ])
+        status = risk.get("risk_status", "normal")
+        status_icon = "🟡" if status == "paper_mode" else "🟢"
+        lines.append(f"{status_icon} 风控: SL上限{risk['single_trade_margin_limit_pct']}% | 单币{risk['single_symbol_position_limit_pct']}% | 日损{risk['daily_loss_stop_pct']}%")
+
     return lines
 
 
 def render_warnings_markdown(warnings: list[str], errors: list[str], max_items: int = 3) -> list[str]:
-    """渲染异常与注意事项 Markdown 段落。"""
+    """渲染异常与注意事项。"""
     if not warnings and not errors:
         return []
-    lines = ["异常与注意事项:"]
+    lines = ["⚠️ *异常*"]
     for w in warnings[:max_items]:
-        lines.append(f"- WARNING: {w}")
+        lines.append(f"⚠️ {w}")
     for e in errors[:max_items]:
-        lines.append(f"- ERROR: {e}")
+        lines.append(f"❌ {e}")
     rest = len(warnings) + len(errors) - max_items * 2
     if rest > 0:
         lines.append(f"- 其余 {rest} 项异常已省略")

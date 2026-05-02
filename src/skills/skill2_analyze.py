@@ -217,6 +217,10 @@ class Skill2Analyze(BaseSkill):
                     strategy_tag = candidate.get("strategy_tag")
                     if strategy_tag:
                         rating["strategy_tag"] = strategy_tag
+                    # 透传扫描层预期方向，供 Skill3 在 hold 时使用
+                    signal_direction = candidate.get("signal_direction")
+                    if signal_direction:
+                        rating["signal_direction"] = signal_direction
 
                     # 核心风控：校验 LLM 的方向与策略的预期方向是否一致
                     # hold 信号不视为冲突（LLM 不确定时保留原始评分，靠门槛自然过滤）

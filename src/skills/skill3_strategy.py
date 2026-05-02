@@ -321,10 +321,17 @@ class Skill3Strategy(BaseSkill):
         atr_pct = rating.get("atr_pct")  # Skill-1/Skill-2 透传的 ATR 百分比（可选）
         wick_tip_price = rating.get("wick_tip_price")  # 插针 Skill 透传的影线尖端价（可选）
 
-        # hold 信号不生成交易计划
+        # hold 信号时使用扫描层的预期方向（LLM 不确定但不反对）
+        # 只有反方向才在 Skill2 被降级为 0 分拦截
         if signal == "hold":
-            log.info(f"[{self.name}] {symbol} 信号为 hold，跳过")
-            return None
+            # 从上游候选数据推断方向：有 oversold/reversal → long，有 overbought → short
+            inferred = rating.get("signal_direction", "")
+            if inferred in ("long", "short"):
+                signal = inferred
+                log.info(f"[{self.name}] {symbol} LLM=hold，使用扫描预期方向 {signal}")
+            else:
+                log.info(f"[{self.name}] {symbol} 信号为 hold 且无预期方向，跳过")
+                return None
 
         # 确定交易方向
         direction = TradeDirection.LONG if signal == "long" else TradeDirection.SHORT

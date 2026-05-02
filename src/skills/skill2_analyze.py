@@ -219,15 +219,18 @@ class Skill2Analyze(BaseSkill):
                         rating["strategy_tag"] = strategy_tag
 
                     # 核心风控：校验 LLM 的方向与策略的预期方向是否一致
+                    # hold 信号不视为冲突（LLM 不确定时保留原始评分，靠门槛自然过滤）
+                    # 只有反方向（预期 long 但 LLM 说 short，或反之）才强制降级
                     expected_signal = candidate.get("signal_direction")
                     if expected_signal and expected_signal != "hold":
-                        if rating["signal"] != expected_signal:
+                        opposite = {"long": "short", "short": "long"}
+                        if rating["signal"] == opposite.get(expected_signal):
                             log.warning(
                                 f"[{self.name}] {symbol} LLM 信号 ({rating['signal']}) "
-                                f"与策略预期 ({expected_signal}) 冲突，强行降级拦截！"
+                                f"与策略预期 ({expected_signal}) 反向冲突，强行降级拦截！"
                             )
                             rating["rating_score"] = 0
-                            rating["comment"] = f"[方向冲突已被拦截: 预期 {expected_signal} 但 LLM 判定 {rating['signal']}] " + rating.get("comment", "")
+                            rating["comment"] = f"[反向冲突已拦截: 预期 {expected_signal} 但 LLM 判定 {rating['signal']}] " + rating.get("comment", "")
 
                     all_ratings.append(rating)
             except TimeoutError:

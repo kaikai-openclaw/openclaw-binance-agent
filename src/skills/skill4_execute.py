@@ -46,9 +46,9 @@ DEFAULT_LEVERAGE = 10
 # 多品种并发执行最大线程数（monitor_until_close=True 时生效）
 DEFAULT_MAX_CONCURRENT_TRADES = 8
 
-# 已有持仓缺少策略计划时的保护性止损/止盈（与 Skill-3 固定回退保持一致）
-EXISTING_POSITION_STOP_LOSS_PCT = 0.03
-EXISTING_POSITION_TAKE_PROFIT_PCT = 0.06
+# 已有持仓缺少策略计划时的保护性止损/止盈（与 max_stop_pct 保持一致）
+EXISTING_POSITION_STOP_LOSS_PCT = 0.07
+EXISTING_POSITION_TAKE_PROFIT_PCT = 0.14
 
 # 已有保护单触发价允许的相对误差，超过则撤单重挂
 PROTECTION_PRICE_TOLERANCE_PCT = 0.001

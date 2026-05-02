@@ -267,15 +267,45 @@ def create_fast_analyzer() -> callable:
         
         deep_indicators = ""
         if market_data.get("rsi") is not None:
-            deep_indicators += f"- RSI 指标: {market_data.get('rsi')}\\n"
+            deep_indicators += f"- RSI: {market_data['rsi']}\n"
         if market_data.get("bias_pct") is not None:
-            deep_indicators += f"- 均线乖离率 (Bias): {market_data.get('bias_pct')}%\\n"
+            deep_indicators += f"- 均线乖离率 (BIAS20): {market_data['bias_pct']}%\n"
         if market_data.get("atr_pct") is not None:
-            deep_indicators += f"- ATR 波动率: {market_data.get('atr_pct')}%\\n"
-        if market_data.get("adx") is not None:
-            deep_indicators += f"- ADX 趋势强度: {market_data.get('adx')}\\n"
-        if market_data.get("heat_score"):
-            deep_indicators += f"- 市场热度评分: {market_data.get('heat_score')}\\n"
+            deep_indicators += f"- ATR 波动率: {market_data['atr_pct']}%\n"
+        if market_data.get("kdj_j") is not None:
+            deep_indicators += f"- KDJ J值: {market_data['kdj_j']}\n"
+        if market_data.get("funding_rate") is not None:
+            deep_indicators += f"- 资金费率: {market_data['funding_rate']}%\n"
+        if market_data.get("macd_divergence") is not None:
+            deep_indicators += f"- MACD背离: {'是' if market_data['macd_divergence'] else '否'}\n"
+        if market_data.get("volume_surge") is not None:
+            deep_indicators += f"- 放量倍数: {market_data['volume_surge']}x\n"
+        elif market_data.get("volume_surge_ratio") is not None:
+            deep_indicators += f"- 放量倍数: {market_data['volume_surge_ratio']}x\n"
+        if market_data.get("below_boll_lower"):
+            deep_indicators += "- 布林带: 跌破下轨\n"
+        if market_data.get("above_boll_upper"):
+            deep_indicators += "- 布林带: 突破上轨\n"
+        if market_data.get("consecutive_down") is not None and market_data["consecutive_down"] > 0:
+            deep_indicators += f"- 连续下跌: {market_data['consecutive_down']}根\n"
+        if market_data.get("consecutive_up") is not None and market_data["consecutive_up"] > 0:
+            deep_indicators += f"- 连续上涨: {market_data['consecutive_up']}根\n"
+        if market_data.get("drop_pct") is not None:
+            deep_indicators += f"- 近期累计跌幅: {market_data['drop_pct']}%\n"
+        if market_data.get("rally_pct") is not None:
+            deep_indicators += f"- 近期累计涨幅: {market_data['rally_pct']}%\n"
+        if market_data.get("distance_from_high_pct") is not None:
+            deep_indicators += f"- 距近期高点: {market_data['distance_from_high_pct']}%\n"
+        if market_data.get("rise_from_low_pct") is not None:
+            deep_indicators += f"- 距近期低点涨幅: {market_data['rise_from_low_pct']}%\n"
+
+        # 扫描层综合评分和信号摘要
+        scan_summary = ""
+        for score_key in ["oversold_score", "overbought_score", "reversal_score"]:
+            if market_data.get(score_key) is not None:
+                scan_summary += f"- 量化筛选评分: {market_data[score_key]}/100\n"
+        if market_data.get("signal_details"):
+            scan_summary += f"- 触发信号: {market_data['signal_details']}\n"
 
         prompt = f"""你是一名专业的加密货币量化研究员。请根据以下 {symbol} 的综合市场数据进行量化评估并输出结构化评分。
 
@@ -283,16 +313,19 @@ def create_fast_analyzer() -> callable:
 底层量化算法已将该标的筛选出，且预判的战略方向为：{direction_text}。
 请在此基础上评估该交易方向的胜率和安全边际。
 
-【市场数据】
+【实时行情】
 - 当前价格: {ticker['last_price']} USDT
 - 24h 涨跌幅: {ticker['price_change_pct']:+.2f}%
 - 24h 成交量: {ticker['quote_volume']/1e6:.1f}M USDT
 - 24h 高点: {ticker['high_24h']} / 低点: {ticker['low_24h']}
 
-【深度技术指标】
-{deep_indicators if deep_indicators else "暂无深度技术指标"}
+【技术指标】
+{deep_indicators if deep_indicators else "暂无"}
 
-请基于以上数据，从技术面和资金面角度进行量化评估。
+【量化筛选结果】
+{scan_summary if scan_summary else "暂无"}
+
+请综合以上所有数据，从技术面、资金面和量化信号角度评估。
 直接返回以下 JSON 格式（不要解释，只返回 JSON）：
 {{"rating_score": <int 1-10>, "signal": "<long|short|hold>", "confidence": <float 0-100>}}
 

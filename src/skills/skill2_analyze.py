@@ -184,8 +184,26 @@ class Skill2Analyze(BaseSkill):
                 "adx": candidate.get("adx"),
                 "signal_direction": candidate.get("signal_direction"),
                 "rsi": candidate.get("rsi"),
-                "bias_pct": candidate.get("bias_pct"),
+                "bias_pct": candidate.get("bias_20") or candidate.get("bias_pct"),
                 "price_change_pct": candidate.get("price_change_pct"),
+                # 扫描层完整信号数据
+                "oversold_score": candidate.get("oversold_score"),
+                "overbought_score": candidate.get("overbought_score"),
+                "reversal_score": candidate.get("reversal_score"),
+                "signal_details": candidate.get("signal_details"),
+                "funding_rate": candidate.get("funding_rate"),
+                "consecutive_down": candidate.get("consecutive_down"),
+                "consecutive_up": candidate.get("consecutive_up"),
+                "drop_pct": candidate.get("drop_pct"),
+                "rally_pct": candidate.get("rally_pct"),
+                "macd_divergence": candidate.get("macd_divergence"),
+                "volume_surge": candidate.get("volume_surge"),
+                "volume_surge_ratio": candidate.get("volume_surge_ratio"),
+                "below_boll_lower": candidate.get("below_boll_lower"),
+                "above_boll_upper": candidate.get("above_boll_upper"),
+                "kdj_j": candidate.get("kdj_j"),
+                "distance_from_high_pct": candidate.get("distance_from_high_pct"),
+                "rise_from_low_pct": candidate.get("rise_from_low_pct"),
             }
 
             try:

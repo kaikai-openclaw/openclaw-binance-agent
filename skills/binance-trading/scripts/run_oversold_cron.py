@@ -142,7 +142,7 @@ def render_markdown(report: dict) -> str:
     account = report["account"]
     risk = report["risk"]
     lines = [
-        "超跌交易定时任务报告",
+        f"🌀 *超跌交易报告* ({report['mode']})",
         "",
         f"任务状态: {report['status']}",
         f"交易决策: {decision['action']}",
@@ -483,7 +483,7 @@ def main() -> None:
         if args.format == "json":
             print(json.dumps(failure, ensure_ascii=False, indent=2))
         else:
-            print("超跌交易定时任务报告")
+            print(f"🌀 超跌交易报告 ({args.mode})")
             print("")
             print("任务状态: failed")
             print(f"错误: {exc}")

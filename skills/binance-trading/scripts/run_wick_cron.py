@@ -143,7 +143,7 @@ def render_markdown(report: dict) -> str:
     account = report["account"]
     risk = report["risk"]
     lines = [
-        "插针交易定时任务报告",
+        f"🪡 *插针交易报告* ({report['mode']})",
         "",
         f"任务状态: {report['status']}",
         f"交易决策: {decision['action']}",
@@ -480,7 +480,7 @@ def main() -> None:
             "task_name": "插针交易",
             "status": "failed",
             "errors": [str(exc)],
-            "markdown": f"插针交易定时任务报告\n\n任务状态: failed\n错误: {exc}",
+            "markdown": f"🪡 插针交易报告 ({args.mode})\n\n任务状态: failed\n错误: {exc}",
         }
 
     if args.format == "json":

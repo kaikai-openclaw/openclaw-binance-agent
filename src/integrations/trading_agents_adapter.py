@@ -403,12 +403,23 @@ def create_fast_analyzer() -> callable:
             raw = _call_fast_llm(prompt)
             cleaned = _clean_llm_text(raw)
             result = _extract_json(cleaned)
-            # 用扫描层评分替代 LLM 评分，LLM 只负责方向确认
-            result["rating_score"] = mapped_rating
-            result.setdefault("signal", "hold")
-            result["confidence"] = float(scan_score)  # 用扫描分作为置信度
-            result["comment"] = f"[快速模式] 扫描分={scan_score} LLM方向={result['signal']}"
-            log.info(f"[FastAnalyzer] {symbol} 完成 {time.time()-t0:.1f}s: score={mapped_rating}(扫描{scan_score}) signal={result['signal']}")
+            llm_signal = result.get("signal", "hold")
+            # LLM 确认方向 → 加 1 分（优先交易）
+            # LLM 返回 hold → 保持原分（仍可交易，排在后面）
+            # LLM 返回反方向 → 由 Skill2 降级处理
+            bonus = 1 if llm_signal == expected_dir else 0
+            result["rating_score"] = min(10, mapped_rating + bonus)
+            result["signal"] = llm_signal
+            result["confidence"] = float(scan_score)
+            result["comment"] = (
+                f"[快速模式] 扫描分={scan_score} LLM={llm_signal}"
+                + (f" +1确认" if bonus else "")
+            )
+            log.info(
+                f"[FastAnalyzer] {symbol} 完成 {time.time()-t0:.1f}s: "
+                f"score={result['rating_score']}(扫描{scan_score}{'+1' if bonus else ''}) "
+                f"signal={llm_signal}"
+            )
             return result
         except Exception as e:
             log.warning(f"[FastAnalyzer] {symbol} LLM 调用失败: {e}")

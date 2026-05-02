@@ -68,6 +68,60 @@ def _fetch_binance_ticker(symbol: str) -> Dict[str, Any]:
     raise ValueError(f"未找到 {symbol} 的市场数据")
 
 
+def _build_strategy_guide(market_data: dict) -> str:
+    """根据扫描层数据判断策略类型，生成专属评估指引。"""
+    direction = market_data.get("signal_direction", "")
+
+    if market_data.get("oversold_score") is not None:
+        return (
+            "策略类型：超跌反弹做多\n"
+            "交易逻辑：币种经历深度下跌后出现超卖信号，预期均值回归反弹。\n"
+            "核心确认信号（必须同时满足才给高分）：\n"
+            "  1. RSI 处于超卖区（< 30 强信号，30-40 中等）\n"
+            "  2. 资金费率为负值（空头拥挤，反弹动力）\n"
+            "  3. MACD 底背离或 KDJ 低位金叉（动能转向）\n"
+            "风险因素（出现则降分）：\n"
+            "  - 大盘（BTC）处于下跌趋势，系统性风险高\n"
+            "  - 成交量持续萎缩，无资金承接\n"
+            "  - 跌幅过深（>40%），可能是基本面恶化而非超卖"
+        )
+
+    if market_data.get("overbought_score") is not None:
+        return (
+            "策略类型：超买摸顶做空\n"
+            "交易逻辑：币种短期暴涨后出现超买信号，预期回调。\n"
+            "核心确认信号（必须同时满足才给高分）：\n"
+            "  1. RSI 处于超买区（> 80 强信号，75-80 中等）\n"
+            "  2. 资金费率极端正值（多头拥挤，做空有费率收益）\n"
+            "  3. 量价背离（价格创新高但成交量萎缩，上涨动能衰竭）\n"
+            "风险因素（出现则大幅降分）：\n"
+            "  - 轧空风险：成交量低但持仓量高，容易被逼空\n"
+            "  - 强势趋势中的回调做空胜率极低\n"
+            "  - 价格已从高点回落超过 5%，做空最佳时机已过"
+        )
+
+    if market_data.get("reversal_score") is not None:
+        return (
+            "策略类型：底部趋势反转做多\n"
+            "交易逻辑：币种在底部区域出现趋势反转信号，预期新一轮上涨。\n"
+            "核心确认信号（必须同时满足才给高分）：\n"
+            "  1. 底部放量（成交量突增 ≥ 3x，资金入场）\n"
+            "  2. 价格企稳（不再创新低 + 波动收窄）\n"
+            "  3. 均线拐头向上（EMA5 上穿 EMA10 金叉）\n"
+            "风险因素（出现则降分）：\n"
+            "  - 无放量确认的反转是假信号，不可信\n"
+            "  - 前期跌幅不够深（< 15%），反弹空间有限\n"
+            "  - 大盘处于恐慌下跌，个币反转容易被拖下水"
+        )
+
+    # 通用兜底
+    dir_text = "做多" if direction == "long" else "做空" if direction == "short" else "未知方向"
+    return (
+        f"策略类型：通用量化筛选（{dir_text}）\n"
+        f"请综合技术指标和量化信号评估该方向的胜率和风险。"
+    )
+
+
 def _call_fast_llm(prompt: str, model: Optional[str] = None) -> str:
     """单次 LLM API 调用，返回文本响应。
 
@@ -307,11 +361,13 @@ def create_fast_analyzer() -> callable:
         if market_data.get("signal_details"):
             scan_summary += f"- 触发信号: {market_data['signal_details']}\n"
 
-        prompt = f"""你是一名专业的加密货币量化研究员。请根据以下 {symbol} 的综合市场数据进行量化评估并输出结构化评分。
+        # 根据策略类型生成专属评估指引
+        strategy_guide = _build_strategy_guide(market_data)
 
-【核心背景】
-底层量化算法已将该标的筛选出，且预判的战略方向为：{direction_text}。
-请在此基础上评估该交易方向的胜率和安全边际。
+        prompt = f"""你是一名专业的加密货币合约交易员。请根据以下 {symbol} 的数据评估交易机会。
+
+【策略背景】
+{strategy_guide}
 
 【实时行情】
 - 当前价格: {ticker['last_price']} USDT
@@ -325,11 +381,10 @@ def create_fast_analyzer() -> callable:
 【量化筛选结果】
 {scan_summary if scan_summary else "暂无"}
 
-请综合以上所有数据，从技术面、资金面和量化信号角度评估。
-直接返回以下 JSON 格式（不要解释，只返回 JSON）：
+请严格基于以上数据评估，重点关注策略背景中提到的核心确认信号。
+如果核心信号不充分或存在明显风险，应给出低分或 hold 信号。
+直接返回 JSON（不要解释）：
 {{"rating_score": <int 1-10>, "signal": "<long|short|hold>", "confidence": <float 0-100>}}
-
-说明：rating_score 为综合评分（1最低10最高），signal 为趋势方向判断，confidence 为置信度百分比。
 """
 
         try:

@@ -382,19 +382,21 @@ def create_fast_analyzer() -> callable:
 {scan_summary if scan_summary else "暂无"}
 
 请严格基于以上数据评估，重点关注策略背景中提到的核心确认信号。
-你只需要判断方向：该币种当前是否适合按策略方向交易？
+如果多数核心信号已满足且无明显风险，返回策略方向（long 或 short）。
+如果核心信号不足或风险明显，返回 hold。
 直接返回 JSON（不要解释）：
 {{"signal": "<long|short|hold>"}}
-signal 说明：long=适合做多，short=适合做空，hold=不建议交易。
 """
 
         # 从扫描层评分映射 rating_score（0-100 → 1-10）
-        scan_score = (
-            market_data.get("oversold_score")
-            or market_data.get("overbought_score")
-            or market_data.get("reversal_score")
-            or 50
-        )
+        scan_score = None
+        for key in ["oversold_score", "overbought_score", "reversal_score"]:
+            val = market_data.get(key)
+            if val is not None:
+                scan_score = val
+                break
+        if scan_score is None:
+            scan_score = 50
         mapped_rating = max(1, min(10, round(scan_score / 10)))
 
         try:

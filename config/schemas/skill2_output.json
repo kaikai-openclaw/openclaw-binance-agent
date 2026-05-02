@@ -48,6 +48,10 @@
           "wick_tip_price": {
             "type": ["number", "null"],
             "description": "插针 Skill 透传的影线尖端价，供 Skill-3 作为天然止损位"
+          },
+          "signal_direction": {
+            "type": "string",
+            "description": "扫描层预期方向（long/short），供 Skill-3 在 LLM 返回 hold 时使用"
           }
         },
         "required": [
@@ -102,6 +106,10 @@
           "wick_tip_price": {
             "type": ["number", "null"],
             "description": "插针 Skill 透传的影线尖端价，供 Skill-3 作为天然止损位"
+          },
+          "signal_direction": {
+            "type": "string",
+            "description": "扫描层预期方向（long/short），供 Skill-3 在 LLM 返回 hold 时使用"
           }
         },
         "required": [

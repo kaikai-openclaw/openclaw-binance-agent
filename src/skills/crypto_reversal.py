@@ -171,7 +171,7 @@ LT_W_SHADOW = 7            # 长下影线
 
 DEFAULT_MIN_QUOTE_VOLUME = 10_000_000
 DEFAULT_MIN_REVERSAL_SCORE = 55
-DEFAULT_MAX_CANDIDATES = 20
+DEFAULT_MAX_CANDIDATES = 10
 
 
 # ══════════════════════════════════════════════════════════

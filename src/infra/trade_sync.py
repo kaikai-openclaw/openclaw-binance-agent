@@ -73,9 +73,12 @@ class BinanceTradeSyncer:
             for closed_order in self._extract_closed_orders(symbol, trades):
                 metadata = metadata_by_symbol.get(symbol, {})
                 record = self._to_trade_record(closed_order, metadata)
+                # 用 orderId + 成交时间戳（ms）组合作为幂等键，
+                # 防止 Binance 跨时间复用同一 orderId 导致漏记。
+                closed_at_ms = int(closed_order.closed_at.timestamp() * 1000)
                 sync_key = (
                     f"binance_user_order:{closed_order.symbol}:"
-                    f"{closed_order.order_id}"
+                    f"{closed_order.order_id}:{closed_at_ms}"
                 )
                 if self._memory_store.record_trade_once(record, sync_key):
                     synced_count += 1
@@ -180,7 +183,9 @@ class BinanceTradeSyncer:
             rating_score=int(metadata.get("rating_score", 6) or 6),
             position_size_pct=float(metadata.get("position_size_pct", 0.0) or 0.0),
             closed_at=closed_order.closed_at,
-            strategy_tag=str(metadata.get("strategy_tag", "unknown") or "unknown"),
+            strategy_tag=(
+                lambda t: t if t and t != "unknown" else "crypto_generic"
+            )(str(metadata.get("strategy_tag", "unknown") or "unknown")),
         )
 
 

@@ -131,11 +131,11 @@ H1_MIN_KLINES = 80
 H1_BOTTOM_LOOKBACK = 72                 # 近期最低点回看 72 根 1h = 3 天
 H1_PRICE_STABLE_WINDOW = 12            # 企稳观察窗口 12 根 1h = 12 小时（从 8 收紧）
 H1_DROP_LOOKBACK = 120                  # 前期跌幅回看 120 根 1h = 5 天
-H1_VOLUME_SURGE_THRESHOLD = 4.5         # 放量倍数阈值（从 3.5 收紧，过滤 1h 噪音）
-H1_VOLUME_SURGE_STRONG = 6.5            # 强放量（从 5.0 收紧）
-H1_DIST_BOTTOM_IDEAL_MIN = 2.0          # 距底部理想距离下限（%）
-H1_DIST_BOTTOM_IDEAL_MAX = 4.0          # 距底部理想距离上限（%，从 6 收紧，避免追高）
-H1_SHADOW_RATIO_THRESHOLD = 2.5         # 下影线长度 / 实体长度 ≥ 2.5 倍（从 2.0 收紧）
+H1_VOLUME_SURGE_THRESHOLD = 3.0         # 放量倍数阈值（回测显示 1h 放量是反效果，放宽 4.5→3.0 仅作评分参考）
+H1_VOLUME_SURGE_STRONG = 5.0            # 强放量（从 6.5 放宽到 5.0）
+H1_DIST_BOTTOM_IDEAL_MIN = 1.5          # 距底部理想距离下限（%，从 2.0 放宽，给 1h 波动留空间）
+H1_DIST_BOTTOM_IDEAL_MAX = 6.0          # 距底部理想距离上限（%，从 4.0 放宽，2% 窗口对 1h 太窄）
+H1_SHADOW_RATIO_THRESHOLD = 2.5         # 下影线长度 / 实体长度 ≥ 2.5 倍
 
 # 超短期评分权重 — 回测优化后 v2
 # 回测结论（200币 × 6个月，持有 24 根 1h）：
@@ -390,10 +390,15 @@ class _CryptoReversalBase(BaseSkill):
                 if result["reversal_score"] < min_score and not target_symbols:
                     continue
 
-                # 1h 模式硬性门槛：必须有放量信号，否则跳过
-                # （1h 级别弱信号太容易凑分，放量是反转的核心确认）
+                # 1h 模式放量软过滤：回测显示 1h 放量是反效果维度（-1.29%），
+                # 不再作为硬门槛，改为无放量时扣分（评分体系已通过低权重 8 分处理）
+                # 保留日志便于观察
                 if interval == "1h" and result.get("volume_surge_ratio", 0) < vol_thresh:
-                    continue
+                    log.debug(
+                        "[%s] %s 1h 无放量信号 (ratio=%.1f < %.1f)，不再硬性过滤",
+                        self.name, symbol,
+                        result.get("volume_surge_ratio", 0), vol_thresh,
+                    )
 
                 # 追高过滤：24h 涨幅过大说明反转行情已走大半，此时做多是追高
                 # 4h 模式阈值 25%（波段级别容忍度更高），1h 模式阈值 15%（更敏感）
@@ -406,24 +411,32 @@ class _CryptoReversalBase(BaseSkill):
                     )
                     continue
 
-                # 1h 模式底部确认硬性门槛：价格必须已从近期最低点反弹 ≥ 2% 且 ≤ 4%
-                # - 反弹不足 2%：可能还在下跌途中，接刀风险高
-                # - 反弹超过 4%：反转行情已走大半，追多风险高（与 dist_max 对齐）
-                # 且至少满足 KDJ 低位金叉 或 MACD 底背离 之一
+                # 1h 模式底部确认：放宽为 OR 逻辑（三选二）
+                # 原逻辑要求 dist_bottom 在 2%~4% AND 技术确认，窗口太窄导致几乎无币通过
+                # 新逻辑：以下三个条件满足至少两个即可
+                #   a) 距底部在理想区间（1.5%~6%，已放宽）
+                #   b) KDJ 低位金叉（回测最有效维度 +0.33%）
+                #   c) MACD 底背离或零轴下方金叉
+                # 仍保留最低安全线：dist_bottom 必须 ≥ 1%（防止接刀）
                 if interval == "1h" and not target_symbols:
                     dist_bottom_pct = result.get("dist_bottom_pct")
-                    has_rise = dist_bottom_pct is not None and 2.0 <= dist_bottom_pct <= 4.0
-                    has_bottom_confirm = (
-                        result.get("macd_reversal_score", 0) > 0
-                        or result.get("kdj_score", 0) > 0
-                    )
-                    if not (has_rise and has_bottom_confirm):
+                    # 安全线：反弹不足 1% 说明还在下跌途中，直接跳过
+                    if dist_bottom_pct is None or dist_bottom_pct < 1.0:
                         log.info(
-                            "[%s] %s 底部未确认，跳过: dist_bottom=%.2f%%, macd_rev=%s, kdj_cross=%s",
+                            "[%s] %s 反弹不足 1%%，跳过接刀: dist_bottom=%.2f%%",
                             self.name, symbol,
                             dist_bottom_pct if dist_bottom_pct is not None else 0.0,
-                            result.get("macd_reversal_score", 0) > 0,
-                            result.get("kdj_score", 0) > 0,
+                        )
+                        continue
+                    cond_dist = dist_min <= dist_bottom_pct <= dist_max
+                    cond_kdj = result.get("kdj_score", 0) > 0
+                    cond_macd = result.get("macd_reversal_score", 0) > 0
+                    confirm_count = sum([cond_dist, cond_kdj, cond_macd])
+                    if confirm_count < 2:
+                        log.info(
+                            "[%s] %s 底部确认不足（%d/3）: dist=%.2f%%(%s) kdj=%s macd=%s",
+                            self.name, symbol, confirm_count,
+                            dist_bottom_pct, cond_dist, cond_kdj, cond_macd,
                         )
                         continue
 

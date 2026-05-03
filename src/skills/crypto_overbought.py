@@ -542,10 +542,11 @@ class HourlyOverboughtSkill(_CryptoOverboughtBase):
         self.name = "crypto_overbought_1h"
 
     def run(self, input_data: dict) -> dict:
-        # 1h 回测优化门槛：35（与 4h 统一）
-        # 回测结论：评分≥35 胜率61-76%，样本稳定
+        # 1h 回测优化门槛：45（做空风险不对称，门槛应高于做多）
+        # 原 35 分只需 2-3 个维度触发就能通过，对做空偏松
+        # 45 分要求至少 3-4 个维度同时触发，过滤低质量信号
         if "min_overbought_score" not in input_data:
-            input_data = {**input_data, "min_overbought_score": 35}
+            input_data = {**input_data, "min_overbought_score": 45}
         return self._run_scan(
             input_data,
             interval=H1_INTERVAL,
@@ -644,6 +645,7 @@ def calc_overbought_score(
         signals.append(f"RSI={rsi_val:.1f}>{rsi_thresh}")
 
     # ── 2. 资金费率极端正值（做空最强信号）──
+    # 费率为负 = 空头已拥挤在付费，此时做空是逆向信号，扣分
     fr_display = None
     if funding_rate is not None:
         fr_display = round(funding_rate * 100, 4)
@@ -658,6 +660,13 @@ def calc_overbought_score(
                 ratio = (funding_rate - FUNDING_RATE_HIGH) / (FUNDING_RATE_EXTREME - FUNDING_RATE_HIGH)
                 score += w["funding"] * 0.5 * min(1.0, ratio)
                 signals.append(f"费率={fr_display:.3f}%偏高")
+        elif funding_rate < -0.0005:
+            # 费率为负：空头在付费给多头，说明空头已经很拥挤
+            # 此时做空 = 加入拥挤的一方，轧空风险高
+            # 费率越负扣分越重，-0.05% 扣 5 分，-0.1% 扣 10 分，上限 15 分
+            penalty = min(15.0, abs(funding_rate) / 0.001 * 5.0)
+            score -= penalty
+            signals.append(f"⚠️费率={fr_display:.3f}%为负(空头拥挤,扣{penalty:.0f}分)")
 
     # ── 3. BIAS 正向偏离 ──
     bias_20 = _calc_bias(closes, BOLL_PERIOD)

@@ -50,10 +50,12 @@ from report_utils import (
     build_position_snapshots,
     build_protection_report,
     build_symbol_source_map,
+    STRATEGY_TAG_MAP,
     classify_protection_label,
     build_account_summary,
     build_decision,
     metadata_by_symbol as _metadata_by_symbol,
+    build_full_metadata as _build_full_metadata,
     protection_warnings as _protection_warnings,
     render_positions_markdown,
     render_protection_markdown,
@@ -320,9 +322,10 @@ def run_report(args: argparse.Namespace) -> dict:
                     risk_ratio=risk_ratio,
                     require_market_price=True,
                     # ── 超跌策略参数 ──
-                    # 短期(4h)：快进快出，atr_stop_mult 降到 1.0，止损更紧
+                    # 短期(4h)：快进快出，atr_stop_mult=1.0，止损更紧
                     #   ATR ≤ 5% 的币均可进场（5% × 1.0 = 5% ≤ max_stop_pct）
                     #   盈亏比 2.5:1（atr_tp_mult=2.5 / atr_stop_mult=1.0）
+                    #   移动止损 1.3× ATR 激活（1.0× 太早，反弹初期容易被扫）
                     # 长期(1d)：波段反弹，atr_stop_mult=1.2，ATR ≤ 5.8% 可进场
                     #   盈亏比 3.75:1（atr_tp_mult=4.5 / atr_stop_mult=1.2）
                     max_hold_hours=72.0 if args.mode == "1d" else 24.0,
@@ -330,8 +333,8 @@ def run_report(args: argparse.Namespace) -> dict:
                     atr_stop_mult=1.2 if args.mode == "1d" else 1.0,
                     atr_tp_mult=4.5 if args.mode == "1d" else 2.5,
                     trailing_stop_ratio=0.35 if args.mode == "1d" else 0.5,
-                    trailing_activation_mult=1.5 if args.mode == "1d" else 1.0,
-                    trailing_activation_mult_hv=2.0 if args.mode == "1d" else 1.5,
+                    trailing_activation_mult=1.5 if args.mode == "1d" else 1.3,
+                    trailing_activation_mult_hv=2.0 if args.mode == "1d" else 1.8,
                     high_vol_tp_mult=4.0 if args.mode == "1d" else 3.0,
                 )
                 s3_input_id = state_store.save("skill3_input", {"input_state_id": s2_id})
@@ -361,9 +364,19 @@ def run_report(args: argparse.Namespace) -> dict:
                 sync_symbols.update(
                     r.get("symbol", "") for r in s4_data.get("execution_results", [])
                 )
+                # 补充当前所有持仓币种，确保历史持仓的平仓成交也能被同步
+                try:
+                    current_positions = fapi_client.get_positions()
+                    sync_symbols.update(p.symbol for p in current_positions if p.symbol)
+                except Exception as _pos_exc:
+                    log.warning(f"获取持仓列表失败，历史持仓可能漏同步: {_pos_exc}")
+
+                # 构建 metadata：历史持仓从 StateStore skill4 记录补充，本轮执行结果优先覆盖
+                full_metadata: dict = _build_full_metadata(state_store, s4_data.get("execution_results", []))
+
                 synced_closed_count = syncer.sync_closed_trades(
                     symbols=sync_symbols,
-                    metadata_by_symbol=_metadata_by_symbol(s4_data.get("execution_results", [])),
+                    metadata_by_symbol=full_metadata,
                 )
 
                 skill5 = Skill5Evolve(

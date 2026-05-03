@@ -54,6 +54,7 @@ from report_utils import (
     build_account_summary,
     build_decision,
     metadata_by_symbol as _metadata_by_symbol,
+    build_full_metadata as _build_full_metadata,
     protection_warnings as _protection_warnings,
     render_positions_markdown,
     render_protection_markdown,
@@ -276,7 +277,8 @@ def run_report(args: argparse.Namespace) -> dict:
             strategy_tag=strategy_tag,
         )
         # 做空风险不对称（亏损理论上无限），使用更保守的仓位
-        # 1h 超买假信号多，进一步降至 1%；4h/1d 保持 1.5% 上限
+        # 1h 超买信号噪音大，用小仓位 + 宽止损策略
+        # 单笔持仓上限 2%，2 笔最多 4% 总敞口
         if args.mode == "1h":
             risk_ratio = min(risk_ratio, 0.01)
         else:
@@ -331,18 +333,25 @@ def run_report(args: argparse.Namespace) -> dict:
                     risk_ratio=risk_ratio,
                     require_market_price=True,
                     # ── 超买做空策略参数 ──
-                    # 1h 模式：快速做空，12h 持仓，atr_stop_mult=0.8，ATR ≤ 3.75% 可进场
-                    #   盈亏比 3.75:1（atr_tp_mult=3.0 / atr_stop_mult=0.8）
+                    # 1h 模式：小仓位 + 宽止损，12h 持仓
+                    #   止损 1.5× ATR（0.8× 太紧，1h 噪音会频繁扫止损）
+                    #   止盈 3.0× ATR，盈亏比 2:1
+                    #   单笔持仓上限 2%（做空风险更大，严控敞口）
+                    #   移动止损 1.5× ATR 激活（让趋势有空间发展）
                     # 4h 模式：48h 持仓，atr_stop_mult=1.2，ATR ≤ 4.2% 可进场
                     #   盈亏比 2.9:1（atr_tp_mult=3.5 / atr_stop_mult=1.2）
+                    #   做空持仓上限 10%（风险不对称，比做多更保守）
                     # 1d 模式：波段做空，atr_stop_mult=1.5，ATR ≤ 4.7% 可进场
                     #   盈亏比 2.3:1（atr_tp_mult=3.5 / atr_stop_mult=1.5）
-                    max_stop_pct=0.03 if args.mode == "1h" else (0.05 if args.mode == "4h" else 0.07),
+                    max_stop_pct=0.04 if args.mode == "1h" else (0.05 if args.mode == "4h" else 0.07),
                     max_hold_hours=12.0 if args.mode == "1h" else 48.0,
-                    atr_stop_mult=0.8 if args.mode == "1h" else 1.2,
+                    atr_stop_mult=1.5 if args.mode == "1h" else 1.2,
                     atr_tp_mult=3.0 if args.mode == "1h" else 3.5,
                     trailing_stop_ratio=0.5 if args.mode == "1h" else 0.45,
+                    trailing_activation_mult=1.5 if args.mode == "1h" else 1.3,
+                    trailing_activation_mult_hv=2.0 if args.mode == "1h" else 1.8,
                     max_trades=2 if args.mode == "1h" else 3,
+                    max_position_pct=2.0 if args.mode == "1h" else 10.0,
                 )
                 s3_input_id = state_store.save("skill3_input", {"input_state_id": s2_id})
                 s3_id = skill3.execute(s3_input_id)
@@ -372,9 +381,15 @@ def run_report(args: argparse.Namespace) -> dict:
                 sync_symbols.update(
                     r.get("symbol", "") for r in s4_data.get("execution_results", [])
                 )
+                # 补充当前所有持仓币种，确保历史持仓的平仓成交也能被同步
+                try:
+                    current_positions = fapi_client.get_positions()
+                    sync_symbols.update(p.symbol for p in current_positions if p.symbol)
+                except Exception as _pos_exc:
+                    log.warning(f"获取持仓列表失败，历史持仓可能漏同步: {_pos_exc}")
                 synced_closed_count = syncer.sync_closed_trades(
                     symbols=sync_symbols,
-                    metadata_by_symbol=_metadata_by_symbol(s4_data.get("execution_results", [])),
+                    metadata_by_symbol=_build_full_metadata(state_store, s4_data.get("execution_results", [])),
                 )
 
                 skill5 = Skill5Evolve(

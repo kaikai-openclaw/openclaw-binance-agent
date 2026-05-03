@@ -126,6 +126,7 @@ class Skill3Strategy(BaseSkill):
         trailing_activation_mult: float = DEFAULT_TRAILING_ACTIVATION_MULT,
         trailing_activation_mult_hv: float = DEFAULT_TRAILING_ACTIVATION_MULT_HV,
         high_vol_tp_mult: float = DEFAULT_HIGH_VOL_TP_MULT,
+        max_position_pct: float = 20.0,
     ) -> None:
         """
         初始化 Skill-3。
@@ -158,6 +159,8 @@ class Skill3Strategy(BaseSkill):
                 并校验最小名义金额（至少 5 USDT）
             memory_store: 可选，注入后每轮从最新反思日志动态读取
                 risk_ratio，无需重启即可感知 Skill-5 的进化结果
+            max_position_pct: 单笔持仓占账户资金的上限百分比，默认 20%。
+                1h 等高频策略建议设为 2-5% 以控制总敞口。
         """
         super().__init__(state_store, input_schema, output_schema)
         self.name = "skill3_strategy"
@@ -183,6 +186,7 @@ class Skill3Strategy(BaseSkill):
         self._high_vol_tp_mult = high_vol_tp_mult
         self._trading_rule_provider = trading_rule_provider
         self._memory_store = memory_store
+        self._max_position_pct = max_position_pct
 
         # 预计算 round-trip 成本占比（每次下单一致，无需每笔重算）
         try:
@@ -395,14 +399,15 @@ class Skill3Strategy(BaseSkill):
         position_value = position_size * entry_price
         position_size_pct = (position_value / account.total_balance) * 100
 
-        # 需求 3.4 & 3.5：风控预校验 — 单笔保证金不超过 20%
-        if position_size_pct > 20.0:
+        # 需求 3.4 & 3.5：风控预校验 — 单笔持仓不超过 max_position_pct
+        cap = self._max_position_pct
+        if position_size_pct > cap:
             log.info(
                 f"[{self.name}] {symbol} 头寸规模 {position_size_pct:.2f}% "
-                f"超过 20% 上限，裁剪至 20%"
+                f"超过 {cap:.0f}% 上限，裁剪至 {cap:.0f}%"
             )
-            position_size_pct = 20.0
-            position_size = (account.total_balance * 0.20) / entry_price
+            position_size_pct = cap
+            position_size = (account.total_balance * cap / 100.0) / entry_price
 
         normalized_position_size = self._normalize_quantity_for_exchange(
             symbol=symbol,

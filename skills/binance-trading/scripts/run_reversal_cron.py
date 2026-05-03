@@ -54,6 +54,7 @@ from report_utils import (
     build_account_summary,
     build_decision,
     metadata_by_symbol as _metadata_by_symbol,
+    build_full_metadata as _build_full_metadata,
     protection_warnings as _protection_warnings,
     render_positions_markdown,
     render_protection_markdown,
@@ -276,7 +277,8 @@ def run_report(args: argparse.Namespace) -> dict:
         rating_threshold, risk_ratio = memory_store.get_evolved_params(
             strategy_tag=strategy_tag,
         )
-        # 1h 反转假信号较多，单笔资金占比降至 1%（4h/1d 保持 memory_store 进化值）
+        # 1h 反转信号噪音大，用小仓位 + 宽止损策略
+        # 单笔持仓上限 2%，2 笔最多 4% 总敞口
         if args.mode == "1h":
             risk_ratio = min(risk_ratio, 0.01)
         s1_data: dict = {"candidates": [], "filter_summary": {}}
@@ -329,18 +331,22 @@ def run_report(args: argparse.Namespace) -> dict:
                     risk_ratio=risk_ratio,
                     require_market_price=True,
                     # ── 趋势反转策略参数 ──
-                    # 1h 模式：快速反转，12h 持仓，atr_stop_mult=0.8，ATR ≤ 3.75% 可进场
-                    #   盈亏比 3:1（atr_tp_mult=2.4 / atr_stop_mult=0.8）
+                    # 1h 模式：小仓位 + 宽止损，12h 持仓
+                    #   止损 1.5× ATR（给 1h 噪音留呼吸空间，0.8× 太紧会被频繁扫掉）
+                    #   止盈 3.0× ATR，盈亏比 2:1（胜率提升弥补盈亏比下降）
+                    #   单笔持仓上限 2%（2 笔 × 2% = 4% 总敞口，控制风险）
+                    #   移动止损 1.5× ATR 激活（让趋势有空间发展）
                     # 4h 模式：48h 持仓，atr_stop_mult=1.2，ATR ≤ 4.2% 可进场
                     #   盈亏比 3:1（atr_tp_mult=3.6 / atr_stop_mult=1.2）
-                    max_stop_pct=0.03 if args.mode == "1h" else 0.05,
-                    atr_stop_mult=0.8 if args.mode == "1h" else 1.2,
-                    atr_tp_mult=2.4 if args.mode == "1h" else 3.6,
+                    max_stop_pct=0.04 if args.mode == "1h" else 0.05,
+                    atr_stop_mult=1.5 if args.mode == "1h" else 1.2,
+                    atr_tp_mult=3.0 if args.mode == "1h" else 3.6,
                     trailing_stop_ratio=0.5 if args.mode == "1h" else 0.4,
-                    trailing_activation_mult=1.0 if args.mode == "1h" else 1.3,
-                    trailing_activation_mult_hv=1.5 if args.mode == "1h" else 1.8,
-                    high_vol_tp_mult=3.0 if args.mode == "1h" else 4.0,
+                    trailing_activation_mult=1.5 if args.mode == "1h" else 1.3,
+                    trailing_activation_mult_hv=2.0 if args.mode == "1h" else 1.8,
+                    high_vol_tp_mult=3.5 if args.mode == "1h" else 4.0,
                     max_trades=2 if args.mode == "1h" else 3,
+                    max_position_pct=2.0 if args.mode == "1h" else 20.0,
                 )
                 s3_input_id = state_store.save("skill3_input", {"input_state_id": s2_id})
                 s3_id = skill3.execute(s3_input_id)
@@ -355,6 +361,7 @@ def run_report(args: argparse.Namespace) -> dict:
                     account_state_provider=account_provider,
                     poll_interval=30,
                     trading_rule_provider=trading_rule_provider,
+                    use_market_order=True,
                 )
                 s4_input_id = state_store.save("skill4_input", {"input_state_id": s3_id})
                 s4_id = skill4.execute(s4_input_id)
@@ -369,9 +376,15 @@ def run_report(args: argparse.Namespace) -> dict:
                 sync_symbols.update(
                     r.get("symbol", "") for r in s4_data.get("execution_results", [])
                 )
+                # 补充当前所有持仓币种，确保历史持仓的平仓成交也能被同步
+                try:
+                    current_positions = fapi_client.get_positions()
+                    sync_symbols.update(p.symbol for p in current_positions if p.symbol)
+                except Exception as _pos_exc:
+                    log.warning(f"获取持仓列表失败，历史持仓可能漏同步: {_pos_exc}")
                 synced_closed_count = syncer.sync_closed_trades(
                     symbols=sync_symbols,
-                    metadata_by_symbol=_metadata_by_symbol(s4_data.get("execution_results", [])),
+                    metadata_by_symbol=_build_full_metadata(state_store, s4_data.get("execution_results", [])),
                 )
 
                 skill5 = Skill5Evolve(

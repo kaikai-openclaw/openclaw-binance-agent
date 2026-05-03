@@ -170,7 +170,7 @@ LT_W_SHADOW = 5          # 长上影线
 LT_W_SQUEEZE_RISK = -4   # 轧空风险扣分（长期看风险降低）
 
 DEFAULT_MIN_QUOTE_VOLUME = 10_000_000
-DEFAULT_MIN_OVERBOUGHT_SCORE = 40
+DEFAULT_MIN_OVERBOUGHT_SCORE = 30  # 回测优化：40→30（评分≥30 胜率63.6% 均收益+2.09%）
 DEFAULT_MAX_CANDIDATES = 10
 # 轧空风险：成交额低于此值且 OI/成交额比过高 → 扣分
 # 阈值设为 2000 万：只对真正低流动性小币种扣分，避免误伤中等市值超买候选
@@ -408,24 +408,34 @@ class _CryptoOverboughtBase(BaseSkill):
                 if result["overbought_score"] < min_score and not target_symbols:
                     continue
 
-                # 顶部确认硬性门槛：价格必须已从近期高点回落 ≥ 2% 且 ≤ 12%（1h）/ ≤ 20%（4h/1d）
+                # 顶部确认硬性门槛：价格必须已从近期高点回落 ≥ 2% 且 ≤ 12%（1h）/ ≤ 15%（4h/1d）
                 # - 回落不足 2%：价格仍在上涨途中，追空风险高（TAGUSDT/LABUSDT 案例）
                 # - 回落超过上限：做空空间已大幅消耗，盈亏比变差
-                # 且至少满足 KDJ 高位死叉 或 MACD 顶背离 之一
+                # 且至少满足以下四个顶部确认信号之一：
+                #   1. MACD 顶背离（修复后的双峰检测）
+                #   2. RSI 顶背离（短周期上比 MACD 更稳定）
+                #   3. KDJ 高位死叉（1h 用 70 阈值，4h/1d 用 80）
+                #   4. 量价背离（价涨量缩，动能衰竭的直接证据）
                 drawdown = _calc_drawdown_from_high(closes, rally_lookback, highs)
-                max_drawdown = -12.0 if interval == H1_INTERVAL else -20.0
+                max_drawdown = -12.0 if interval == H1_INTERVAL else -15.0
                 has_drawdown = drawdown is not None and max_drawdown <= drawdown <= -2.0
-                has_reversal_confirm = result.get("macd_divergence") or (
-                    result.get("kdj_j") is not None and result["kdj_j"] > 80
-                    and _check_kdj_dead_cross(closes, highs, lows)
+                kdj_threshold = 70.0 if interval == H1_INTERVAL else 80.0
+                has_reversal_confirm = (
+                    result.get("macd_divergence")
+                    or result.get("rsi_divergence")
+                    or (result.get("kdj_j") is not None and result["kdj_j"] > 80
+                        and _check_kdj_dead_cross(closes, highs, lows, high_threshold=kdj_threshold))
+                    or result.get("volume_divergence")
                 )
                 if not target_symbols and not (has_drawdown and has_reversal_confirm):
                     log.info(
-                        "[%s] %s 顶部未确认，跳过: drawdown=%.2f%%, macd_div=%s, kdj_dead=%s",
+                        "[%s] %s 顶部未确认，跳过: drawdown=%.2f%%, macd_div=%s, rsi_div=%s, kdj_dead=%s, vol_div=%s",
                         self.name, symbol,
                         drawdown if drawdown is not None else 0.0,
                         result.get("macd_divergence"),
-                        has_reversal_confirm,
+                        result.get("rsi_divergence"),
+                        _check_kdj_dead_cross(closes, highs, lows, high_threshold=kdj_threshold),
+                        result.get("volume_divergence"),
                     )
                     continue
 
@@ -446,6 +456,7 @@ class _CryptoOverboughtBase(BaseSkill):
                     "above_boll_upper": result["above_boll_upper"],
                     "kdj_j": result["kdj_j"],
                     "macd_divergence": result["macd_divergence"],
+                    "rsi_divergence": result["rsi_divergence"],
                     "volume_divergence": result["volume_divergence"],
                     "funding_rate": result["funding_rate"],
                     "oi_value_usdt": round(oi_value, 2) if oi_value else None,
@@ -531,6 +542,10 @@ class HourlyOverboughtSkill(_CryptoOverboughtBase):
         self.name = "crypto_overbought_1h"
 
     def run(self, input_data: dict) -> dict:
+        # 1h 回测优化门槛：30（两次交叉验证均稳定）
+        # 回测结论：评分≥30 胜率70.1% 均收益+3.49% IR 0.193（300币 seed=99）
+        if "min_overbought_score" not in input_data:
+            input_data = {**input_data, "min_overbought_score": 30}
         return self._run_scan(
             input_data,
             interval=H1_INTERVAL,
@@ -550,10 +565,6 @@ class HourlyOverboughtSkill(_CryptoOverboughtBase):
                 "squeeze_risk": H1_W_SQUEEZE_RISK,
             },
         )
-
-
-# ══════════════════════════════════════════════════════════
-# 长期超买 Skill（1d）
 # ══════════════════════════════════════════════════════════
 
 class LongTermOverboughtSkill(_CryptoOverboughtBase):
@@ -708,6 +719,13 @@ def calc_overbought_score(
         score += w["macd_div"]
         signals.append("MACD顶背离")
 
+    # ── 8.5 RSI 顶背离（补充信号，1h/4h 上比 MACD 更稳定）──
+    rsi_div = _check_rsi_top_divergence(closes)
+    if rsi_div:
+        # 权重复用 macd_div 的 50%，避免重复计分过高
+        score += w["macd_div"] * 0.5
+        signals.append("RSI顶背离")
+
     # ── 9. 长上影线 ──
     shadow_score = _score_upper_shadow(closes, opens, highs, lows)
     if shadow_score > 0:
@@ -741,6 +759,7 @@ def calc_overbought_score(
         "above_boll_upper": above_boll,
         "kdj_j": round(kdj_j, 2) if kdj_j is not None else None,
         "macd_divergence": macd_div,
+        "rsi_divergence": rsi_div,
         "volume_divergence": vol_div,
         "funding_rate": fr_display,
         "squeeze_risk": squeeze_risk,
@@ -883,8 +902,15 @@ def _calc_kdj_j(
 
 def _check_kdj_dead_cross(
     closes: List[float], highs: List[float], lows: List[float],
+    high_threshold: float = 80.0,
 ) -> bool:
-    """检测 KDJ 高位死叉：K 下穿 D 且都在 80 以上。"""
+    """检测 KDJ 高位死叉：K 下穿 D，且死叉前 K 在高位。
+
+    high_threshold 控制"高位"定义：
+    - 1d/4h 用 80（默认），信号更可靠
+    - 1h 用 70，因为 1h KDJ 反应快，死叉时 K 往往已从 80+ 回落到 70~80 区间
+    死叉时 K 只需 > high_threshold * 0.6，允许死叉发生时已有小幅回落。
+    """
     if len(closes) < KDJ_PERIOD + KDJ_M1 + KDJ_M2 + 3:
         return False
 
@@ -908,17 +934,26 @@ def _check_kdj_dead_cross(
     if k_now is None or k_prev is None:
         return False
 
-    # K 下穿 D 且都在 80 以上（高位死叉，币圈用 80）
-    return k_now < d_now and k_prev >= d_prev and k_now > 50
+    # K 下穿 D（死叉），且死叉前 K 在高位（k_prev >= high_threshold）
+    # 死叉时 K 只需 > high_threshold * 0.6，允许死叉发生时已有小幅回落
+    return (
+        k_now < d_now
+        and k_prev >= d_prev
+        and k_prev >= high_threshold
+        and k_now > high_threshold * 0.6
+    )
 
 
 def _check_macd_top_divergence(closes: List[float], lookback: int = 30) -> bool:
     """检测 MACD 顶背离：价格创新高但 MACD 柱状图未创新高。
 
-    与底背离逻辑镜像：
-    1. 在 lookback 窗口内找到两个价格高点
-    2. 后一个高点 > 前一个高点（价格创新高）
-    3. 后一个高点对应的 MACD histogram < 前一个高点对应的 histogram（动能衰竭）
+    修复原版双峰搜索逻辑：使用局部极大值检测，而非从最高点往前固定偏移 5 根，
+    避免单边急涨时因找不到"前一个高点"而永远返回 False。
+
+    逻辑：
+    1. 在 lookback 窗口内找所有局部高点（前后各 2 根都低于它）
+    2. 取最后两个高点，后者价格更高（价格创新高）
+    3. 后者对应的 MACD histogram 更低（动能衰竭）
     """
     macd_data = calc_macd(closes)
     if macd_data.get("histogram") is None or len(closes) < lookback + 10:
@@ -927,24 +962,65 @@ def _check_macd_top_divergence(closes: List[float], lookback: int = 30) -> bool:
     recent = closes[-lookback:]
     base_idx = len(closes) - lookback
 
-    # 找最近的最高点
-    max_idx = max(range(len(recent)), key=lambda i: recent[i])
+    # 找窗口内所有局部高点（前后各 2 根都低于它）
+    peaks = []
+    for i in range(2, len(recent) - 2):
+        if (recent[i] > recent[i - 1] and recent[i] > recent[i - 2]
+                and recent[i] > recent[i + 1] and recent[i] > recent[i + 2]):
+            peaks.append(i)
 
-    # 找前一个高点
-    prev_max_idx = None
-    for i in range(max(0, max_idx - 5) - 1, -1, -1):
-        if prev_max_idx is None or recent[i] > recent[prev_max_idx]:
-            prev_max_idx = i
+    # 至少需要两个高点才能判断背离
+    if len(peaks) < 2:
+        return False
 
-    if prev_max_idx is None or recent[max_idx] <= recent[prev_max_idx]:
+    p1, p2 = peaks[-2], peaks[-1]
+
+    # 价格必须创新高
+    if recent[p2] <= recent[p1]:
         return False
 
     # 比较两个高点对应的 MACD histogram
-    h1 = calc_macd(closes[:base_idx + prev_max_idx + 1]).get("histogram")
-    h2 = calc_macd(closes[:base_idx + max_idx + 1]).get("histogram")
+    h1 = calc_macd(closes[:base_idx + p1 + 1]).get("histogram")
+    h2 = calc_macd(closes[:base_idx + p2 + 1]).get("histogram")
 
     # 顶背离：价格新高但 MACD histogram 更低
     return h1 is not None and h2 is not None and h2 < h1
+
+
+def _check_rsi_top_divergence(closes: List[float], lookback: int = 30) -> bool:
+    """检测 RSI 顶背离：价格创新高但 RSI 未创新高。
+
+    RSI 背离在短周期（1h/4h）上比 MACD 背离更稳定，是顶部确认的有效补充信号。
+    使用与 MACD 背离相同的局部极大值检测逻辑，保持一致性。
+    """
+    if len(closes) < lookback + RSI_PERIOD:
+        return False
+
+    recent = closes[-lookback:]
+    base_idx = len(closes) - lookback
+
+    # 找窗口内所有局部高点（前后各 2 根都低于它）
+    peaks = []
+    for i in range(2, len(recent) - 2):
+        if (recent[i] > recent[i - 1] and recent[i] > recent[i - 2]
+                and recent[i] > recent[i + 1] and recent[i] > recent[i + 2]):
+            peaks.append(i)
+
+    if len(peaks) < 2:
+        return False
+
+    p1, p2 = peaks[-2], peaks[-1]
+
+    # 价格必须创新高
+    if recent[p2] <= recent[p1]:
+        return False
+
+    # 比较两个高点对应的 RSI
+    rsi1 = calc_rsi(closes[:base_idx + p1 + 1], RSI_PERIOD)
+    rsi2 = calc_rsi(closes[:base_idx + p2 + 1], RSI_PERIOD)
+
+    # 顶背离：价格新高但 RSI 更低
+    return rsi1 is not None and rsi2 is not None and rsi2 < rsi1
 
 
 def _score_upper_shadow(

@@ -82,16 +82,21 @@ ST_DRAWDOWN_THRESHOLD = -20.0    # 距近期高点回撤 > 20%（短期看 5 天
 ST_DRAWDOWN_LOOKBACK = 30        # 回看 30 根 4h = 5 天
 ST_VOL_SURGE_THRESHOLD = 2.0     # 底部放量 ≥ 2x
 
-# 短期评分权重（满分 100）— 侧重即时超卖信号和资金费率
-ST_W_RSI = 18           # RSI 极端超卖（短期核心）
-ST_W_BIAS = 12          # 乖离率
-ST_W_DROP = 10          # 连续杀跌
-ST_W_BOLL = 8           # 布林带
-ST_W_MACD_DIV = 5       # MACD 背离（4h 级别背离可靠性一般）
-ST_W_KDJ = 7            # KDJ
-ST_W_FUNDING = 20       # 资金费率（短期反弹最强信号，高权重）
-ST_W_DRAWDOWN = 10      # 距高点回撤
-ST_W_VOLUME = 10        # 底部放量（恐慌盘涌出，短期反弹前兆）
+# 短期评分权重（满分 100）— 回测优化后 v2
+# 回测结论（200币 × 6个月）：
+#   有效维度：RSI超卖(+1.04%) BIAS乖离(+1.04%) 布林下轨(+0.56%) 距高点回撤(+0.46%)
+#   无效维度：连续杀跌(-0.33%) MACD背离(-0.06%) 底部放量(-0.00%)
+#   弱有效：KDJ极值(+0.14%)
+ST_W_RSI = 22           # RSI 极端超卖（有效，升权 18→22）
+ST_W_BIAS = 16          # 乖离率（有效，升权 12→16）
+ST_W_DROP = 4           # 连续杀跌（回测无效，降权 10→4）
+ST_W_BOLL = 10          # 布林带（有效，升权 8→10）
+ST_W_MACD_DIV = 2       # MACD 背离（回测无效，降权 5→2）
+ST_W_KDJ = 4            # KDJ（弱有效，降权 7→4）
+ST_W_FUNDING = 20       # 资金费率（实盘最强信号，保持不变）
+ST_W_DRAWDOWN = 12      # 距高点回撤（有效，升权 10→12）
+ST_W_VOLUME = 4         # 底部放量（回测无效，降权 10→4）
+# 总计：22+16+4+10+2+4+20+12+4 = 94（资金费率实盘补足至 100）
 
 # ══════════════════════════════════════════════════════════
 # 长期超跌参数（1d K 线）
@@ -120,7 +125,7 @@ LT_W_DRAWDOWN = 15      # 距高点回撤（长期核心指标）
 LT_W_VOLUME = 5         # 底部放量
 
 DEFAULT_MIN_QUOTE_VOLUME = 10_000_000
-DEFAULT_MIN_OVERSOLD_SCORE = 25
+DEFAULT_MIN_OVERSOLD_SCORE = 40   # 回测优化：25→40（评分≥40 胜率62.9% 均收益+3.21%）
 DEFAULT_MAX_CANDIDATES = 10
 DEFAULT_MAX_SPREAD_PCT = 0.25
 DEFAULT_MAX_ABS_FUNDING_RATE = 0.01

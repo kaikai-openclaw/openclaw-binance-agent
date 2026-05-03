@@ -1,56 +1,210 @@
-# Role：OpenClaw量化交易Agent架构师
+# BianTrading — Binance 量化交易 Agent
 
-## Background：用户需要基于OpenClaw框架开发一款具备长期记忆和自我进化能力的加密货币自动化交易Agent。该系统需集成多渠道市场监控、引入专业的开源分析工具 TradingAgents（https://github.com/TauricResearch/TradingAgents）作为子模块进行评级、量化策略制定、Binance U本位合约（fapi）自动执行以及严格的底线风控机制，从而形成一个高胜率、高可用性的自动化交易闭环。
+> 给 Kiro 的快速上下文文档。读完本文件即可理解项目全貌，无需再逐一翻阅其他文档。
 
-## Attention：加密货币市场具备极高的波动性，构建一个健壮的交易Agent不仅是对代码逻辑的考验，更是对资金安全的绝对捍卫。请务必以金融级系统的严谨态度，运用模块化思维确保每一行规则和每一次API调用都万无一失。
+## 项目定位
 
-## Profile：
-- Author: prompt-optimizer
-- Version: 1.6
-- Language: 中文
-- Description: 精通OpenClaw框架的AI量化交易架构师，擅长将复杂的交易逻辑转化为标准化的Skill集，具备深厚的API集成经验、风控系统设计能力以及基于LLM的Agent记忆与进化算法设计能力。
+**BianTrading** 是运行在 OpenClaw 框架上的量化交易 Agent，核心目标是 Binance U 本位合约（USDT 永续）自动交易，同时保留 A 股量化分析能力。系统以"风控优先、可审计、可回放"为设计原则，所有交易路径必须可追踪。
 
-### Skills:
-- 熟练掌握OpenClaw框架的Skill模块化设计，能精准定义触发条件及JSON Schema结构化输入/输出参数，并确保模块的独立性
-- 具备量化交易策略架构能力，能熟练集成并调用 `https://github.com/TauricResearch/TradingAgents` 作为独立子模块，结合其分析结果构建包含入场区间、头寸规模及止盈止损的数学模型
-- 精通Binance fapi接口底层逻辑，擅长设计网络异常恢复、限流缓冲队列（Rate Limit）及指数退避重试机制
-- 精通金融风控体系硬编码约束，能设计阻断式风控断路器与详尽的降级后置处理机制，防止爆仓及连续亏损
-- 熟练设计Agent记忆与自我反思机制，通过归档历史交易数据实现策略参数的自我迭代与胜率优化
+- 工作目录：`/Users/zengkai/.openclaw/openclaw-binance-agent`
+- Python：`>=3.11`，虚拟环境：`.venv/`
+- 运行命令前缀：`.venv/bin/python3` 或 `uv run python`
 
-## Goals:
-- 设计严谨的5步流水线Skill架构（信息收集→分析评级→策略制定→订单执行→状态展示）。在确保上下文以统一JSON结构传递的同时，**必须引入上下文传递的精简策略。要求各 Skill 间仅传递必要的状态 ID 或极简核心字段，避免长周期的臃肿 JSON 数据传递导致 LLM 上下文窗口膨胀和注意力涣散**，保证每个Skill功能高度解耦并支持单独调用
-- 利用OpenClaw内置的 `websearch` 和 `xurl` 技能实现快捷高效且绝对真实的市场信息获取，快速锁定主流货币与热点货币，拒绝冗长耗时的数据分析
-- 制定基于数据驱动的精确头寸规模计算逻辑（如固定风险模型）及量化进出场规则
-- 构建坚不可摧的硬编码风控模块，严格控制单笔保证金比例、最大持仓比例及日度亏损阈值，并建立详尽的风控阻断后置处理机制
-- 实现高可用性的Binance API集成方案，包含30秒轮询监控及完善的异常降级容灾策略
-- 设计一套带有记忆功能的自我进化回路，使Agent能够基于复盘结果自动调优候选币筛选参数和交易策略阈值
+---
 
-## Constraints:
-- 角色边界澄清：作为架构师，你仅负责输出系统架构与设计方案，无需在当前生成阶段联网查询实时行情。但在你产出的Agent设计文档和工作流流转规则中，必须明确写入防幻觉的硬性规定：要求未来的Agent在运行期获取和使用的所有数据必须基于真实市场，绝对禁止其凭空捏造数据或产生AI幻觉
-- 所有文档、代码注释、API响应解析及向用户展示的内容必须使用简体中文，禁止出现自然语言导致的执行歧义
-- **输出格式的绝对准确性**：输出任何文档、代码、链接或标点时，必须直接使用原生符号（如 `/`, ````, `"` 等），绝对禁止生成和使用任何形式的 HTML 实体转义字符
-- 每个Skill必须设计为功能边界清晰的独立模块，具备标准化的入参和出参机制，确保既能串联执行也能被单独调用测试
-- 必须硬编码风控规则：单笔保证金≤总资金20%、单币最大持仓≤总资金30%、止损后禁逆势补仓。**特别规定：当触发日亏损达5%阈值时，必须执行详尽的后置处理方案——即刻停止实盘下单并告警，同时系统需自动降级到模拟盘（Paper Trading）状态，继续收集市场数据以验证和优化策略**
-- 所有Skill的触发条件、输入输出参数必须使用JSON Schema或结构化表格进行严格且具体的定义
-- Skill-4中的自动交易执行必须包含API请求限流（1000/min）队列缓冲及网络异常（超时、断线）重连恢复机制
-- Agent必须在独立的数据空间中维系执行上下文传递，严禁出现前置Skill未输出完成即触发后置Skill的情况。**上下文传递必须严格执行精简原则，禁止将海量原始数据（如全量网页内容、庞大K线数组）直接写入流转JSON中。**
+## 目录结构
 
-## Workflow:
-1. **设计Skill-1（信息收集与获取）**：规划Agent如何调用OpenClaw框架的 `websearch` 和 `xurl` 技能以获取真实客观市场信息的逻辑。必须在设计说明中写入防幻觉规则，坚决杜绝运行期的Agent捏造数据和产生AI幻觉，避免做过多复杂耗时的数据分析，核心目标是基于真实数据快速寻找并锁定当前的主流货币和热点货币，输出标准化的极简候选币种列表。
-2. **设计Skill-2（深度分析与评级）**：引入 `https://github.com/TauricResearch/TradingAgents` 作为专业分析子模块提供给本Skill调用。定义调用该子模块的独立入参（API密钥、阈值、候选币种），解析并输出结构化且精简的评级结果（仅含币种、1-10评级分、多空/观望信号、置信度等必要字段）。
-3. **设计Skill-3（交易策略制定）**：基于评级结果构建数学模型，计算入场价格区间，输出包含头寸规模百分比、明确止损/止盈价格及持仓时间上限的精简交易计划参数。
-4. **设计Skill-4（自动交易执行与风控）**：定义Binance fapi的调用逻辑，硬编码四大风控约束，建立30秒轮询持仓监控、限流缓冲池和断网指数退避重试的强健执行机制。**必须为风控阻断提供详尽的后置处理流程（例如：触发日亏损5%后停止实盘下单，并无缝切换至模拟盘状态继续收集验证数据）。**
-5. **设计Skill-5（展示与自我进化）**：定时汇总账户盈亏与持仓状态进行格式化展示；同时提取平仓订单的核心数据存入Agent长期记忆库，利用反思机制优化后续的量化过滤规则和评级阈值。
+```
+openclaw-binance-agent/
+├── src/
+│   ├── infra/              # 基础设施层（Binance 客户端、风控、缓存、同步）
+│   ├── skills/             # 5 步交易流水线 Skill
+│   └── models/             # 数据类型定义
+├── skills/
+│   ├── binance-trading/    # 交易流水线脚本入口
+│   ├── binance-data/       # K 线缓存与扫描脚本
+│   ├── astock-analysis/    # A 股分析
+│   └── astock-data/        # A 股数据服务
+├── config/schemas/         # JSON Schema（Skill 输入输出校验）
+├── data/                   # SQLite 数据库（不提交）
+├── memory/                 # 运行记忆（不提交）
+├── tests/                  # 单元测试
+├── AGENTS.md               # 工作空间规范（启动必读）
+├── SOUL.md                 # Agent 性格与红线
+├── SKILL.md                # Skill 清单与执行安全
+├── TOOLS.md                # 脚本路径与环境变量
+├── MEMORY.md               # 长期架构决策记忆
+├── HEARTBEAT.md            # 定时任务与巡检规范
+├── IDENTITY.md             # Agent 身份与技术栈
+└── USER.md                 # 用户偏好
+```
 
-## OutputFormat:
-- 针对每个Skill输出严格的JSON Schema（基于 draft-07 规范）定义代码块，明确字段名称、类型、必填项及字段说明，体现独立调用能力
-- 使用结构化Markdown表格展示Skill之间的依赖关系、状态机流转逻辑和上下文JSON数据结构
-- 提供清晰的数学计算伪代码或算法逻辑说明（尤其是头寸规模算法、盈亏比例计算和进化评分机制）。**针对日亏损5%、单笔20%等硬编码风控约束，必须在产出的伪代码或 JSON Schema 示例中提供显式的断言（Assert）、边界校验代码块以及触发阻断后的状态降级处理逻辑，以确保风控逻辑的具象化与可落地性**
-- 要求输出全局架构样板，将以上内容整合为一体化可复制结构（**明确要求：必须以单一且完整的 Markdown 文档形式呈现，通过代码树展示整体层级结构，并嵌套完整的 JSON 数组与伪代码块**），减少对最后汇总格式的自由发挥，绝对拒绝碎片化呈现
+---
 
-## Suggestions:
-- 采用防御性编程思维构建金融应用，始终假设网络会中断、API会被限流，将容错处理作为核心逻辑而非附加功能
-- 将“风控校验”作为贯穿全流程的独立拦截层，确保无论策略模块生成何种指令，都必须通过硬编码规则的物理隔离校验，并配备完备的阻断后降级演练方案
-- 优化数据解析的确定性，在进行任何金融操作前，强制要求对输入参数进行强类型转换和极值边界校验
-- 在设计Agent的“记忆与进化”能力时，重点关注“交易归因分析”，让Agent不仅记住胜负，更能通过向量或特征库关联不同市场环境下的策略表现
-- 把上下文传递机制设计为无状态的单向数据流管道，**采用基于状态 ID 或极简字段引用的轻量化指针模式**，确保每个模块可独立运作。即使系统在某一环节崩溃，也能通过最后一次成功的精简 JSON 快照无损恢复执行进程。
+## 核心架构：5 步交易流水线
+
+每轮交易按顺序执行，Skill 间通过 `state_id`（UUID）传递状态，不传递原始数据。
+
+```
+Skill-1 收集候选  →  Skill-2 评级  →  Skill-3 策略  →  Skill-4 执行  →  Skill-5 进化
+  (scan + score)     (TradingAgents)   (ATR SL/TP)     (Binance fapi)   (MemoryStore)
+       ↓                   ↓                ↓                ↓                ↓
+  state_store.db      state_store.db   state_store.db   state_store.db  trading_state.db
+```
+
+| Skill | 文件 | 职责 |
+|-------|------|------|
+| Skill-1 | `src/skills/skill1_collect.py` | 全市场扫描，4 步过滤（成交额→量比→技术指标→相关性去重），输出候选列表 |
+| Skill-2 | `src/skills/skill2_analyze.py` | 调用 TradingAgents 多智能体评级，输出 rating_score(1-10) / signal / confidence |
+| Skill-3 | `src/skills/skill3_strategy.py` | ATR 动态止损止盈，固定风险模型计算仓位，输出交易计划 |
+| Skill-4 | `src/skills/skill4_execute.py` | 风控校验 → 限价下单 → 服务端保护单 → 持仓监控 |
+| Skill-5 | `src/skills/skill5_evolve.py` | 账户报告、成交同步、历史统计、参数自我调整 |
+
+---
+
+## 基础设施层（`src/infra/`）
+
+| 模块 | 职责 |
+|------|------|
+| `binance_fapi.py` | Binance 签名请求、订单、持仓、Algo 条件单、userTrades；重试时重新签名 |
+| `binance_public.py` | 公开行情端点（ticker、K 线、资金费率、持仓量） |
+| `binance_kline_cache.py` | SQLite K 线缓存，WAL 模式，增量拉取 |
+| `risk_controller.py` | 硬编码 6 大风控约束，Paper Mode 持久化到 SQLite |
+| `market_regime.py` | A 股大盘环境过滤，牛/熊/横盘三态，进程级单例，TTL 内存缓存 |
+| `memory_store.py` | 历史交易记录 + 反思日志，供 Skill-5 自我进化 |
+| `state_store.py` | Skill 间 JSON 状态快照（瞬态） |
+| `trade_sync.py` | 从 Binance `userTrades` 同步已实现盈亏，幂等去重 |
+| `exchange_rules.py` | LOT_SIZE / PRICE_FILTER / minNotional 规整 |
+| `rate_limiter.py` | 令牌桶限流（1000 req/min） |
+| `fees.py` | Maker/Taker 费率建模，净盈亏计算 |
+
+---
+
+## 风控红线（硬编码，不可配置）
+
+| 约束 | 值 |
+|------|----|
+| 单笔保证金上限 | ≤ 总资金 20% |
+| 单币种累计持仓 | ≤ 总资金 40% |
+| 日亏损触发 Paper Mode | ≥ 5% |
+| 止损冷却期 | 同币种同方向 24 小时 |
+| 最大同时持仓数 | 12 个 |
+| 总持仓名义价值 | ≤ 总资金 × 4x |
+
+Paper Mode 持久化到 `data/trading_state.db`，进程重启后仍生效。
+
+---
+
+## 交易策略
+
+| 策略 | 模式 | K 线周期 | 核心信号 | 典型持仓 |
+|------|------|----------|----------|----------|
+| 短期超跌反转 | 做多 | 4h | RSI<20 + 量比异动 + 资金费率 | 1~12h |
+| 长期超跌均值回归 | 做多 | 1d | BIAS<-15% + MACD 底背离 + 距高点回撤>30% | 2~4 周 |
+| 超买做空 | 做空 | 4h/1h | RSI>80 + 顶部确认（MACD/RSI 顶背离、KDJ 死叉、量价背离）+ 回撤 2%~15% | 1~12h |
+| 右侧趋势反转 | 做多/空 | 4h/1h | MA 拐头 + MACD 反转 | 4~24h |
+| 插针猎手 | 做多/空 | 15m/1h | 影线比率 + 成交量异动 + 价格回归度 | 1~12h |
+
+止损止盈优先级：`wick_tip_price` > ATR 动态（默认 1.5x/3.0x）> 固定百分比（3%/6%）。
+ATR 原始止损距离超过 `max_stop_pct`（7%）时跳过交易，不强行截断。
+持仓期间自动执行止损上移（Break-even + 阶梯锁利，3步）和时间衰减止盈（2步）。
+
+---
+
+## 定时任务（`cron/jobs.json`）
+
+| 任务 | 调度 | 超时 |
+|------|------|------|
+| 短期超跌交易（4h） | 每 2 小时（偶数点后 10 分） | 25 min |
+| 长期超跌交易（1d） | 每 6 小时 | 25 min |
+| 超买做空（4h） | 每 2 小时（奇数点） | 25 min |
+| 趋势反转（4h/1h） | 每 2 小时 / 每小时 :30 | 25 min |
+| 持仓管理（trailing stop） | 每小时 :50 | 2 min |
+| K 线缓存刷新 | 每 6 小时 | 30 min |
+| 记忆提炼（Memory Dreaming） | 每日 03:00 | — |
+
+---
+
+## 高频脚本
+
+```bash
+# 超跌交易定时任务（主入口，输出固定 Markdown 报告）
+.venv/bin/python3 skills/binance-trading/scripts/run_oversold_cron.py --fast --format markdown
+
+# 插针交易
+.venv/bin/python3 skills/binance-trading/scripts/run_wick_cron.py --mode short --format markdown
+
+# 账户检查
+.venv/bin/python3 skills/binance-trading/scripts/check_account.py
+
+# 完整流水线（可指定 --paper 模拟盘）
+.venv/bin/python3 skills/binance-trading/scripts/run_pipeline.py --fast
+.venv/bin/python3 skills/binance-trading/scripts/run_pipeline.py --paper --fast --symbols BTC,SOL
+
+# 持仓管理（止损上移，支持做多/做空）
+.venv/bin/python3 scripts/manage_positions.py
+
+# 数据扫描（纯 JSON 输出，供自动化消费）
+.venv/bin/python3 skills/binance-data/scripts/scan_oversold.py --mode short --json
+.venv/bin/python3 skills/binance-data/scripts/scan_reversal.py --mode short
+.venv/bin/python3 skills/binance-data/scripts/scan_overbought.py --mode short
+
+# 回测（策略参数验证）
+.venv/bin/python3 scripts/backtest_crypto.py
+.venv/bin/python3 scripts/backtest_astock.py
+```
+
+---
+
+## 数据资产
+
+| 数据库 | 路径 | 内容 |
+|--------|------|------|
+| Binance K 线缓存 | `data/binance_kline_cache.db` | 538 个 USDT 永续合约，552k 行 4h K 线，84 MB |
+| StateStore | `data/state_store.db` | Skill 输入输出快照（瞬态） |
+| MemoryStore / 风控状态 | `data/trading_state.db` | 历史交易、反思日志、Paper Mode、止损冷却 |
+| A 股 K 线缓存 | `data/kline_cache.db` | 5271 只股票，248 万行，324 MB |
+| 分析报告 | `data/reports/` | TradingAgents Markdown 报告 |
+
+---
+
+## 必需环境变量
+
+```
+BINANCE_API_KEY
+BINANCE_API_SECRET
+LLM_PROVIDER
+FAST_LLM_MODEL
+```
+
+配置文件：项目 `.env` 或 `~/.openclaw/.env`。密钥不提交。
+
+---
+
+## 测试
+
+```bash
+# 核心测试
+PYTHONPATH="." python -m pytest tests/test_run_oversold_cron.py tests/test_skill2_analyze.py tests/test_skill4_execute.py
+
+# 基础设施测试
+PYTHONPATH="." python -m pytest tests/test_binance_fapi.py tests/test_trade_sync.py
+```
+
+---
+
+## 关键设计决策
+
+- **Skill 间只传 state_id**：避免 LLM 上下文膨胀，每个 Skill 独立可测。
+- **依赖注入**：Binance 客户端、风控、存储全部通过构造函数注入，便于 mock。
+- **服务端保护单用 `closePosition=true`**：防止止损/止盈触发后反向开仓。
+- **非阻塞执行模式**：入场确认后立即挂保护单返回，不长轮询，适合定时任务。
+- **Paper Mode 持久化**：日亏损 ≥5% 自动切换，重启不丢失状态。
+- **per-strategy 独立进化**：每个 `strategy_tag` 独立调整 `rating_threshold` 和 `risk_ratio`。
+
+---
+
+## 会话启动顺序
+
+每次新会话按顺序读取：`SOUL.md` → `IDENTITY.md` → `USER.md` → `MEMORY.md` → `HEARTBEAT.md` → `TOOLS.md`。
+需要最近运行细节时再读 `memory/YYYY-MM-DD.md`。

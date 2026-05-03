@@ -29,15 +29,19 @@
 | ------ | ------ | ------ |
 | Binance 交易 | `skills/binance-trading/` | 5 步交易流水线、账户检查、超跌定时任务固定报告 |
 | Binance 数据 | `skills/binance-data/` | K 线缓存、超跌/反转/超买扫描、JSON 输出 |
-| 交易基础设施 | `src/infra/` | Binance 客户端、风控、交易规则、MemoryStore、成交同步 |
-| 交易 Skills | `src/skills/skill*.py` | 信息收集、评级、策略、执行、自我进化 |
+| 交易基础设施 | `src/infra/` | Binance 客户端、风控（6大约束）、交易规则、MemoryStore、成交同步、大盘环境过滤 |
+| 交易 Skills | `src/skills/skill*.py` | 信息收集、评级、策略、执行（含止损上移/时间衰减止盈）、自我进化 |
 | A 股分析 | `skills/astock-analysis/` | A 股量化筛选和 TradingAgents 分析 |
 | A 股数据 | `skills/astock-data/` | A 股本地缓存和增量拉取 |
+| 持仓管理 | `scripts/manage_positions.py` | 做多/做空持仓止损上移、进程锁、原子写入 |
+| 回测框架 | `scripts/backtest_crypto.py` / `scripts/backtest_astock.py` | 策略参数回测验证 |
 
 ## 实盘红线
 
 - 单笔保证金不超过总资金 20%。
-- 单币种持仓不超过总资金 30%。
+- 单币种持仓不超过总资金 40%。
+- 全账户总持仓名义价值不超过总资金 × 4x。
+- 同时持仓数量不超过 12 个。
 - 日亏损达到 5% 立即停止实盘并持久化切换 Paper Mode。
 - 止损后同币种同方向 24 小时内禁止开仓。
 - ATR 原始止损距离超过系统上限时跳过交易，不强行截断进场。

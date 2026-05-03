@@ -16,6 +16,7 @@
 """
 import fcntl
 import json
+import math
 import os
 import sys
 import tempfile
@@ -35,7 +36,7 @@ if os.path.exists(env_path):
 
 from src.infra.binance_fapi import BinanceFapiClient
 from src.infra.rate_limiter import RateLimiter
-from src.infra.exchange_rules import parse_symbol_trading_rule
+from src.infra.exchange_rules import parse_symbol_trading_rule, normalize_order_quantity, SymbolTradingRule
 from src.skills.skill4_execute import Skill4Execute
 from src.models.types import TradeDirection
 
@@ -78,8 +79,10 @@ def save_state(state: dict) -> None:
 
 
 # ── 价格规整辅助 ──────────────────────────────────────────
-# _tick_map 在初始化阶段填充，函数定义在此处供后续使用
+# _tick_map  : symbol → 价格精度 Decimal（tickSize）
+# _rule_map  : symbol → SymbolTradingRule（含 stepSize / minQty / minNotional）
 _tick_map: dict = {}
+_rule_map: dict = {}  # 数量精度，用于分批止盈的 qty 规整
 
 
 def norm_price_floor(symbol: str, price: float) -> float:
@@ -163,6 +166,8 @@ try:  # 锁保护区：确保任何异常都能释放文件锁
         _rule = parse_symbol_trading_rule(_s)
         if _rule and _rule.tick_size > 0:
             _tick_map[_s['symbol']] = Decimal(str(_rule.tick_size))
+        if _rule:
+            _rule_map[_s['symbol']] = _rule
 
     now = datetime.now(timezone.utc)
     now_ms = now.timestamp() * 1000
@@ -272,31 +277,52 @@ try:  # 锁保护区：确保任何异常都能释放文件锁
         # 浮盈 ≥ 1.0×sl_dist 时，平掉 50% 仓位锁利，剩余继续持有
         # 幂等：通过 state 里的 partial_tp_done 标记防止重复执行
         partial_tp_done = bool(sym_state.get('partial_tp_done', False))
-        min_partial_qty = 1.0  # 最小平仓数量（防止数量太小被交易所拒绝）
+        sym_rule = _rule_map.get(sym)
 
         if (not partial_tp_done
-                and qty >= min_partial_qty * 2  # 仓位至少 2 个单位才值得分批
-                and sl_dist > 0):
+                and sl_dist > 0
+                and sym_rule is not None):
             profit = (mark - entry) if direction == TradeDirection.LONG else (entry - mark)
             if profit >= sl_dist * 1.0:
-                # 平掉 50%，向下取整到最小交易单位
-                partial_qty = qty / 2.0
-                # 用 lot_size 规整（如果有的话）
-                lot_tick = _tick_map.get(sym)  # tick_map 存的是价格精度，数量精度另算
-                # 简单处理：保留 2 位小数，向下取整
-                import math
-                partial_qty = math.floor(partial_qty * 100) / 100
-                if partial_qty >= min_partial_qty:
-                    partial_tp_actions.append({
-                        'symbol': sym, 'partial_qty': partial_qty,
-                        'close_side': close_side, 'dir_label': dir_label,
-                        'entry': entry, 'mark': mark, 'pnl_pct': pnl_pct,
-                        'sl_dist': sl_dist, 'elapsed_h': elapsed_h,
-                        'original_tp': original_tp,
-                        'tp_decay_step': tp_decay_step,
-                        'sl_step': sl_step, 'open_ms': open_ms,
-                        'direction': direction,
-                    })
+                # 用交易所规则规整 50% 数量（stepSize 向下取整 + minQty + minNotional 校验）
+                raw_partial = qty / 2.0
+                normed_partial = normalize_order_quantity(
+                    symbol=sym,
+                    quantity=raw_partial,
+                    price=mark,
+                    rule=sym_rule,
+                )
+                if normed_partial is not None and normed_partial > 0:
+                    # 确保平仓后剩余仓位也满足最小交易量（避免留下无法平仓的碎仓）
+                    remaining = qty - normed_partial
+                    remaining_ok = (
+                        remaining <= 0  # 全平也可以
+                        or normalize_order_quantity(
+                            symbol=sym, quantity=remaining,
+                            price=mark, rule=sym_rule,
+                        ) is not None
+                    )
+                    if remaining_ok:
+                        partial_tp_actions.append({
+                            'symbol': sym, 'partial_qty': float(normed_partial),
+                            'close_side': close_side, 'dir_label': dir_label,
+                            'entry': entry, 'mark': mark, 'pnl_pct': pnl_pct,
+                            'sl_dist': sl_dist, 'elapsed_h': elapsed_h,
+                            'original_tp': original_tp,
+                            'tp_decay_step': tp_decay_step,
+                            'sl_step': sl_step, 'open_ms': open_ms,
+                            'direction': direction,
+                        })
+                    else:
+                        skipped.append(
+                            f"{sym}({dir_label}): 分批止盈跳过，"
+                            f"剩余仓位 {remaining:.8g} 低于最小交易量"
+                        )
+                else:
+                    skipped.append(
+                        f"{sym}({dir_label}): 分批止盈跳过，"
+                        f"50%数量 {raw_partial:.8g} 规整后不满足交易所约束"
+                    )
 
         # ── 方案二：止损上移 ──────────────────────────────────
         new_sl, new_sl_step = Skill4Execute._calc_breakeven_sl(

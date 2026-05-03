@@ -187,9 +187,19 @@ try:
             continue
 
         sl_dist = abs(entry - sl_price)
-        if sl_dist == 0:
-            skipped.append(f"{sym}({dir_label}): sl_dist=0（止损已在保本位），跳过")
-            continue
+
+        # 记录原始止损距离：首次见到 sl_dist > 0 时存入状态，
+        # 后续止损上移到保本位（sl_dist==0）时复用原始值
+        if sl_dist > 0:
+            sym_state['original_sl_dist'] = sl_dist
+            state[sym] = {**state.get(sym, {}), 'original_sl_dist': sl_dist}
+        elif sl_dist == 0:
+            original_sl_dist = sym_state.get('original_sl_dist')
+            if original_sl_dist and float(original_sl_dist) > 0:
+                sl_dist = float(original_sl_dist)
+            else:
+                skipped.append(f"{sym}({dir_label}): sl_dist=0（止损已在保本位）且无原始记录，跳过")
+                continue
 
         profit = (mark - entry) if direction == TradeDirection.LONG else (entry - mark)
         pnl_pct = profit / entry * 100
@@ -237,8 +247,9 @@ try:
         })
 
     # ── 执行分批止盈 ──────────────────────────────────────────
-    # 无触发时静默退出，不推送 Telegram（避免每5分钟刷屏）
+    # 无触发时也需要保存状态（original_sl_dist 等字段可能已更新）
     if not partial_tp_actions:
+        save_state(state)
         if skipped:
             # 有跳过记录时才输出，方便排查
             lines = [f"## 分批止盈 {datetime.now(timezone.utc).strftime('%m-%d %H:%M UTC')} (无触发)"]

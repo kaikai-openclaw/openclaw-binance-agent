@@ -99,7 +99,7 @@ FUNDING_RATE_VERY_EXTREME = 0.005       # +0.5%，罕见极端
 
 ST_INTERVAL = "4h"
 ST_MIN_KLINES = 50
-ST_RSI_THRESHOLD = 80.0          # 4h RSI > 80 = 极端超买
+ST_RSI_THRESHOLD = 75.0          # 4h RSI > 75（从 80 降低，捕捉更多超买信号）
 ST_BIAS_THRESHOLD = 12.0         # 4h 乖离率 > +12%
 ST_CONSECUTIVE_UP = 5            # 连续上涨 ≥ 5 根 4h（≈ 20 小时）
 ST_RALLY_PCT = 15.0              # 近 N 根累计涨幅 > +15%
@@ -124,7 +124,7 @@ ST_W_SQUEEZE_RISK = -8   # 轧空风险扣分
 
 H1_INTERVAL = "1h"
 H1_MIN_KLINES = 60
-H1_RSI_THRESHOLD = 80.0          # 1h RSI > 80（从 85 放宽，与 4h 对齐）
+H1_RSI_THRESHOLD = 75.0          # 1h RSI > 75（从 80 降低，与 4h 对齐）
 H1_BIAS_THRESHOLD = 10.0         # 1h 乖离率 > +10%
 H1_CONSECUTIVE_UP = 7            # 连续上涨 ≥ 7 根 1h = 7 小时（从 10 放宽）
 H1_RALLY_PCT = 20.0              # 近 N 根累计涨幅 > +20%

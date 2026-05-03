@@ -419,7 +419,7 @@ class _CryptoOverboughtBase(BaseSkill):
                 drawdown = _calc_drawdown_from_high(closes, rally_lookback, highs)
                 max_drawdown = -12.0 if interval == H1_INTERVAL else -15.0
                 has_drawdown = drawdown is not None and max_drawdown <= drawdown <= -2.0
-                kdj_threshold = 70.0 if interval == H1_INTERVAL else 80.0
+                kdj_threshold = 70.0 if interval == H1_INTERVAL else 70.0  # 4h 从 80 降到 70，与 1h 统一
                 has_reversal_confirm = (
                     result.get("macd_divergence")
                     or result.get("rsi_divergence")
@@ -876,7 +876,7 @@ def _check_volume_divergence(
     if prior_vol <= 0:
         return False
 
-    return recent_vol < prior_vol * 0.7
+    return recent_vol < prior_vol * 0.8  # 放宽：量能萎缩 20% 即触发（原 30%）
 
 
 def _calc_kdj_j(
@@ -902,13 +902,13 @@ def _calc_kdj_j(
 
 def _check_kdj_dead_cross(
     closes: List[float], highs: List[float], lows: List[float],
-    high_threshold: float = 80.0,
+    high_threshold: float = 70.0,  # 从 80 降到 70，与调用方统一
 ) -> bool:
     """检测 KDJ 高位死叉：K 下穿 D，且死叉前 K 在高位。
 
     high_threshold 控制"高位"定义：
-    - 1d/4h 用 80（默认），信号更可靠
-    - 1h 用 70，因为 1h KDJ 反应快，死叉时 K 往往已从 80+ 回落到 70~80 区间
+    - 统一使用 70（原 4h/1d 用 80，1h 用 70，现在统一为 70）
+    - K 值 ≥ 70 即为超买区，死叉就有做空意义
     死叉时 K 只需 > high_threshold * 0.6，允许死叉发生时已有小幅回落。
     """
     if len(closes) < KDJ_PERIOD + KDJ_M1 + KDJ_M2 + 3:

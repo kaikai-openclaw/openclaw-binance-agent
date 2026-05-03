@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """
-持仓管理脚本 — 方案二（止损上移）+ 方案三（时间衰减止盈）+ 方案四（分批止盈）
+持仓管理脚本 — 方案二（止损上移）+ 方案三（时间衰减止盈）
 
 每次执行：
 1. 扫描所有活跃持仓（做多 + 做空）
 2. 方案二：浮盈达到止损距离阈值时，上移止损到保本/锁利
 3. 方案三：持仓时间超过 50%/75% max_hold 时，下调止盈目标（幂等，不重复衰减）
-4. 方案四：浮盈达到止损距离 × 1.0 时，平掉 50% 仓位锁利，剩余继续持有
 4. 输出 Markdown 格式报告（供 Telegram 推送）
+
+注意：方案四（分批止盈）已拆分到独立脚本 partial_tp.py，建议 5 分钟 cron 执行。
+两个脚本共享状态文件 manage_positions_state.json，通过 partial_tp_done 字段协调。
 
 幂等保护：
 - 用本地状态文件 manage_positions_state.json 记录每个持仓的原始止盈价和已衰减 step
@@ -16,12 +18,11 @@
 """
 import fcntl
 import json
-import math
 import os
 import sys
 import tempfile
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, ROUND_DOWN, ROUND_UP
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -32,17 +33,20 @@ if os.path.exists(env_path):
             line = line.strip()
             if line and not line.startswith('#') and '=' in line:
                 k, v = line.split('=', 1)
+                v = v.strip().strip('"').strip("'")
                 os.environ[k] = v
 
 from src.infra.binance_fapi import BinanceFapiClient
 from src.infra.rate_limiter import RateLimiter
-from src.infra.exchange_rules import parse_symbol_trading_rule, normalize_order_quantity, SymbolTradingRule
+from src.infra.exchange_rules import parse_symbol_trading_rule
 from src.skills.skill4_execute import Skill4Execute
 from src.models.types import TradeDirection
 
 MAX_HOLD_HOURS = 24.0
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'manage_positions_state.json')
 LOCK_FILE  = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'manage_positions.lock')
+# 状态文件共享锁：与 partial_tp.py 互斥，防止并发 read-modify-write 竞态
+SHARED_STATE_LOCK_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'manage_positions_state.lock')
 
 
 # ── 持仓方向辅助 ──────────────────────────────────────────
@@ -79,10 +83,7 @@ def save_state(state: dict) -> None:
 
 
 # ── 价格规整辅助 ──────────────────────────────────────────
-# _tick_map  : symbol → 价格精度 Decimal（tickSize）
-# _rule_map  : symbol → SymbolTradingRule（含 stepSize / minQty / minNotional）
-_tick_map: dict = {}
-_rule_map: dict = {}  # 数量精度，用于分批止盈的 qty 规整
+_tick_map: dict = {}  # symbol → 价格精度 Decimal（tickSize）
 
 
 def norm_price_floor(symbol: str, price: float) -> float:
@@ -90,7 +91,6 @@ def norm_price_floor(symbol: str, price: float) -> float:
     tick = _tick_map.get(symbol)
     if not tick:
         return price
-    from decimal import ROUND_DOWN
     d = Decimal(str(price))
     return float((d / tick).to_integral_value(rounding=ROUND_DOWN) * tick)
 
@@ -100,7 +100,6 @@ def norm_price_ceil(symbol: str, price: float) -> float:
     tick = _tick_map.get(symbol)
     if not tick:
         return price
-    from decimal import ROUND_UP
     d = Decimal(str(price))
     return float((d / tick).to_integral_value(rounding=ROUND_UP) * tick)
 
@@ -154,6 +153,7 @@ client = BinanceFapiClient(
     rate_limiter=RateLimiter()
 )
 
+_state_lock_fh = None  # 初始化为 None，防止 finally 中 NameError
 try:  # 锁保护区：确保任何异常都能释放文件锁
     # 预加载价格精度规则
     try:
@@ -166,386 +166,347 @@ try:  # 锁保护区：确保任何异常都能释放文件锁
         _rule = parse_symbol_trading_rule(_s)
         if _rule and _rule.tick_size > 0:
             _tick_map[_s['symbol']] = Decimal(str(_rule.tick_size))
-        if _rule:
-            _rule_map[_s['symbol']] = _rule
 
     now = datetime.now(timezone.utc)
     now_ms = now.timestamp() * 1000
     max_hold_seconds = MAX_HOLD_HOURS * 3600
 
-    state = load_state()
     positions = client.get_positions()
     algo_orders = client.get_open_algo_orders()
-
     active_symbols = {pos.symbol for pos in positions if abs(pos.position_amt) > 0}
-    for sym in list(state.keys()):
-        if sym not in active_symbols:
-            del state[sym]
 
-    sl_actions = []
-    tp_actions = []
-    partial_tp_actions = []   # 方案四：分批止盈
-    skipped = []
+    # ── 共享状态锁：仅保护 load_state → 扫描计算 → save_state 的窗口 ──
+    # partial_tp.py 用非阻塞锁，获取不到直接跳过，不会被此处长时间阻塞。
+    _state_lock_fh = open(SHARED_STATE_LOCK_FILE, 'w')
+    try:
+        fcntl.flock(_state_lock_fh, fcntl.LOCK_EX)  # 阻塞等待（通常极短）
+    except Exception:
+        _state_lock_fh.close()
+        _state_lock_fh = None
+        raise
+    try:
+        state = load_state()
 
-    for pos in positions:
-        sym = pos.symbol
-        raw = getattr(pos, 'raw', {}) or {}
-        update_ms = float(raw.get('updateTime') or 0)
-        mark = float(raw.get('markPrice') or 0)
-        entry = pos.entry_price
-        qty = abs(pos.position_amt)
+        for sym in list(state.keys()):
+            if sym not in active_symbols:
+                del state[sym]
 
-        if not update_ms or entry <= 0 or qty <= 0 or mark <= 0:
-            skipped.append(f"{sym}: 数据不完整，跳过")
-            continue
+        sl_actions = []
+        tp_actions = []
+        skipped = []
 
-        direction = _direction_of(pos.position_amt)
-        close_side = _close_side_of(direction)
-        dir_label = '多' if direction == TradeDirection.LONG else '空'
+        for pos in positions:
+            sym = pos.symbol
 
-        sym_state_pre = state.get(sym, {})
-        open_ms = sym_state_pre.get('open_ms')
-        if open_ms is None:
-            open_ms = update_ms
-        else:
+            if abs(pos.position_amt) == 0:
+                continue
+
+            raw = getattr(pos, 'raw', {}) or {}
+            update_ms = float(raw.get('updateTime') or 0)
+            mark = float(raw.get('markPrice') or 0)
+            entry = pos.entry_price
+            qty = abs(pos.position_amt)
+
+            if update_ms <= 0 or entry <= 0 or qty <= 0 or mark <= 0:
+                skipped.append(f"{sym}: 数据不完整，跳过")
+                continue
+
+            direction = _direction_of(pos.position_amt)
+            close_side = _close_side_of(direction)
+            dir_label = '多' if direction == TradeDirection.LONG else '空'
+
+            sym_state_pre = state.get(sym, {})
+            open_ms = sym_state_pre.get('open_ms')
+
+            # ── 方向反转检测：重置与方向相关的状态字段 ──────────────
+            saved_direction = sym_state_pre.get('direction')
+            current_direction_str = 'LONG' if direction == TradeDirection.LONG else 'SHORT'
+            if saved_direction is not None and saved_direction != current_direction_str:
+                sym_state_pre = {}
+                state[sym] = {}
+                open_ms = None
+
+            if open_ms is None:
+                # 首次见到该持仓（或方向刚反转）：用当前时间作为开仓时间起点。
+                open_ms = now_ms
+            else:
+                try:
+                    open_ms = float(open_ms)
+                    if open_ms <= 0:
+                        open_ms = now_ms
+                except (TypeError, ValueError):
+                    open_ms = now_ms
+            elapsed_s = max(0.0, (now_ms - open_ms) / 1000)
+            elapsed_h = elapsed_s / 3600
+            pnl_pct = (mark - entry) / entry * 100 * (1 if direction == TradeDirection.LONG else -1)
+
+            sl_orders = [
+                o for o in algo_orders
+                if o.get('symbol') == sym
+                and Skill4Execute._is_stop_loss_order(o, close_side, entry, direction)
+            ]
+            tp_orders = [
+                o for o in algo_orders
+                if o.get('symbol') == sym
+                and Skill4Execute._is_take_profit_order(o, close_side, entry, direction)
+            ]
+
+            if not sl_orders or not tp_orders:
+                skipped.append(f"{sym}({dir_label}): 缺少止损或止盈单（SL={len(sl_orders)}, TP={len(tp_orders)}），跳过")
+                continue
+
+            if direction == TradeDirection.LONG:
+                current_sl_order = min(sl_orders, key=lambda o: float(o.get('triggerPrice') or 0))
+                current_tp_order = max(tp_orders, key=lambda o: float(o.get('triggerPrice') or 0))
+            else:
+                current_sl_order = max(sl_orders, key=lambda o: float(o.get('triggerPrice') or 0))
+                current_tp_order = min(tp_orders, key=lambda o: float(o.get('triggerPrice') or 0))
+
+            current_sl = float(current_sl_order.get('triggerPrice') or 0)
+            current_tp = float(current_tp_order.get('triggerPrice') or 0)
+
+            if current_sl <= 0 or current_tp <= 0:
+                skipped.append(f"{sym}({dir_label}): 止损/止盈触发价无效，跳过")
+                continue
+
+            sl_dist = abs(entry - current_sl)
+
+            sym_state = state.get(sym, {})
             try:
-                open_ms = float(open_ms)
-                if open_ms <= 0:
-                    open_ms = update_ms
+                original_tp = float(sym_state.get('original_tp', current_tp))
+                if not (original_tp > 0):
+                    original_tp = current_tp
             except (TypeError, ValueError):
-                open_ms = update_ms
-        elapsed_s = max(0.0, (now_ms - open_ms) / 1000)
-        elapsed_h = elapsed_s / 3600
-        pnl_pct = (mark - entry) / entry * 100 * (1 if direction == TradeDirection.LONG else -1)
-
-        sl_orders = [
-            o for o in algo_orders
-            if o.get('symbol') == sym
-            and Skill4Execute._is_stop_loss_order(o, close_side, entry, direction)
-        ]
-        tp_orders = [
-            o for o in algo_orders
-            if o.get('symbol') == sym
-            and Skill4Execute._is_take_profit_order(o, close_side, entry, direction)
-        ]
-
-        if not sl_orders or not tp_orders:
-            skipped.append(f"{sym}({dir_label}): 缺少止损或止盈单（SL={len(sl_orders)}, TP={len(tp_orders)}），跳过")
-            continue
-
-        if direction == TradeDirection.LONG:
-            current_sl_order = min(sl_orders, key=lambda o: float(o.get('triggerPrice') or 0))
-            current_tp_order = max(tp_orders, key=lambda o: float(o.get('triggerPrice') or 0))
-        else:
-            current_sl_order = max(sl_orders, key=lambda o: float(o.get('triggerPrice') or 0))
-            current_tp_order = min(tp_orders, key=lambda o: float(o.get('triggerPrice') or 0))
-
-        current_sl = float(current_sl_order.get('triggerPrice') or 0)
-        current_tp = float(current_tp_order.get('triggerPrice') or 0)
-
-        if current_sl <= 0 or current_tp <= 0:
-            skipped.append(f"{sym}({dir_label}): 止损/止盈触发价无效，跳过")
-            continue
-
-        sl_dist = abs(entry - current_sl)
-
-        sym_state = state.get(sym, {})
-        try:
-            original_tp = float(sym_state.get('original_tp', current_tp))
-            if not (original_tp > 0):
                 original_tp = current_tp
-        except (TypeError, ValueError):
-            original_tp = current_tp
-        try:
-            tp_decay_step = max(0, min(2, int(sym_state.get('tp_decay_step', 0))))
-        except (TypeError, ValueError):
-            tp_decay_step = 0
-        try:
-            sl_step = max(0, min(3, int(sym_state.get('sl_step', 0))))
-        except (TypeError, ValueError):
-            sl_step = 0
+            try:
+                tp_decay_step = max(0, min(2, int(sym_state.get('tp_decay_step', 0))))
+            except (TypeError, ValueError):
+                tp_decay_step = 0
+            try:
+                sl_step = max(0, min(3, int(sym_state.get('sl_step', 0))))
+            except (TypeError, ValueError):
+                sl_step = 0
 
-        tp_improved = (
-            current_tp > original_tp if direction == TradeDirection.LONG
-            else current_tp < original_tp
-        )
-        if tp_improved:
-            original_tp = current_tp
-            tp_decay_step = 0
-
-        # ── 方案四：分批止盈 ──────────────────────────────────
-        # 浮盈 ≥ 1.0×sl_dist 时，平掉 50% 仓位锁利，剩余继续持有
-        # 幂等：通过 state 里的 partial_tp_done 标记防止重复执行
-        partial_tp_done = bool(sym_state.get('partial_tp_done', False))
-        sym_rule = _rule_map.get(sym)
-
-        if (not partial_tp_done
-                and sl_dist > 0
-                and sym_rule is not None):
-            profit = (mark - entry) if direction == TradeDirection.LONG else (entry - mark)
-            if profit >= sl_dist * 1.0:
-                # 用交易所规则规整 50% 数量（stepSize 向下取整 + minQty + minNotional 校验）
-                raw_partial = qty / 2.0
-                normed_partial = normalize_order_quantity(
-                    symbol=sym,
-                    quantity=raw_partial,
-                    price=mark,
-                    rule=sym_rule,
-                )
-                if normed_partial is not None and normed_partial > 0:
-                    # 确保平仓后剩余仓位也满足最小交易量（避免留下无法平仓的碎仓）
-                    remaining = qty - normed_partial
-                    remaining_ok = (
-                        remaining <= 0  # 全平也可以
-                        or normalize_order_quantity(
-                            symbol=sym, quantity=remaining,
-                            price=mark, rule=sym_rule,
-                        ) is not None
-                    )
-                    if remaining_ok:
-                        partial_tp_actions.append({
-                            'symbol': sym, 'partial_qty': float(normed_partial),
-                            'close_side': close_side, 'dir_label': dir_label,
-                            'entry': entry, 'mark': mark, 'pnl_pct': pnl_pct,
-                            'sl_dist': sl_dist, 'elapsed_h': elapsed_h,
-                            'original_tp': original_tp,
-                            'tp_decay_step': tp_decay_step,
-                            'sl_step': sl_step, 'open_ms': open_ms,
-                            'direction': direction,
-                        })
-                    else:
-                        skipped.append(
-                            f"{sym}({dir_label}): 分批止盈跳过，"
-                            f"剩余仓位 {remaining:.8g} 低于最小交易量"
-                        )
-                else:
-                    skipped.append(
-                        f"{sym}({dir_label}): 分批止盈跳过，"
-                        f"50%数量 {raw_partial:.8g} 规整后不满足交易所约束"
-                    )
-
-        # ── 方案二：止损上移 ──────────────────────────────────
-        new_sl, new_sl_step = Skill4Execute._calc_breakeven_sl(
-            direction=direction, entry_price=entry, current_price=mark,
-            sl_dist=sl_dist, current_sl_price=current_sl, sl_step=sl_step,
-        )
-        if new_sl is not None:
-            normed_sl = norm_sl(sym, new_sl, direction)
-            sl_moved = (
-                normed_sl > current_sl if direction == TradeDirection.LONG
-                else normed_sl < current_sl
+            tp_improved = (
+                current_tp > original_tp if direction == TradeDirection.LONG
+                else current_tp < original_tp
             )
-            if not sl_moved:
-                skipped.append(
-                    f"{sym}({dir_label}): 止损上移规整后未前进 "
-                    f"({new_sl:.8g} → {normed_sl:.8g} vs current={current_sl:.8g})，跳过"
-                )
-            else:
-                sl_actions.append({
-                    'symbol': sym, 'qty': qty,
-                    'old_sl': current_sl, 'new_sl': normed_sl,
-                    'sl_algo_id': current_sl_order.get('algoId'),
-                    'sl_step': new_sl_step,
-                    'entry': entry, 'mark': mark, 'pnl_pct': pnl_pct,
-                    'elapsed_h': elapsed_h, 'original_tp': original_tp,
-                    'tp_decay_step': tp_decay_step, 'open_ms': open_ms,
-                    'direction': direction, 'close_side': close_side, 'dir_label': dir_label,
-                })
-
-        # ── 方案三：时间衰减止盈 ──────────────────────────────
-        new_tp, new_tp_step = Skill4Execute._calc_time_decay_tp(
-            direction=direction, entry_price=entry,
-            original_tp_price=original_tp, current_tp_price=current_tp,
-            elapsed=elapsed_s, max_hold_seconds=max_hold_seconds,
-            tp_decay_step=tp_decay_step, current_price=mark,
-        )
-        if new_tp is not None:
-            normed_tp = norm_tp(sym, new_tp, direction)
-            tp_safe = (
-                normed_tp > mark if direction == TradeDirection.LONG
-                else normed_tp < mark
-            )
-            if not tp_safe:
-                skipped.append(
-                    f"{sym}({dir_label}): 止盈下调规整后穿越当前价 "
-                    f"({new_tp:.8g} → {normed_tp:.8g} vs mark={mark:.8g})，跳过"
-                )
-            else:
-                tp_actions.append({
-                    'symbol': sym, 'qty': qty,
-                    'old_tp': current_tp, 'new_tp': normed_tp,
-                    'tp_algo_id': current_tp_order.get('algoId'),
-                    'tp_step': new_tp_step,
-                    'entry': entry, 'mark': mark, 'pnl_pct': pnl_pct,
-                    'elapsed_h': elapsed_h, 'original_tp': original_tp,
+            if tp_improved:
+                original_tp = current_tp
+                tp_decay_step = 0
+                # 立即持久化重置，防止后续方案三安全校验失败时状态丢失
+                state[sym] = {
+                    **state.get(sym, {}),
+                    'original_tp': original_tp,
+                    'tp_decay_step': 0,
+                    'sl_step': sl_step,
                     'open_ms': open_ms,
-                    'direction': direction, 'close_side': close_side, 'dir_label': dir_label,
-                })
-        else:
-            state[sym] = {
-                'original_tp': original_tp,
-                'tp_decay_step': tp_decay_step,
-                'sl_step': sl_step,
-                'open_ms': open_ms,
-            }
+                    'direction': current_direction_str,
+                }
 
-    # ── 执行方案四：分批止盈 ──────────────────────────────────
-    partial_tp_results = []
-    for a in partial_tp_actions:
-        sym = a['symbol']
-        close_side = a['close_side']
-        dir_label = a['dir_label']
-        partial_qty = a['partial_qty']
+            # ── 方案二：止损上移 ──────────────────────────────────
+            # sl_dist==0 时止损已在保本位，无法继续上移，跳过。
+            if sl_dist > 0:
+                new_sl, new_sl_step = Skill4Execute._calc_breakeven_sl(
+                    direction=direction, entry_price=entry, current_price=mark,
+                    sl_dist=sl_dist, current_sl_price=current_sl, sl_step=sl_step,
+                )
+                if new_sl is not None:
+                    normed_sl = norm_sl(sym, new_sl, direction)
+                    sl_moved = (
+                        normed_sl > current_sl if direction == TradeDirection.LONG
+                        else normed_sl < current_sl
+                    )
+                    if not sl_moved:
+                        skipped.append(
+                            f"{sym}({dir_label}): 止损上移规整后未前进 "
+                            f"({new_sl:.8g} → {normed_sl:.8g} vs current={current_sl:.8g})，跳过"
+                        )
+                    else:
+                        sl_actions.append({
+                            'symbol': sym, 'qty': qty,
+                            'old_sl': current_sl, 'new_sl': normed_sl,
+                            'sl_algo_id': current_sl_order.get('algoId'),
+                            'sl_step': new_sl_step,
+                            'entry': entry, 'mark': mark, 'pnl_pct': pnl_pct,
+                            'elapsed_h': elapsed_h, 'original_tp': original_tp,
+                            'tp_decay_step': tp_decay_step, 'open_ms': open_ms,
+                            'direction': direction, 'close_side': close_side, 'dir_label': dir_label,
+                            'direction_str': current_direction_str,
+                        })
 
-        try:
-            # 市价平掉 50% 仓位（不用条件单，直接市价成交锁利）
-            client.place_market_order(
-                symbol=sym,
-                side=close_side,
-                quantity=partial_qty,
+            # ── 方案三：时间衰减止盈 ──────────────────────────────
+            new_tp, new_tp_step = Skill4Execute._calc_time_decay_tp(
+                direction=direction, entry_price=entry,
+                original_tp_price=original_tp, current_tp_price=current_tp,
+                elapsed=elapsed_s, max_hold_seconds=max_hold_seconds,
+                tp_decay_step=tp_decay_step, current_price=mark,
             )
-            # 标记已执行，防止重复
-            state[sym] = {
-                **state.get(sym, {}),
-                'original_tp': a['original_tp'],
-                'tp_decay_step': a['tp_decay_step'],
-                'sl_step': a['sl_step'],
-                'open_ms': a['open_ms'],
-                'partial_tp_done': True,
-            }
-            partial_tp_results.append(
-                f"✅ **{sym}**({dir_label}) 分批止盈(50%): "
-                f"市价平仓 {partial_qty} 手 "
-                f"(浮盈{a['pnl_pct']:+.2f}%, 持仓{a['elapsed_h']:.1f}h)"
-            )
-        except Exception as exc:
-            partial_tp_results.append(
-                f"⚠️ **{sym}**({dir_label}) 分批止盈失败: {exc}"
-            )
+            if new_tp is not None:
+                normed_tp = norm_tp(sym, new_tp, direction)
+                tp_safe = (
+                    normed_tp > mark if direction == TradeDirection.LONG
+                    else normed_tp < mark
+                )
+                if not tp_safe:
+                    skipped.append(
+                        f"{sym}({dir_label}): 止盈下调规整后穿越当前价 "
+                        f"({new_tp:.8g} → {normed_tp:.8g} vs mark={mark:.8g})，跳过"
+                    )
+                else:
+                    tp_actions.append({
+                        'symbol': sym, 'qty': qty,
+                        'old_tp': current_tp, 'new_tp': normed_tp,
+                        'tp_algo_id': current_tp_order.get('algoId'),
+                        'tp_step': new_tp_step,
+                        'entry': entry, 'mark': mark, 'pnl_pct': pnl_pct,
+                        'elapsed_h': elapsed_h, 'original_tp': original_tp,
+                        'open_ms': open_ms,
+                        'direction': direction, 'close_side': close_side, 'dir_label': dir_label,
+                        'direction_str': current_direction_str,
+                    })
+            else:
+                # new_tp is None：无需衰减，仅刷新状态。
+                # 用 ** 展开保留已有字段（含 partial_tp_done），避免覆盖分批止盈标记。
+                state[sym] = {
+                    **state.get(sym, {}),
+                    'original_tp': original_tp,
+                    'tp_decay_step': tp_decay_step,
+                    'sl_step': sl_step,
+                    'open_ms': open_ms,
+                    'direction': current_direction_str,
+                }
 
-    # ── 执行方案二 ────────────────────────────────────────────
-    sl_results = []
-    for a in sl_actions:
-        sym = a['symbol']
-        close_side = a['close_side']
-        dir_label = a['dir_label']
-        step_label = {1: '保本', 2: '锁0.5x', 3: '锁1x'}.get(a['sl_step'], '?')
+        # ── 执行方案二 ────────────────────────────────────────────
+        sl_results = []
+        for a in sl_actions:
+            sym = a['symbol']
+            close_side = a['close_side']
+            dir_label = a['dir_label']
+            step_label = {1: '保本', 2: '锁0.5x', 3: '锁1x'}.get(a['sl_step'], '?')
 
-        # Binance -4130：同方向不允许同时存在多张 closePosition=True 条件单
-        # 必须先撤旧单再挂新单；挂新单失败立即用原价恢复
-        if not a['sl_algo_id']:
-            sl_results.append(f"⚠️ **{sym}**({dir_label}) 止损单缺少 algoId，跳过上移（止损保护不变）")
-            continue
+            # Binance -4130：同方向不允许同时存在多张 closePosition=True 条件单
+            # 必须先撤旧单再挂新单；挂新单失败立即用原价恢复
+            if not a['sl_algo_id']:
+                sl_results.append(f"⚠️ **{sym}**({dir_label}) 止损单缺少 algoId，跳过上移（止损保护不变）")
+                continue
 
-        try:
-            client.cancel_algo_order(symbol=sym, algo_id=int(a['sl_algo_id']))
-        except Exception as cancel_exc:
-            sl_results.append(f"⚠️ **{sym}**({dir_label}) 撤旧止损单失败，跳过上移: {cancel_exc}")
-            continue
+            try:
+                client.cancel_algo_order(symbol=sym, algo_id=int(a['sl_algo_id']))
+            except Exception as cancel_exc:
+                sl_results.append(f"⚠️ **{sym}**({dir_label}) 撤旧止损单失败，跳过上移: {cancel_exc}")
+                continue
 
-        try:
-            client.place_stop_market_order(
-                symbol=sym, side=close_side, quantity=a['qty'],
-                stop_price=a['new_sl'], close_position=True,
-            )
-            state[sym] = {
-                **state.get(sym, {}),
-                'original_tp': a['original_tp'],
-                'tp_decay_step': a['tp_decay_step'],
-                'sl_step': a['sl_step'],
-                'open_ms': a['open_ms'],
-            }
-            sl_results.append(
-                f"✅ **{sym}**({dir_label}) 止损上移({step_label}): "
-                f"{a['old_sl']:.6g} → {a['new_sl']:.6g} (浮盈{a['pnl_pct']:+.2f}%)"
-            )
-        except Exception as place_exc:
             try:
                 client.place_stop_market_order(
                     symbol=sym, side=close_side, quantity=a['qty'],
-                    stop_price=a['old_sl'], close_position=True,
+                    stop_price=a['new_sl'], close_position=True,
                 )
+                state[sym] = {
+                    **state.get(sym, {}),
+                    'original_tp': a['original_tp'],
+                    'tp_decay_step': a['tp_decay_step'],
+                    'sl_step': a['sl_step'],
+                    'open_ms': a['open_ms'],
+                    'direction': a['direction_str'],
+                }
                 sl_results.append(
-                    f"⚠️ **{sym}**({dir_label}) 止损上移失败，已恢复原止损单({a['old_sl']:.6g}): {place_exc}"
+                    f"✅ **{sym}**({dir_label}) 止损上移({step_label}): "
+                    f"{a['old_sl']:.6g} → {a['new_sl']:.6g} (浮盈{a['pnl_pct']:+.2f}%)"
                 )
-            except Exception as restore_exc:
-                sl_results.append(
-                    f"🚨 **{sym}**({dir_label}) 止损上移失败且恢复失败！持仓无止损保护！请立即手动处理！"
-                    f" 上移错误={place_exc} | 恢复错误={restore_exc}"
-                )
+            except Exception as place_exc:
+                try:
+                    client.place_stop_market_order(
+                        symbol=sym, side=close_side, quantity=a['qty'],
+                        stop_price=a['old_sl'], close_position=True,
+                    )
+                    sl_results.append(
+                        f"⚠️ **{sym}**({dir_label}) 止损上移失败，已恢复原止损单({a['old_sl']:.6g}): {place_exc}"
+                    )
+                except Exception as restore_exc:
+                    sl_results.append(
+                        f"🚨 **{sym}**({dir_label}) 止损上移失败且恢复失败！持仓无止损保护！请立即手动处理！"
+                        f" 上移错误={place_exc} | 恢复错误={restore_exc}"
+                    )
 
-    # ── 执行方案三 ────────────────────────────────────────────
-    tp_results = []
-    for a in tp_actions:
-        sym = a['symbol']
-        close_side = a['close_side']
-        dir_label = a['dir_label']
-        step_label = {1: '-20%', 2: '-40%'}.get(a['tp_step'], '?')
+        # ── 执行方案三 ────────────────────────────────────────────
+        tp_results = []
+        for a in tp_actions:
+            sym = a['symbol']
+            close_side = a['close_side']
+            dir_label = a['dir_label']
+            step_label = {1: '-20%', 2: '-40%'}.get(a['tp_step'], '?')
 
-        if not a['tp_algo_id']:
-            tp_results.append(f"⚠️ **{sym}**({dir_label}) 止盈单缺少 algoId，跳过下调（止盈保护不变）")
-            continue
+            if not a['tp_algo_id']:
+                tp_results.append(f"⚠️ **{sym}**({dir_label}) 止盈单缺少 algoId，跳过下调（止盈保护不变）")
+                continue
 
-        try:
-            client.cancel_algo_order(symbol=sym, algo_id=int(a['tp_algo_id']))
-        except Exception as cancel_exc:
-            tp_results.append(f"⚠️ **{sym}**({dir_label}) 撤旧止盈单失败，跳过下调: {cancel_exc}")
-            continue
+            try:
+                client.cancel_algo_order(symbol=sym, algo_id=int(a['tp_algo_id']))
+            except Exception as cancel_exc:
+                tp_results.append(f"⚠️ **{sym}**({dir_label}) 撤旧止盈单失败，跳过下调: {cancel_exc}")
+                continue
 
-        try:
-            client.place_take_profit_market_order(
-                symbol=sym, side=close_side, quantity=a['qty'],
-                stop_price=a['new_tp'], close_position=True,
-            )
-            state[sym] = {
-                **state.get(sym, {}),
-                'original_tp': a['original_tp'],
-                'tp_decay_step': a['tp_step'],
-                'sl_step': state.get(sym, {}).get('sl_step', 0),
-                'open_ms': a['open_ms'],
-            }
-            tp_results.append(
-                f"✅ **{sym}**({dir_label}) 止盈下调({step_label}): "
-                f"{a['old_tp']:.6g} → {a['new_tp']:.6g} "
-                f"(持仓{a['elapsed_h']:.1f}h, 浮盈{a['pnl_pct']:+.2f}%)"
-            )
-        except Exception as place_exc:
             try:
                 client.place_take_profit_market_order(
                     symbol=sym, side=close_side, quantity=a['qty'],
-                    stop_price=a['old_tp'], close_position=True,
+                    stop_price=a['new_tp'], close_position=True,
                 )
+                state[sym] = {
+                    **state.get(sym, {}),
+                    'original_tp': a['original_tp'],
+                    'tp_decay_step': a['tp_step'],
+                    # sl_step 从当前 state 读取：方案二可能在本次执行中已将其更新
+                    'sl_step': state.get(sym, {}).get('sl_step', a['sl_step']),
+                    'open_ms': a['open_ms'],
+                    'direction': a['direction_str'],
+                }
                 tp_results.append(
-                    f"⚠️ **{sym}**({dir_label}) 止盈下调失败，已恢复原止盈单({a['old_tp']:.6g}): {place_exc}"
+                    f"✅ **{sym}**({dir_label}) 止盈下调({step_label}): "
+                    f"{a['old_tp']:.6g} → {a['new_tp']:.6g} "
+                    f"(持仓{a['elapsed_h']:.1f}h, 浮盈{a['pnl_pct']:+.2f}%)"
                 )
-            except Exception as restore_exc:
-                tp_results.append(
-                    f"🚨 **{sym}**({dir_label}) 止盈下调失败且恢复失败！止盈保护丢失！请手动处理！"
-                    f" 下调错误={place_exc} | 恢复错误={restore_exc}"
-                )
+            except Exception as place_exc:
+                try:
+                    client.place_take_profit_market_order(
+                        symbol=sym, side=close_side, quantity=a['qty'],
+                        stop_price=a['old_tp'], close_position=True,
+                    )
+                    tp_results.append(
+                        f"⚠️ **{sym}**({dir_label}) 止盈下调失败，已恢复原止盈单({a['old_tp']:.6g}): {place_exc}"
+                    )
+                except Exception as restore_exc:
+                    tp_results.append(
+                        f"🚨 **{sym}**({dir_label}) 止盈下调失败且恢复失败！止盈保护丢失！请手动处理！"
+                        f" 下调错误={place_exc} | 恢复错误={restore_exc}"
+                    )
 
-    # ── 保存状态 ──────────────────────────────────────────────
-    save_state(state)
+        # ── 保存状态 ──────────────────────────────────────────────
+        save_state(state)
+
+    finally:
+        # 共享状态锁：save_state 完成后立即释放
+        if _state_lock_fh is not None:
+            fcntl.flock(_state_lock_fh, fcntl.LOCK_UN)
+            _state_lock_fh.close()
 
     # ── 输出报告 ──────────────────────────────────────────────
     lines = [f"## 持仓管理 {now.strftime('%m-%d %H:%M UTC')}"]
-    if partial_tp_results:
-        lines.append("\n**方案四 分批止盈**")
-        lines.extend(partial_tp_results)
     if sl_results:
         lines.append("\n**方案二 止损上移**")
         lines.extend(sl_results)
     if tp_results:
         lines.append("\n**方案三 止盈下调**")
         lines.extend(tp_results)
-    if not sl_results and not tp_results and not partial_tp_results:
+    if not sl_results and not tp_results:
         lines.append("\n无需调整（所有持仓均未触发阈值）")
     if skipped:
-        lines.append(f"\n_跳过 {len(skipped)} 个持仓_")
+        lines.append(f"\n_跳过 {len(skipped)} 个持仓:_")
+        lines.extend(f"  - {s}" for s in skipped)
     print("\n".join(lines))
 
 finally:
-    # 无论正常退出还是异常，都确保释放文件锁
+    # 无论正常退出还是异常，都确保释放进程锁
     fcntl.flock(_lock_fh, fcntl.LOCK_UN)
     _lock_fh.close()
 

@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-持仓管理脚本 — 方案二（止损上移）+ 方案三（时间衰减止盈）
+持仓管理脚本 — 方案二（止损上移）+ 方案三（时间衰减止盈）+ 方案四（分批止盈）
 
 每次执行：
 1. 扫描所有活跃持仓（做多 + 做空）
 2. 方案二：浮盈达到止损距离阈值时，上移止损到保本/锁利
 3. 方案三：持仓时间超过 50%/75% max_hold 时，下调止盈目标（幂等，不重复衰减）
+4. 方案四：浮盈达到止损距离 × 1.0 时，平掉 50% 仓位锁利，剩余继续持有
 4. 输出 Markdown 格式报告（供 Telegram 推送）
 
 幂等保护：
@@ -178,6 +179,7 @@ try:  # 锁保护区：确保任何异常都能释放文件锁
 
     sl_actions = []
     tp_actions = []
+    partial_tp_actions = []   # 方案四：分批止盈
     skipped = []
 
     for pos in positions:
@@ -266,6 +268,36 @@ try:  # 锁保护区：确保任何异常都能释放文件锁
             original_tp = current_tp
             tp_decay_step = 0
 
+        # ── 方案四：分批止盈 ──────────────────────────────────
+        # 浮盈 ≥ 1.0×sl_dist 时，平掉 50% 仓位锁利，剩余继续持有
+        # 幂等：通过 state 里的 partial_tp_done 标记防止重复执行
+        partial_tp_done = bool(sym_state.get('partial_tp_done', False))
+        min_partial_qty = 1.0  # 最小平仓数量（防止数量太小被交易所拒绝）
+
+        if (not partial_tp_done
+                and qty >= min_partial_qty * 2  # 仓位至少 2 个单位才值得分批
+                and sl_dist > 0):
+            profit = (mark - entry) if direction == TradeDirection.LONG else (entry - mark)
+            if profit >= sl_dist * 1.0:
+                # 平掉 50%，向下取整到最小交易单位
+                partial_qty = qty / 2.0
+                # 用 lot_size 规整（如果有的话）
+                lot_tick = _tick_map.get(sym)  # tick_map 存的是价格精度，数量精度另算
+                # 简单处理：保留 2 位小数，向下取整
+                import math
+                partial_qty = math.floor(partial_qty * 100) / 100
+                if partial_qty >= min_partial_qty:
+                    partial_tp_actions.append({
+                        'symbol': sym, 'partial_qty': partial_qty,
+                        'close_side': close_side, 'dir_label': dir_label,
+                        'entry': entry, 'mark': mark, 'pnl_pct': pnl_pct,
+                        'sl_dist': sl_dist, 'elapsed_h': elapsed_h,
+                        'original_tp': original_tp,
+                        'tp_decay_step': tp_decay_step,
+                        'sl_step': sl_step, 'open_ms': open_ms,
+                        'direction': direction,
+                    })
+
         # ── 方案二：止损上移 ──────────────────────────────────
         new_sl, new_sl_step = Skill4Execute._calc_breakeven_sl(
             direction=direction, entry_price=entry, current_price=mark,
@@ -330,6 +362,40 @@ try:  # 锁保护区：确保任何异常都能释放文件锁
                 'sl_step': sl_step,
                 'open_ms': open_ms,
             }
+
+    # ── 执行方案四：分批止盈 ──────────────────────────────────
+    partial_tp_results = []
+    for a in partial_tp_actions:
+        sym = a['symbol']
+        close_side = a['close_side']
+        dir_label = a['dir_label']
+        partial_qty = a['partial_qty']
+
+        try:
+            # 市价平掉 50% 仓位（不用条件单，直接市价成交锁利）
+            client.place_market_order(
+                symbol=sym,
+                side=close_side,
+                quantity=partial_qty,
+            )
+            # 标记已执行，防止重复
+            state[sym] = {
+                **state.get(sym, {}),
+                'original_tp': a['original_tp'],
+                'tp_decay_step': a['tp_decay_step'],
+                'sl_step': a['sl_step'],
+                'open_ms': a['open_ms'],
+                'partial_tp_done': True,
+            }
+            partial_tp_results.append(
+                f"✅ **{sym}**({dir_label}) 分批止盈(50%): "
+                f"市价平仓 {partial_qty} 手 "
+                f"(浮盈{a['pnl_pct']:+.2f}%, 持仓{a['elapsed_h']:.1f}h)"
+            )
+        except Exception as exc:
+            partial_tp_results.append(
+                f"⚠️ **{sym}**({dir_label}) 分批止盈失败: {exc}"
+            )
 
     # ── 执行方案二 ────────────────────────────────────────────
     sl_results = []
@@ -437,13 +503,16 @@ try:  # 锁保护区：确保任何异常都能释放文件锁
 
     # ── 输出报告 ──────────────────────────────────────────────
     lines = [f"## 持仓管理 {now.strftime('%m-%d %H:%M UTC')}"]
+    if partial_tp_results:
+        lines.append("\n**方案四 分批止盈**")
+        lines.extend(partial_tp_results)
     if sl_results:
         lines.append("\n**方案二 止损上移**")
         lines.extend(sl_results)
     if tp_results:
         lines.append("\n**方案三 止盈下调**")
         lines.extend(tp_results)
-    if not sl_results and not tp_results:
+    if not sl_results and not tp_results and not partial_tp_results:
         lines.append("\n无需调整（所有持仓均未触发阈值）")
     if skipped:
         lines.append(f"\n_跳过 {len(skipped)} 个持仓_")

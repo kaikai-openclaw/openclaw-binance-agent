@@ -384,15 +384,16 @@ class _CryptoReversalBase(BaseSkill):
                 if interval == "1h" and result.get("volume_surge_ratio", 0) < vol_thresh:
                     continue
 
-                # 1h 模式追高过滤：24h 涨幅超过 15% 说明反转行情已走大半，跳过
-                if interval == "1h":
-                    price_change_pct = float(item.get("priceChangePercent", 0))
-                    if price_change_pct > 15.0:
-                        log.info(
-                            "[%s] %s 24h 涨幅 %.2f%% 超过 15%%，跳过（追高风险）",
-                            self.name, symbol, price_change_pct,
-                        )
-                        continue
+                # 追高过滤：24h 涨幅过大说明反转行情已走大半，此时做多是追高
+                # 4h 模式阈值 25%（波段级别容忍度更高），1h 模式阈值 15%（更敏感）
+                _price_change_pct = float(item.get("priceChangePercent", 0))
+                _chase_threshold = 15.0 if interval == "1h" else 25.0
+                if _price_change_pct > _chase_threshold and not target_symbols:
+                    log.info(
+                        "[%s] %s 24h 涨幅 %.2f%% 超过 %.0f%%，跳过（追高风险）",
+                        self.name, symbol, _price_change_pct, _chase_threshold,
+                    )
+                    continue
 
                 # 1h 模式底部确认硬性门槛：价格必须已从近期最低点反弹 ≥ 2% 且 ≤ 4%
                 # - 反弹不足 2%：可能还在下跌途中，接刀风险高

@@ -56,6 +56,7 @@ from report_utils import (
     build_account_summary,
     build_decision,
     metadata_by_symbol as _metadata_by_symbol,
+    build_full_metadata as _build_full_metadata,
     protection_warnings as _protection_warnings,
     render_positions_markdown,
     render_protection_markdown,
@@ -360,7 +361,7 @@ def run_report(args: argparse.Namespace) -> dict:
             )
             synced_closed_count = syncer.sync_closed_trades(
                 symbols=sync_symbols,
-                metadata_by_symbol=_metadata_by_symbol(s4_data.get("execution_results", [])),
+                metadata_by_symbol=_build_full_metadata(state_store, s4_data.get("execution_results", [])),
             )
 
             # Skill-5 进化（完全复用）

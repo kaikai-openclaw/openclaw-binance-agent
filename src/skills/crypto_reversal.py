@@ -387,7 +387,7 @@ class _CryptoReversalBase(BaseSkill):
                 # 追高过滤：24h 涨幅过大说明反转行情已走大半，此时做多是追高
                 # 4h 模式阈值 25%（波段级别容忍度更高），1h 模式阈值 15%（更敏感）
                 _price_change_pct = float(item.get("priceChangePercent", 0))
-                _chase_threshold = 15.0 if interval == "1h" else 20.0
+                _chase_threshold = 15.0 if interval == "1h" else 25.0
                 if _price_change_pct > _chase_threshold and not target_symbols:
                     log.info(
                         "[%s] %s 24h 涨幅 %.2f%% 超过 %.0f%%，跳过（追高风险）",

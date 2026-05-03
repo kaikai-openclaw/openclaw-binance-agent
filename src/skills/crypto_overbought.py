@@ -170,7 +170,7 @@ LT_W_SHADOW = 5          # 长上影线
 LT_W_SQUEEZE_RISK = -4   # 轧空风险扣分（长期看风险降低）
 
 DEFAULT_MIN_QUOTE_VOLUME = 10_000_000
-DEFAULT_MIN_OVERBOUGHT_SCORE = 30  # 回测优化：40→30（评分≥30 胜率63.6% 均收益+2.09%）
+DEFAULT_MIN_OVERBOUGHT_SCORE = 35  # 回测优化：40→30，再调整为35（4h 评分≥35 更稳定）
 DEFAULT_MAX_CANDIDATES = 10
 # 轧空风险：成交额低于此值且 OI/成交额比过高 → 扣分
 # 阈值设为 2000 万：只对真正低流动性小币种扣分，避免误伤中等市值超买候选
@@ -542,10 +542,10 @@ class HourlyOverboughtSkill(_CryptoOverboughtBase):
         self.name = "crypto_overbought_1h"
 
     def run(self, input_data: dict) -> dict:
-        # 1h 回测优化门槛：30（两次交叉验证均稳定）
-        # 回测结论：评分≥30 胜率70.1% 均收益+3.49% IR 0.193（300币 seed=99）
+        # 1h 回测优化门槛：35（与 4h 统一）
+        # 回测结论：评分≥35 胜率61-76%，样本稳定
         if "min_overbought_score" not in input_data:
-            input_data = {**input_data, "min_overbought_score": 30}
+            input_data = {**input_data, "min_overbought_score": 35}
         return self._run_scan(
             input_data,
             interval=H1_INTERVAL,

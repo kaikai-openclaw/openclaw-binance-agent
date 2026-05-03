@@ -426,9 +426,11 @@ def create_fast_analyzer() -> callable:
 """
 
         # 从扫描层评分映射 rating_score（0-100 → 1-10）
-        # 使用非线性映射：扫描层 30-60 分是反转/超跌候选的主力区间，
-        # 线性 /10 会把它们压缩到 3-6 分，空间太窄。
-        # 新映射：25→4, 35→5, 45→6, 55→7, 65→8, 75+→9
+        # 回测优化后映射（v2）：与各策略有效门槛对齐
+        #   oversold_4h/1h 有效门槛 = 40，overbought_4h/1h 有效门槛 = 30，reversal_4h/1h 有效门槛 = 60
+        #   扫描层 40 分 → 映射 6 分（Skill-2 门槛）→ LLM 确认后 7 分通过下单
+        #   旧映射：45→6（扫描层 40-44 分的有效信号被 Skill-2 过滤掉）
+        #   新映射：40→6, 50→7, 60→8, 70→9
         scan_score = None
         for key in ["oversold_score", "overbought_score", "reversal_score"]:
             val = market_data.get(key)
@@ -438,17 +440,17 @@ def create_fast_analyzer() -> callable:
         if scan_score is None:
             scan_score = 50
 
-        if scan_score >= 75:
+        if scan_score >= 70:
             mapped_rating = 9
-        elif scan_score >= 65:
+        elif scan_score >= 60:
             mapped_rating = 8
-        elif scan_score >= 55:
+        elif scan_score >= 50:
             mapped_rating = 7
-        elif scan_score >= 45:
-            mapped_rating = 6
-        elif scan_score >= 35:
+        elif scan_score >= 40:
+            mapped_rating = 6   # 与回测有效门槛对齐（oversold≥40, reversal≥60 → 此处≥40进入候选池）
+        elif scan_score >= 30:
             mapped_rating = 5
-        elif scan_score >= 25:
+        elif scan_score >= 20:
             mapped_rating = 4
         else:
             mapped_rating = max(1, round(scan_score / 10))

@@ -356,6 +356,7 @@ def run_report(args: argparse.Namespace) -> dict:
                     account_state_provider=account_provider,
                     poll_interval=30,
                     trading_rule_provider=trading_rule_provider,
+                    use_market_order=True,
                 )
                 s4_input_id = state_store.save("skill4_input", {"input_state_id": s3_id})
                 s4_id = skill4.execute(s4_input_id)

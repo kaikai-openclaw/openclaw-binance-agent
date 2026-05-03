@@ -149,7 +149,9 @@ class RiskController:
         任一断言失败即拒绝订单。
         """
         # 断言 0：策略级 Paper Mode 检查
-        if strategy_tag and self.is_strategy_paper_mode(strategy_tag):
+        # 注意：全局 paper_mode 由 _execute_single_trade 在风控通过后统一处理（模拟下单），
+        # 此处仅拦截策略独立 paper mode，避免全局 paper mode 下订单被误判为 rejected_by_risk。
+        if strategy_tag and not self._paper_mode and self._strategy_paper_modes.get(strategy_tag, False):
             reason = (
                 f"策略 {strategy_tag} 处于模拟盘模式，拒绝实盘下单"
             )

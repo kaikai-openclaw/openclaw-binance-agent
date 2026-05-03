@@ -87,6 +87,7 @@ class Skill4Execute(BaseSkill):
         max_concurrent_trades: int = DEFAULT_MAX_CONCURRENT_TRADES,
         fee_order_type: str = "taker",
         fee_vip_discount: float = 0.0,
+        use_market_order: bool = False,
     ) -> None:
         """
         初始化 Skill-4。
@@ -110,6 +111,8 @@ class Skill4Execute(BaseSkill):
             fee_order_type: 平仓订单类型，"taker"（市价单，默认）或 "maker"（限价单），
                 用于计算平仓手续费
             fee_vip_discount: Binance VIP 费率折扣系数（0-1）
+            use_market_order: 是否使用市价单入场（默认 False 使用限价单）。
+                追势策略（如超买做空）建议开启，避免限价单挂单超时撤单。
         """
         super().__init__(state_store, input_schema, output_schema)
         self.name = "skill4_execute"
@@ -124,6 +127,7 @@ class Skill4Execute(BaseSkill):
         self._max_concurrent_trades = max_concurrent_trades
         self._fee_order_type = fee_order_type
         self._fee_vip_discount = fee_vip_discount
+        self._use_market_order = use_market_order
 
     def run(self, input_data: dict) -> dict:
         """
@@ -393,14 +397,21 @@ class Skill4Execute(BaseSkill):
                 pass
 
         try:
-            order_result = self._binance_client.place_limit_order(
-                symbol=symbol,
-                side=side,
-                price=entry_price,
-                quantity=quantity,
-            )
+            if self._use_market_order:
+                log.info(f"[{self.name}] {symbol} 使用市价单入场 side={side} qty={quantity}")
+                order_result = self._binance_client.place_market_order(
+                    symbol=symbol,
+                    side=side,
+                    quantity=quantity,
+                )
+            else:
+                order_result = self._binance_client.place_limit_order(
+                    symbol=symbol,
+                    side=side,
+                    price=entry_price,
+                    quantity=quantity,
+                )
         except Exception as exc:
-            log.error(f"[{self.name}] {symbol} 下单失败: {exc}")
             return self._make_result(
                 symbol=symbol,
                 direction=direction_str,
@@ -411,6 +422,12 @@ class Skill4Execute(BaseSkill):
             )
 
         if not self._monitor_until_close:
+            # 市价单立即成交，用较短的超时（最多等 5 秒）确认持仓并挂保护单
+            effective_timeout = (
+                min(5.0, self._entry_confirm_timeout)
+                if self._use_market_order
+                else self._entry_confirm_timeout
+            )
             entry_result = self._confirm_entry_and_place_protection(
                 symbol=symbol,
                 direction=direction,
@@ -421,6 +438,7 @@ class Skill4Execute(BaseSkill):
                 order_id=order_result.order_id,
                 trailing_stop=trailing_stop,
                 pre_order_position_amt=pre_order_position_amt,
+                confirm_timeout_override=effective_timeout,
             )
             return self._make_result(
                 symbol=symbol,
@@ -749,6 +767,7 @@ class Skill4Execute(BaseSkill):
         order_id: str,
         trailing_stop: Optional[dict] = None,
         pre_order_position_amt: float = 0.0,
+        confirm_timeout_override: Optional[float] = None,
     ) -> dict:
         """
         非阻塞执行模式：短暂确认入场成交，挂好服务端保护后返回。
@@ -762,7 +781,11 @@ class Skill4Execute(BaseSkill):
         若 trailing_stop 含有效配置（trail_pct > 0），在 SL/TP 挂单后
         同步向 Binance 提交 TRAILING_STOP_MARKET 条件单，使移动止损
         在非阻塞生产模式下也能由服务端执行（进程崩溃不丢失保护）。
+
+        参数:
+            confirm_timeout_override: 覆盖默认超时时间（秒）；市价单传入较小值加速确认。
         """
+        timeout = confirm_timeout_override if confirm_timeout_override is not None else self._entry_confirm_timeout
         start_time = time.monotonic()
         initial_position_amt = pre_order_position_amt
 
@@ -828,7 +851,7 @@ class Skill4Execute(BaseSkill):
                         }
 
             elapsed = time.monotonic() - start_time
-            if elapsed >= self._entry_confirm_timeout:
+            if elapsed >= timeout:
                 if self._is_order_open(symbol, order_id):
                     self._cancel_entry_order(symbol)
                     return {
@@ -846,7 +869,7 @@ class Skill4Execute(BaseSkill):
 
             wait = min(
                 ENTRY_CONFIRM_POLL_INTERVAL,
-                self._entry_confirm_timeout - elapsed,
+                timeout - elapsed,
             )
             if wait > 0:
                 time.sleep(wait)

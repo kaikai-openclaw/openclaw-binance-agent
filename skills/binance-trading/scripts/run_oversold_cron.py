@@ -320,10 +320,15 @@ def run_report(args: argparse.Namespace) -> dict:
                     risk_ratio=risk_ratio,
                     require_market_price=True,
                     # ── 超跌策略参数 ──
-                    # 短期(4h)：快进快出，保持默认
-                    # 长期(1d)：波段反弹需要更多时间和空间
+                    # 短期(4h)：快进快出，atr_stop_mult 降到 1.0，止损更紧
+                    #   ATR ≤ 5% 的币均可进场（5% × 1.0 = 5% ≤ max_stop_pct）
+                    #   盈亏比 2.5:1（atr_tp_mult=2.5 / atr_stop_mult=1.0）
+                    # 长期(1d)：波段反弹，atr_stop_mult=1.2，ATR ≤ 5.8% 可进场
+                    #   盈亏比 3.75:1（atr_tp_mult=4.5 / atr_stop_mult=1.2）
                     max_hold_hours=72.0 if args.mode == "1d" else 24.0,
-                    atr_tp_mult=4.5 if args.mode == "1d" else 3.0,
+                    max_stop_pct=0.07 if args.mode == "1d" else 0.05,
+                    atr_stop_mult=1.2 if args.mode == "1d" else 1.0,
+                    atr_tp_mult=4.5 if args.mode == "1d" else 2.5,
                     trailing_stop_ratio=0.35 if args.mode == "1d" else 0.5,
                     trailing_activation_mult=1.5 if args.mode == "1d" else 1.0,
                     trailing_activation_mult_hv=2.0 if args.mode == "1d" else 1.5,

@@ -2,10 +2,10 @@
 Risk_Controller 风控拦截层模块
 
 作为独立拦截层运行，所有交易指令在到达 Binance_Fapi_Client 之前
-必须通过其校验。硬编码四大风控常量，不可配置。
+必须通过其校验。硬编码六大风控常量，不可配置。
 
 功能：
-- validate_order(): 单笔保证金、单币持仓、止损冷却期校验
+- validate_order(): 单笔保证金、单币持仓、总敞口、持仓数量、止损冷却期校验
 - check_daily_loss(): 日亏损 ≥ 5% 检测
 - execute_degradation(): 取消挂单、停止实盘、告警、切换 Paper Mode
 - is_paper_mode(): 查询当前模式
@@ -33,7 +33,7 @@ class RiskController:
     风控拦截层。
 
     所有交易指令在到达 Binance_Fapi_Client 之前必须通过此层校验。
-    四大风控常量为硬编码，不可通过配置修改。
+    六大风控常量为硬编码，不可通过配置修改。
     止损冷却记录持久化到 SQLite，进程重启后冷却期不丢失。
     """
 
@@ -42,6 +42,8 @@ class RiskController:
     MAX_SINGLE_COIN_RATIO = 0.40      # 单币累计持仓 <= 总资金 40%
     DAILY_LOSS_THRESHOLD = 0.05       # 日亏损阈值 5%
     STOP_LOSS_COOLDOWN_HOURS = 24     # 止损后同方向冷却期（小时）
+    MAX_TOTAL_EXPOSURE_RATIO = 4.0    # 全账户总持仓名义价值 <= 总资金 × 4x（P0）
+    MAX_OPEN_POSITIONS = 12           # 同时持仓数量上限（P0，全账户总共）
 
     _CREATE_COOLDOWN_TABLE_SQL = """
         CREATE TABLE IF NOT EXISTS stop_loss_cooldowns (
@@ -145,6 +147,8 @@ class RiskController:
         2. 单币累计持仓 <= 总资金 × 40%
         3. 止损冷却期内禁止同方向开仓（按 strategy_tag 隔离）
         4. 该策略是否处于 Paper Mode
+        5. 同时持仓数量 <= MAX_OPEN_POSITIONS（P0）
+        6. 全账户总持仓名义价值 <= 总资金 × MAX_TOTAL_EXPOSURE_RATIO（P0）
 
         任一断言失败即拒绝订单。
         """
@@ -169,6 +173,32 @@ class RiskController:
             return ValidationResult(passed=False, reason=reason)
 
         total_balance = account.total_balance
+
+        # 断言 0.6：同时持仓数量上限（P0）
+        open_positions = len([
+            p for p in account.positions
+            if (p.get("quantity", 0) if isinstance(p, dict) else getattr(p, "quantity", 0)) != 0
+        ])
+        if open_positions >= self.MAX_OPEN_POSITIONS:
+            reason = (
+                f"当前持仓数 {open_positions} 已达上限 {self.MAX_OPEN_POSITIONS}，"
+                f"禁止新开仓"
+            )
+            log.warning(f"风控拒绝: {reason}")
+            return ValidationResult(passed=False, reason=reason)
+
+        # 断言 0.7：全账户总持仓名义价值上限（P0）
+        total_exposure = self._get_total_exposure(account)
+        new_order_notional = order.quantity * order.price
+        exposure_limit = total_balance * self.MAX_TOTAL_EXPOSURE_RATIO
+        if total_exposure + new_order_notional > exposure_limit:
+            reason = (
+                f"新增持仓后总敞口 {total_exposure + new_order_notional:.2f} "
+                f"将超过上限 {exposure_limit:.2f}"
+                f"（总资金 {total_balance:.2f} × {self.MAX_TOTAL_EXPOSURE_RATIO:.0f}x）"
+            )
+            log.warning(f"风控拒绝: {reason}")
+            return ValidationResult(passed=False, reason=reason)
 
         # 断言 1：单笔保证金 <= 总资金 20%
         single_margin = order.quantity * order.price / order.leverage
@@ -374,6 +404,24 @@ class RiskController:
                 total_value += abs(quantity) * price
 
         return total_value
+
+    def _get_total_exposure(self, account: AccountState) -> float:
+        """
+        计算全账户当前总持仓名义价值（所有持仓的 |quantity| × price 之和）。
+
+        用于断言 0.7 的总敞口上限校验。
+        支持 dict 和具有属性的对象两种格式。
+        """
+        total = 0.0
+        for pos in account.positions:
+            if isinstance(pos, dict):
+                quantity = pos.get("quantity", 0)
+                price = pos.get("current_price", 0) or pos.get("entry_price", 0)
+            else:
+                quantity = getattr(pos, "quantity", 0)
+                price = getattr(pos, "current_price", 0) or getattr(pos, "entry_price", 0)
+            total += abs(quantity) * price
+        return total
 
     def _is_in_cooldown(self, symbol: str, direction: str, strategy_tag: str = "") -> bool:
         """

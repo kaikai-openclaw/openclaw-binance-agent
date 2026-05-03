@@ -56,7 +56,7 @@ try:
             side = "做多" if pos.position_amt > 0 else "做空"
             pnl_pct = (pos.unrealized_pnl / (abs(pos.position_amt) * pos.entry_price)) * 100 if pos.entry_price > 0 else 0
             print(f"{pos.symbol:15s} {side:4s} {abs(pos.position_amt):.4f} | "
-                  f"入场价: {pos.entry_price:,.2f} | "
+                  f"入场价: {pos.entry_price:.8g} | "
                   f"盈亏: {pos.unrealized_pnl:+,.2f} USDT ({pnl_pct:+.2f}%) | "
                   f"杠杆: {pos.leverage}x")
 

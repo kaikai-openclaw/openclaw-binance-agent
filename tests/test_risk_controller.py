@@ -71,11 +71,13 @@ class TestValidateOrder:
         assert result.reason == ""
 
     def test_single_margin_exceeds_limit(self):
-        """单笔保证金超过 20% 应被拒绝。"""
+        """单笔保证金超过 35% 应被拒绝。"""
         rc = RiskController()
-        account = _make_account(total_balance=10000.0)
-        # 保证金 = 1.0 * 50000 / 10 = 5000，超过 10000 * 0.2 = 2000
-        order = _make_order(price=50000.0, quantity=1.0, leverage=10)
+        # total_balance=1000，总敞口上限 = 1000 × 2 = 2000
+        # quantity=0.01, price=50000 → 名义价值 500 < 2000（通过总敞口）
+        # 保证金 = 500 / 1 = 500 > 1000 × 0.35 = 350（超单笔保证金）
+        account = _make_account(total_balance=1000.0)
+        order = _make_order(price=50000.0, quantity=0.01, leverage=1)
         result = rc.validate_order(order, account)
         assert result.passed is False
         assert "单笔保证金" in result.reason
@@ -91,24 +93,23 @@ class TestValidateOrder:
         assert result.passed is True
 
     def test_coin_position_exceeds_limit(self):
-        """单币累计持仓超过 30% 应被拒绝。"""
+        """同 symbol 已有持仓时应被拒绝（防止重复开仓）。"""
         rc = RiskController()
-        # 已有持仓价值 2500（0.05 * 50000）
         positions = [{"symbol": "BTCUSDT", "quantity": 0.05, "entry_price": 50000.0}]
         account = _make_account(total_balance=10000.0, positions=positions)
-        # 新订单价值 = 0.02 * 50000 = 1000，累计 = 2500 + 1000 = 3500 > 3000
         order = _make_order(price=50000.0, quantity=0.02, leverage=10)
         result = rc.validate_order(order, account)
         assert result.passed is False
-        assert "单币累计持仓" in result.reason
+        assert "已有持仓" in result.reason
 
     def test_coin_position_within_limit(self):
-        """单币累计持仓在 30% 以内应通过。"""
+        """不同 symbol 的持仓不影响新开仓（总敞口和持仓数量在限额内）。"""
         rc = RiskController()
-        positions = [{"symbol": "BTCUSDT", "quantity": 0.01, "entry_price": 50000.0}]
-        account = _make_account(total_balance=10000.0, positions=positions)
-        # 已有 500，新增 500，累计 1000 < 3000
-        order = _make_order(price=50000.0, quantity=0.01, leverage=10)
+        # ETHUSDT 持仓，不影响 BTCUSDT 开仓
+        positions = [{"symbol": "ETHUSDT", "quantity": 0.1, "entry_price": 2000.0}]
+        account = _make_account(total_balance=100000.0, positions=positions)
+        # BTCUSDT 新订单，名义价值 500，总敞口 200 + 500 = 700 << 200000
+        order = _make_order(symbol="BTCUSDT", price=50000.0, quantity=0.01, leverage=10)
         result = rc.validate_order(order, account)
         assert result.passed is True
 
@@ -137,6 +138,59 @@ class TestValidateOrder:
         rc.record_stop_loss("BTCUSDT", "long")
         account = _make_account(total_balance=100000.0)
         order = _make_order(symbol="ETHUSDT", direction=TradeDirection.LONG)
+        result = rc.validate_order(order, account)
+        assert result.passed is True
+
+    def test_max_open_positions_exceeded(self):
+        """持仓数量达到上限时应拒绝新开仓（P0）。"""
+        rc = RiskController()
+        # 构造 12 个持仓（达到 MAX_OPEN_POSITIONS=12 上限）
+        positions = [
+            {"symbol": f"TOKEN{i}USDT", "quantity": 1.0, "entry_price": 10.0}
+            for i in range(12)
+        ]
+        account = _make_account(total_balance=100000.0, positions=positions)
+        order = _make_order(symbol="NEWUSDT", price=10.0, quantity=1.0, leverage=10)
+        result = rc.validate_order(order, account)
+        assert result.passed is False
+        assert "持仓数" in result.reason
+
+    def test_max_open_positions_within_limit(self):
+        """持仓数量未达上限时应通过（P0）。"""
+        rc = RiskController()
+        positions = [
+            {"symbol": f"TOKEN{i}USDT", "quantity": 1.0, "entry_price": 10.0}
+            for i in range(11)
+        ]
+        account = _make_account(total_balance=100000.0, positions=positions)
+        order = _make_order(symbol="NEWUSDT", price=10.0, quantity=1.0, leverage=10)
+        result = rc.validate_order(order, account)
+        assert result.passed is True
+
+    def test_total_exposure_exceeded(self):
+        """总持仓名义价值超过 4x 总资金时应拒绝（P0）。"""
+        rc = RiskController()
+        # 已有持仓名义价值 = 4 × 1000 = 4000，total_balance=1000
+        # 上限 = 1000 × 4 = 4000，新增 100 → 4100 > 4000
+        positions = [
+            {"symbol": "ETHUSDT", "quantity": 4.0, "current_price": 1000.0, "entry_price": 1000.0},
+        ]
+        account = _make_account(total_balance=1000.0, positions=positions)
+        order = _make_order(symbol="SOLUSDT", price=100.0, quantity=1.0, leverage=10)
+        result = rc.validate_order(order, account)
+        assert result.passed is False
+        assert "总敞口" in result.reason
+
+    def test_total_exposure_within_limit(self):
+        """总持仓名义价值在 4x 以内时应通过（P0）。"""
+        rc = RiskController()
+        # 已有持仓名义价值 = 1 × 500 = 500，total_balance=1000
+        # 上限 = 4000，新增 100 → 600 < 4000
+        positions = [
+            {"symbol": "ETHUSDT", "quantity": 1.0, "current_price": 500.0, "entry_price": 500.0},
+        ]
+        account = _make_account(total_balance=1000.0, positions=positions)
+        order = _make_order(symbol="SOLUSDT", price=100.0, quantity=1.0, leverage=10)
         result = rc.validate_order(order, account)
         assert result.passed is True
 
@@ -267,9 +321,9 @@ class TestRecordStopLossAndPaperMode:
     def test_expired_cooldown(self):
         """超过 24 小时的止损记录不应阻止开仓。"""
         rc = RiskController()
-        # 手动插入一条 25 小时前的记录
+        # 手动插入一条 25 小时前的记录（4 元素元组：symbol, direction, strategy_tag, time）
         old_time = datetime.now() - timedelta(hours=25)
-        rc._stop_loss_records.append(("BTCUSDT", "long", old_time))
+        rc._stop_loss_records.append(("BTCUSDT", "long", "", old_time))
         assert rc._is_in_cooldown("BTCUSDT", "long") is False
 
 

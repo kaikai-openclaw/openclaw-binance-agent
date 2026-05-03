@@ -323,7 +323,7 @@ def run_report(args: argparse.Namespace) -> dict:
                 atr_stop_mult=1.0,          # 止损更紧（插针天然定义了止损位）
                 atr_tp_mult=2.5,            # 盈亏比 2.5:1
                 min_stop_pct=0.003,         # 最小止损 0.3%
-                max_stop_pct=0.08,          # 最大止损 8%
+                max_stop_pct=0.03,          # 最大止损 3%（插针天然定义止损位，不需要大止损）
                 trailing_stop_ratio=0.6,    # 更激进的追踪止损
                 trailing_activation_mult=0.8,
                 trailing_activation_mult_hv=1.2,

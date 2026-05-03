@@ -86,8 +86,7 @@ class Skill4Execute(BaseSkill):
         entry_confirm_timeout: float = DEFAULT_ENTRY_CONFIRM_TIMEOUT,
         max_concurrent_trades: int = DEFAULT_MAX_CONCURRENT_TRADES,
         fee_order_type: str = "taker",
-        fee_vip_discount: float = 0.0,
-        use_market_order: bool = False,
+        fee_vip_discount: float = 0.0,        use_market_order: bool = False,
     ) -> None:
         """
         初始化 Skill-4。
@@ -464,6 +463,7 @@ class Skill4Execute(BaseSkill):
             max_hold_hours=max_hold_hours,
             quantity=quantity,
             order_id=order_result.order_id,
+            entry_price=entry_price,
             trailing_stop=trailing_stop,
             strategy_tag=strategy_tag,
         )
@@ -507,6 +507,7 @@ class Skill4Execute(BaseSkill):
         max_hold_hours: float,
         quantity: float,
         order_id: str,
+        entry_price: float = 0.0,
         trailing_stop: dict | None = None,
         strategy_tag: str = "",
     ) -> dict:
@@ -546,6 +547,22 @@ class Skill4Execute(BaseSkill):
         trailing_stop = trailing_stop or {}
         trailing_active = False
         best_price = 0.0
+
+        # 方案二：止损上移状态
+        # 记录当前生效的止损价（可能已被上移），用于撤旧挂新
+        current_sl_price = stop_loss_price
+        # 止损上移阶段：0=未激活, 1=已移到保本, 2=已锁住0.5x, 3=已锁住1x
+        sl_step = 0
+        # 止损距离（入场价到原始止损价的绝对距离），用于计算上移阈值
+        sl_dist = abs(entry_price - stop_loss_price) if entry_price > 0 else 0.0
+
+        # 方案三：时间衰减止盈状态
+        # 记录当前生效的止盈价（可能已被下调）
+        current_tp_price = take_profit_price
+        # 原始止盈价，始终保持不变，用于衰减计算的基准
+        original_tp_price = take_profit_price
+        # 时间衰减阶段：0=未衰减, 1=已下调20%, 2=已下调40%
+        tp_decay_step = 0
 
         while True:
             # 获取持仓风险信息
@@ -702,8 +719,74 @@ class Skill4Execute(BaseSkill):
                     symbol, close_side, position_amt, "trailing_stop", start_time
                 )
 
-            # 需求 4.7：超时检查
+            # 计算已持仓时间（方案二/三 和超时检查共用）
             elapsed = time.monotonic() - start_time
+
+            # ── 方案二：止损上移（Break-even + 阶梯锁利）──────────────────
+            # 仅在持仓已开、止损距离有效、服务端保护单已挂时执行
+            if position_opened and sl_dist > 0 and server_sl_tp_placed:
+                new_sl, new_sl_step = self._calc_breakeven_sl(
+                    direction=direction,
+                    entry_price=entry_price,
+                    current_price=current_price,
+                    sl_dist=sl_dist,
+                    current_sl_price=current_sl_price,
+                    sl_step=sl_step,
+                )
+                if new_sl is not None and new_sl_step > sl_step:
+                    updated = self._update_server_sl(
+                        symbol=symbol,
+                        close_side=close_side,
+                        quantity=position_amt,
+                        new_sl_price=new_sl,
+                        fallback_sl_price=current_sl_price,
+                        entry_price=entry_price,
+                        direction=direction,
+                    )
+                    if updated:
+                        log.info(
+                            f"[{self.name}] {symbol} 止损上移 step {sl_step}→{new_sl_step}: "
+                            f"{current_sl_price:.8g} → {new_sl:.8g}"
+                        )
+                        current_sl_price = new_sl
+                        sl_step = new_sl_step
+                        stop_loss_price = new_sl  # 同步本地止损检查价
+
+            # ── 方案三：时间衰减止盈 ──────────────────────────────────────
+            # 持仓时间超过一定比例时，下调止盈目标，避免长时间悬挂消耗资金费率
+            # 只在止损未上移（仍在亏损区）时才做时间衰减，已保本后不需要催促止盈
+            if position_opened and server_sl_tp_placed and sl_step == 0:
+                new_tp, new_tp_step = self._calc_time_decay_tp(
+                    direction=direction,
+                    entry_price=entry_price,
+                    original_tp_price=original_tp_price,
+                    current_tp_price=current_tp_price,
+                    elapsed=elapsed,
+                    max_hold_seconds=max_hold_seconds,
+                    tp_decay_step=tp_decay_step,
+                    current_price=current_price,
+                )
+                if new_tp is not None and new_tp_step > tp_decay_step:
+                    updated = self._update_server_tp(
+                        symbol=symbol,
+                        close_side=close_side,
+                        quantity=position_amt,
+                        new_tp_price=new_tp,
+                        fallback_tp_price=current_tp_price,
+                        entry_price=entry_price,
+                        direction=direction,
+                    )
+                    if updated:
+                        log.info(
+                            f"[{self.name}] {symbol} 止盈下调 step {tp_decay_step}→{new_tp_step}: "
+                            f"{current_tp_price:.8g} → {new_tp:.8g} "
+                            f"(已持仓 {elapsed/3600:.1f}h/{max_hold_hours}h)"
+                        )
+                        current_tp_price = new_tp
+                        tp_decay_step = new_tp_step
+                        take_profit_price = new_tp  # 同步本地止盈检查价
+
+            # 需求 4.7：超时检查
             if elapsed >= max_hold_seconds:
                 log.info(
                     f"[{self.name}] {symbol} 持仓超时: "
@@ -978,6 +1061,399 @@ class Skill4Execute(BaseSkill):
             "triggered": triggered,
             "trail_price": trail_price,
         }
+
+    # ── 方案二：止损上移辅助方法 ──────────────────────────────────────────
+
+    @staticmethod
+    def _calc_breakeven_sl(
+        direction: TradeDirection,
+        entry_price: float,
+        current_price: float,
+        sl_dist: float,
+        current_sl_price: float,
+        sl_step: int,
+    ) -> tuple[Optional[float], int]:
+        """
+        计算止损上移目标价和新阶段编号。
+
+        阶梯规则（做多方向，做空对称）：
+          step 0→1：浮盈 ≥ 1.0×sl_dist → 止损移到入场价（保本）
+          step 1→2：浮盈 ≥ 1.5×sl_dist → 止损移到入场价 + 0.5×sl_dist（锁住半个止损距离）
+          step 2→3：浮盈 ≥ 2.0×sl_dist → 止损移到入场价 + 1.0×sl_dist（锁住一个止损距离）
+
+        安全校验：新止损价必须比当前止损价更优（做多时更高，做空时更低），
+        防止因入场价异常导致止损倒退。
+
+        返回:
+            (新止损价, 新阶段编号)，若无需上移则返回 (None, sl_step)
+        """
+        if sl_dist <= 0 or entry_price <= 0:
+            return None, sl_step
+
+        candidate_sl: Optional[float] = None
+        candidate_step: int = sl_step
+
+        if direction == TradeDirection.LONG:
+            profit = current_price - entry_price
+            # 从最高阶梯往下检查，直接跳到当前浮盈对应的最高阶梯
+            if sl_step < 3 and profit >= sl_dist * 2.0:
+                candidate_sl, candidate_step = entry_price + sl_dist * 1.0, 3
+            elif sl_step < 2 and profit >= sl_dist * 1.5:
+                candidate_sl, candidate_step = entry_price + sl_dist * 0.5, 2
+            elif sl_step < 1 and profit >= sl_dist * 1.0:
+                candidate_sl, candidate_step = entry_price, 1
+            # 安全校验：新止损价必须高于当前止损价（做多方向只能上移）
+            if candidate_sl is not None and candidate_sl <= current_sl_price:
+                return None, sl_step
+        else:
+            profit = entry_price - current_price
+            if sl_step < 3 and profit >= sl_dist * 2.0:
+                candidate_sl, candidate_step = entry_price - sl_dist * 1.0, 3
+            elif sl_step < 2 and profit >= sl_dist * 1.5:
+                candidate_sl, candidate_step = entry_price - sl_dist * 0.5, 2
+            elif sl_step < 1 and profit >= sl_dist * 1.0:
+                candidate_sl, candidate_step = entry_price, 1
+            # 安全校验：新止损价必须低于当前止损价（做空方向只能下移）
+            if candidate_sl is not None and candidate_sl >= current_sl_price:
+                return None, sl_step
+
+        return candidate_sl, candidate_step
+
+    def _update_server_sl(
+        self,
+        symbol: str,
+        close_side: str,
+        quantity: float,
+        new_sl_price: float,
+        fallback_sl_price: Optional[float] = None,
+        entry_price: float = 0.0,
+        direction: Optional[TradeDirection] = None,
+    ) -> bool:
+        """
+        撤销旧止损单（STOP_MARKET），挂载新止损单。
+
+        只撤止损单，保留止盈单不动。
+
+        区分止损/止盈单的策略（Binance Algo Service 可能不返回 type 字段）：
+        - 优先用 type/origType/orderType 字段匹配 STOP_MARKET
+        - 若字段缺失，用触发价格方向判断：
+            做多时触发价 < entry_price 的是止损单
+            做空时触发价 > entry_price 的是止损单
+
+        安全保障：
+        - 新止损单挂载失败时，尝试用 fallback_sl_price 重新挂回原止损单，
+          防止撤单成功但挂单失败导致裸仓。
+        - 若 fallback 也失败，记录 CRITICAL 日志，本地轮询仍会兜底。
+
+        返回 True 表示新止损单挂载成功。
+        """
+        cancelled = False
+        try:
+            orders = self._binance_client.get_open_algo_orders(symbol)
+            for o in orders:
+                if not self._is_stop_loss_order(o, close_side, entry_price, direction):
+                    continue
+                algo_id = o.get("algoId", "")
+                if algo_id:
+                    try:
+                        self._binance_client.cancel_algo_order(
+                            symbol=symbol, algo_id=int(algo_id)
+                        )
+                        cancelled = True
+                    except Exception as exc:
+                        log.warning(f"[{self.name}] {symbol} 撤旧止损单失败: {exc}")
+        except Exception as exc:
+            log.warning(f"[{self.name}] {symbol} 获取条件单列表失败，跳过止损上移: {exc}")
+            return False
+
+        new_sl_price_norm = self._normalize_price_for_exchange(symbol, new_sl_price)
+        if new_sl_price_norm is None:
+            log.warning(f"[{self.name}] {symbol} 止损上移价格规整失败，尝试恢复原止损单")
+            self._try_restore_sl(symbol, close_side, quantity, fallback_sl_price)
+            return False
+        try:
+            self._binance_client.place_stop_market_order(
+                symbol=symbol,
+                side=close_side,
+                quantity=quantity,
+                stop_price=new_sl_price_norm,
+                close_position=True,
+            )
+            return True
+        except Exception as exc:
+            log.warning(f"[{self.name}] {symbol} 止损上移挂单失败: {exc}，尝试恢复原止损单")
+            if cancelled:
+                self._try_restore_sl(symbol, close_side, quantity, fallback_sl_price)
+            return False
+
+    @staticmethod
+    def _is_stop_loss_order(
+        order: dict,
+        close_side: str,
+        entry_price: float = 0.0,
+        direction: Optional[TradeDirection] = None,
+    ) -> bool:
+        """
+        判断一个 Algo 条件单是否为止损单。
+
+        优先用 type 字段精确匹配，type 缺失时用触发价格方向判断：
+          做多（close_side=SELL）：触发价 < entry_price → 止损单
+          做空（close_side=BUY）：触发价 > entry_price → 止损单
+        """
+        if str(order.get("side", "")).upper() != close_side:
+            return False
+
+        raw_type = (
+            order.get("type")
+            or order.get("origType")
+            or order.get("orderType")
+        )
+        if raw_type:
+            return str(raw_type).upper() == "STOP_MARKET"
+
+        # type 字段缺失，用触发价格方向判断
+        if entry_price <= 0 or direction is None:
+            # 无法判断，保守处理：不撤单
+            return False
+        trigger = float(order.get("triggerPrice") or order.get("stopPrice") or 0)
+        if trigger <= 0:
+            return False
+        if direction == TradeDirection.LONG:
+            return trigger < entry_price   # 做多止损在入场价下方
+        else:
+            return trigger > entry_price   # 做空止损在入场价上方
+
+    def _try_restore_sl(
+        self,
+        symbol: str,
+        close_side: str,
+        quantity: float,
+        fallback_sl_price: Optional[float],
+    ) -> None:
+        """
+        止损上移失败后，尝试重新挂回原止损单（安全兜底）。
+        失败时记录 CRITICAL 日志，本地轮询仍会继续保护。
+        """
+        if not fallback_sl_price or fallback_sl_price <= 0:
+            log.critical(
+                f"[{self.name}] {symbol} 止损上移失败且无 fallback 价格，"
+                f"服务端止损单已丢失！本地轮询继续保护。"
+            )
+            return
+        fallback_norm = self._normalize_price_for_exchange(symbol, fallback_sl_price)
+        if fallback_norm is None:
+            log.critical(
+                f"[{self.name}] {symbol} fallback 止损价格规整失败，"
+                f"服务端止损单已丢失！本地轮询继续保护。"
+            )
+            return
+        try:
+            self._binance_client.place_stop_market_order(
+                symbol=symbol,
+                side=close_side,
+                quantity=quantity,
+                stop_price=fallback_norm,
+                close_position=True,
+            )
+            log.info(f"[{self.name}] {symbol} 已恢复原止损单: {fallback_norm}")
+        except Exception as exc:
+            log.critical(
+                f"[{self.name}] {symbol} 恢复原止损单失败: {exc}，"
+                f"服务端止损单已丢失！本地轮询继续保护。"
+            )
+
+    # ── 方案三：时间衰减止盈辅助方法 ──────────────────────────────────────
+
+    @staticmethod
+    def _calc_time_decay_tp(
+        direction: TradeDirection,
+        entry_price: float,
+        original_tp_price: float,
+        current_tp_price: float,
+        elapsed: float,
+        max_hold_seconds: float,
+        tp_decay_step: int,
+        current_price: float = 0.0,
+    ) -> tuple[Optional[float], int]:
+        """
+        计算时间衰减后的止盈目标价和新阶段编号。
+
+        衰减规则：
+          step 0→1：持仓时间 ≥ max_hold × 50% → 止盈目标向入场价方向收缩 20%
+          step 1→2：持仓时间 ≥ max_hold × 75% → 止盈目标向入场价方向收缩 40%
+
+        收缩方向：做多时止盈价下移，做空时止盈价上移（向入场价靠近）。
+
+        安全校验：新止盈价必须比当前价格更优（做多时高于当前价，做空时低于当前价），
+        防止止盈单挂在当前价格不利方向导致 Binance 拒单（-2021）或止盈单丢失。
+
+        返回:
+            (新止盈价, 新阶段编号)，若无需调整则返回 (None, tp_decay_step)
+        """
+        if max_hold_seconds <= 0 or entry_price <= 0:
+            return None, tp_decay_step
+
+        tp_dist = abs(original_tp_price - entry_price)
+        if tp_dist <= 0:
+            return None, tp_decay_step
+
+        ratio = elapsed / max_hold_seconds
+
+        # 从最高阶梯往下检查，直接跳到当前时间对应的最高衰减阶梯
+        if tp_decay_step < 2 and ratio >= 0.75:
+            decay = 0.40
+            new_step = 2
+        elif tp_decay_step < 1 and ratio >= 0.5:
+            decay = 0.20
+            new_step = 1
+        else:
+            return None, tp_decay_step
+
+        new_tp_dist = tp_dist * (1 - decay)
+        if direction == TradeDirection.LONG:
+            new_tp = entry_price + new_tp_dist
+            # 确保新止盈价仍高于入场价（有意义）
+            if new_tp <= entry_price:
+                return None, tp_decay_step
+            # 安全校验：新止盈价必须高于当前价格，否则 Binance 会拒单（-2021）
+            # 且止盈单撤掉后无法重挂，导致止盈保护丢失
+            if current_price > 0 and new_tp <= current_price:
+                return None, tp_decay_step
+        else:
+            new_tp = entry_price - new_tp_dist
+            if new_tp >= entry_price:
+                return None, tp_decay_step
+            # 安全校验：新止盈价必须低于当前价格
+            if current_price > 0 and new_tp >= current_price:
+                return None, tp_decay_step
+
+        return new_tp, new_step
+
+    def _update_server_tp(
+        self,
+        symbol: str,
+        close_side: str,
+        quantity: float,
+        new_tp_price: float,
+        fallback_tp_price: Optional[float] = None,
+        entry_price: float = 0.0,
+        direction: Optional[TradeDirection] = None,
+    ) -> bool:
+        """
+        撤销旧止盈单（TAKE_PROFIT_MARKET），挂载新止盈单。
+
+        只撤止盈单，保留止损单不动。
+
+        区分止损/止盈单的策略同 _update_server_sl，用触发价格方向判断。
+
+        安全保障：
+        - 新止盈单挂载失败时，尝试用 fallback_tp_price 重新挂回原止盈单。
+        - 止盈单丢失不会造成资金损失（止损单仍在），但会影响自动止盈。
+
+        返回 True 表示新止盈单挂载成功。
+        """
+        try:
+            orders = self._binance_client.get_open_algo_orders(symbol)
+            for o in orders:
+                if not self._is_take_profit_order(o, close_side, entry_price, direction):
+                    continue
+                algo_id = o.get("algoId", "")
+                if algo_id:
+                    try:
+                        self._binance_client.cancel_algo_order(
+                            symbol=symbol, algo_id=int(algo_id)
+                        )
+                    except Exception as exc:
+                        log.warning(f"[{self.name}] {symbol} 撤旧止盈单失败: {exc}")
+        except Exception as exc:
+            log.warning(f"[{self.name}] {symbol} 获取条件单列表失败，跳过止盈下调: {exc}")
+            return False
+
+        new_tp_price_norm = self._normalize_price_for_exchange(symbol, new_tp_price)
+        if new_tp_price_norm is None:
+            log.warning(f"[{self.name}] {symbol} 止盈下调价格规整失败，尝试恢复原止盈单")
+            self._try_restore_tp(symbol, close_side, quantity, fallback_tp_price)
+            return False
+        try:
+            self._binance_client.place_take_profit_market_order(
+                symbol=symbol,
+                side=close_side,
+                quantity=quantity,
+                stop_price=new_tp_price_norm,
+                close_position=True,
+            )
+            return True
+        except Exception as exc:
+            log.warning(f"[{self.name}] {symbol} 止盈下调挂单失败: {exc}，尝试恢复原止盈单")
+            self._try_restore_tp(symbol, close_side, quantity, fallback_tp_price)
+            return False
+
+    @staticmethod
+    def _is_take_profit_order(
+        order: dict,
+        close_side: str,
+        entry_price: float = 0.0,
+        direction: Optional[TradeDirection] = None,
+    ) -> bool:
+        """
+        判断一个 Algo 条件单是否为止盈单。
+
+        优先用 type 字段精确匹配，type 缺失时用触发价格方向判断：
+          做多（close_side=SELL）：触发价 > entry_price → 止盈单
+          做空（close_side=BUY）：触发价 < entry_price → 止盈单
+        """
+        if str(order.get("side", "")).upper() != close_side:
+            return False
+
+        raw_type = (
+            order.get("type")
+            or order.get("origType")
+            or order.get("orderType")
+        )
+        if raw_type:
+            return str(raw_type).upper() == "TAKE_PROFIT_MARKET"
+
+        if entry_price <= 0 or direction is None:
+            return False
+        trigger = float(order.get("triggerPrice") or order.get("stopPrice") or 0)
+        if trigger <= 0:
+            return False
+        if direction == TradeDirection.LONG:
+            return trigger > entry_price   # 做多止盈在入场价上方
+        else:
+            return trigger < entry_price   # 做空止盈在入场价下方
+
+    def _try_restore_tp(
+        self,
+        symbol: str,
+        close_side: str,
+        quantity: float,
+        fallback_tp_price: Optional[float],
+    ) -> None:
+        """止盈下调失败后，尝试重新挂回原止盈单（安全兜底）。"""
+        if not fallback_tp_price or fallback_tp_price <= 0:
+            log.warning(
+                f"[{self.name}] {symbol} 止盈下调失败且无 fallback 价格，"
+                f"服务端止盈单已丢失，本地轮询继续保护。"
+            )
+            return
+        fallback_norm = self._normalize_price_for_exchange(symbol, fallback_tp_price)
+        if fallback_norm is None:
+            return
+        try:
+            self._binance_client.place_take_profit_market_order(
+                symbol=symbol,
+                side=close_side,
+                quantity=quantity,
+                stop_price=fallback_norm,
+                close_position=True,
+            )
+            log.info(f"[{self.name}] {symbol} 已恢复原止盈单: {fallback_norm}")
+        except Exception as exc:
+            log.warning(
+                f"[{self.name}] {symbol} 恢复原止盈单失败: {exc}，"
+                f"本地轮询继续保护。"
+            )
 
     def _close_position(
         self,

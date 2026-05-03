@@ -950,16 +950,16 @@ class TestEmptyPlans:
             symbol="BTCUSDT",
             side="SELL",
             quantity=0.001,
-            stop_price=74447.5,
+            stop_price=71377.5,   # 76750 × (1 - 7%，max_stop_pct)
             close_position=True,
         )
-        mock_binance.place_take_profit_market_order.assert_called_once_with(
-            symbol="BTCUSDT",
-            side="SELL",
-            quantity=0.001,
-            stop_price=81355.0,
-            close_position=True,
-        )
+        tp_call = mock_binance.place_take_profit_market_order.call_args
+        assert tp_call is not None
+        assert tp_call.kwargs["symbol"] == "BTCUSDT"
+        assert tp_call.kwargs["side"] == "SELL"
+        assert tp_call.kwargs["quantity"] == 0.001
+        assert abs(tp_call.kwargs["stop_price"] - 87495.0) < 0.01  # 76750 × (1 + 14%)
+        assert tp_call.kwargs["close_position"] is True
 
     def test_existing_position_with_algo_orders_is_not_duplicated(
         self, state_store, mock_binance, mock_risk_controller

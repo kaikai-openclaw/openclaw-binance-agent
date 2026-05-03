@@ -329,14 +329,13 @@ def run_report(args: argparse.Namespace) -> dict:
                     risk_ratio=risk_ratio,
                     require_market_price=True,
                     # ── 趋势反转策略参数 ──
-                    # 1h 模式：快速反转，12h 持仓，盈亏比 2:1
-                    # 4h/1d 模式：48h 持仓，盈亏比 2.7:1，trailing stop 适度延迟
-                    # 反转候选 ATR 天然偏高，放宽 max_stop 避免系统性过滤
-                    # 单笔保证金 2% 总资金，10% 止损 = 最多亏 2% 总资金，远低于 5% 日损上限
-                    # 1h 短期交易：收窄止损止盈（ATR×1.2/2.4），盈亏比保持 2:1 但整体更紧
-                    max_stop_pct=0.10 if args.mode == "1h" else 0.12,
-                    atr_stop_mult=1.2 if args.mode == "1h" else 1.5,
-                    atr_tp_mult=2.4 if args.mode == "1h" else 4.0,
+                    # 1h 模式：快速反转，12h 持仓，atr_stop_mult=0.8，ATR ≤ 3.75% 可进场
+                    #   盈亏比 3:1（atr_tp_mult=2.4 / atr_stop_mult=0.8）
+                    # 4h 模式：48h 持仓，atr_stop_mult=1.2，ATR ≤ 4.2% 可进场
+                    #   盈亏比 3:1（atr_tp_mult=3.6 / atr_stop_mult=1.2）
+                    max_stop_pct=0.03 if args.mode == "1h" else 0.05,
+                    atr_stop_mult=0.8 if args.mode == "1h" else 1.2,
+                    atr_tp_mult=2.4 if args.mode == "1h" else 3.6,
                     trailing_stop_ratio=0.5 if args.mode == "1h" else 0.4,
                     trailing_activation_mult=1.0 if args.mode == "1h" else 1.3,
                     trailing_activation_mult_hv=1.5 if args.mode == "1h" else 1.8,

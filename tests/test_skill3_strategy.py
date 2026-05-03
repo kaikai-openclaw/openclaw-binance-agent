@@ -112,6 +112,7 @@ def _make_skill(
         max_hold_hours=max_hold_hours,
         leverage=leverage,
         trading_rule_provider=trading_rule_provider,
+        require_market_price=False,  # 测试路径：无 provider 时回退到 TEST_FALLBACK_PRICE
     )
 
 

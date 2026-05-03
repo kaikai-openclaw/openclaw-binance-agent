@@ -331,14 +331,15 @@ def run_report(args: argparse.Namespace) -> dict:
                     risk_ratio=risk_ratio,
                     require_market_price=True,
                     # ── 超买做空策略参数 ──
-                    # 1h 模式：快速做空，12h 持仓
-                    # 4h/1d 模式：48h 持仓，盈亏比 2.3:1
-                    # 超买候选本身就是暴涨币种，ATR 天然极高（LABUSDT 案例 ATR=11.12%，raw_sl=16.68%）
-                    # 1h 与 4h/1d 统一使用 18%，避免 1h 高波动候选被系统性过滤
-                    # 1h 短期交易：收窄止损止盈（ATR×1.2/3.0），盈亏比保持 2.5:1 但整体更紧
-                    max_stop_pct=0.18,
+                    # 1h 模式：快速做空，12h 持仓，atr_stop_mult=0.8，ATR ≤ 3.75% 可进场
+                    #   盈亏比 3.75:1（atr_tp_mult=3.0 / atr_stop_mult=0.8）
+                    # 4h 模式：48h 持仓，atr_stop_mult=1.2，ATR ≤ 4.2% 可进场
+                    #   盈亏比 2.9:1（atr_tp_mult=3.5 / atr_stop_mult=1.2）
+                    # 1d 模式：波段做空，atr_stop_mult=1.5，ATR ≤ 4.7% 可进场
+                    #   盈亏比 2.3:1（atr_tp_mult=3.5 / atr_stop_mult=1.5）
+                    max_stop_pct=0.03 if args.mode == "1h" else (0.05 if args.mode == "4h" else 0.07),
                     max_hold_hours=12.0 if args.mode == "1h" else 48.0,
-                    atr_stop_mult=1.2 if args.mode == "1h" else 1.5,
+                    atr_stop_mult=0.8 if args.mode == "1h" else 1.2,
                     atr_tp_mult=3.0 if args.mode == "1h" else 3.5,
                     trailing_stop_ratio=0.5 if args.mode == "1h" else 0.45,
                     max_trades=2 if args.mode == "1h" else 3,

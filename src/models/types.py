@@ -264,15 +264,17 @@ def compute_evolution_adjustment(
     current_rating_threshold: int = 6,
     current_risk_ratio: float = 0.02,
     strategy_tag: str = "",
-) -> Optional[ReflectionLog]:
+    last_reflection: Optional["ReflectionLog"] = None,
+) -> Optional["ReflectionLog"]:
     """
     基于最近 50 笔交易计算策略调优建议（渐进式双向调整）。
 
     规则：
-    - 交易记录不足 10 笔时跳过，返回 None
-    - 胜率 < 40%：收紧（阈值 +1，风险 ×0.8）
-    - 胜率 > 60%：放松（阈值 -1，风险 ×1.1）
-    - 40%-60%：维持当前参数
+    - 交易记录不足 20 笔时跳过，返回 None（提高统计可信度）
+    - 死区扩大：胜率 < 38% 才收紧，> 62% 才放松，中间区间维持不变
+    - 连续确认机制：需要连续 2 轮同向信号才真正调整参数，单轮异常不触发
+      （通过对比 last_reflection 的方向实现）
+    - 去重：若参数与上轮完全相同，返回 None 不重复写入 reflection_logs
     - 附带按评级分段的胜率分析，辅助决策
 
     参数:
@@ -280,11 +282,13 @@ def compute_evolution_adjustment(
         current_rating_threshold: 当前评级过滤阈值（从上一轮反思日志读取）
         current_risk_ratio: 当前风险比例（从上一轮反思日志读取）
         strategy_tag: 策略标签，写入 ReflectionLog 用于按策略隔离
+        last_reflection: 上一轮反思日志，用于连续确认和去重判断
 
     返回:
-        ReflectionLog 调优建议，或 None（记录不足 10 笔时）
+        ReflectionLog 调优建议，或 None（记录不足/无需调整/重复时）
     """
-    if len(trades) < 10:
+    # 提高最低样本量到 20 笔，减少小样本噪音
+    if len(trades) < 20:
         return None
 
     # 取最近 50 笔
@@ -300,35 +304,86 @@ def compute_evolution_adjustment(
 
     now = datetime.now(timezone.utc)
 
-    if win_rate < 40:
+    # 判断本轮信号方向（扩大死区：38%/62%）
+    TIGHTEN_THRESHOLD = 38.0   # 低于此值才考虑收紧（原 40%）
+    LOOSEN_THRESHOLD = 62.0    # 高于此值才考虑放松（原 60%）
+
+    if win_rate < TIGHTEN_THRESHOLD:
+        signal_direction = "tighten"
+    elif win_rate > LOOSEN_THRESHOLD:
+        signal_direction = "loosen"
+    else:
+        signal_direction = "hold"
+
+    # 连续确认：只有上一轮也是同向信号才真正调整
+    # last_reflection 为 None（首次）时直接放行，避免永远无法调整
+    last_signal = None
+    if last_reflection is not None:
+        last_wr = last_reflection.win_rate
+        if last_wr < TIGHTEN_THRESHOLD:
+            last_signal = "tighten"
+        elif last_wr > LOOSEN_THRESHOLD:
+            last_signal = "loosen"
+        else:
+            last_signal = "hold"
+
+    confirmed = (last_reflection is None) or (signal_direction == last_signal)
+
+    if signal_direction == "tighten" and confirmed:
         # 收紧：阈值 +1（上限 8），风险 ×0.8（下限 0.005）
         new_threshold = min(8, current_rating_threshold + 1)
         new_risk_ratio = max(0.005, round(current_risk_ratio * 0.8, 4))
         reasoning = (
-            f"胜率 {win_rate:.1f}% 低于 40% 阈值，"
+            f"胜率 {win_rate:.1f}% 低于 {TIGHTEN_THRESHOLD}% 阈值（连续确认），"
             f"收紧评级过滤阈值 {current_rating_threshold}→{new_threshold}，"
             f"降低风险比例 {current_risk_ratio:.4f}→{new_risk_ratio:.4f}"
         )
-    elif win_rate > 60:
+    elif signal_direction == "loosen" and confirmed:
         # 放松：阈值 -1（下限 5），风险 ×1.1（上限 0.08）
         new_threshold = max(5, current_rating_threshold - 1)
         new_risk_ratio = min(0.08, round(current_risk_ratio * 1.1, 4))
         reasoning = (
-            f"胜率 {win_rate:.1f}% 高于 60% 阈值，"
+            f"胜率 {win_rate:.1f}% 高于 {LOOSEN_THRESHOLD}% 阈值（连续确认），"
             f"放松评级过滤阈值 {current_rating_threshold}→{new_threshold}，"
             f"提高风险比例 {current_risk_ratio:.4f}→{new_risk_ratio:.4f}"
         )
-    else:
-        # 40%-60%：维持当前参数
+    elif signal_direction != "hold" and not confirmed:
+        # 单轮信号，等待下一轮确认，记录观察但不调整参数
         new_threshold = current_rating_threshold
         new_risk_ratio = current_risk_ratio
         reasoning = (
-            f"胜率 {win_rate:.1f}% 处于正常区间(40%-60%)，"
+            f"胜率 {win_rate:.1f}% 触发{('收紧' if signal_direction == 'tighten' else '放松')}信号，"
+            f"等待下一轮确认（上轮胜率 {last_reflection.win_rate:.1f}%），"
+            f"本轮维持当前参数"
+        )
+    else:
+        # 死区内，维持当前参数
+        new_threshold = current_rating_threshold
+        new_risk_ratio = current_risk_ratio
+        reasoning = (
+            f"胜率 {win_rate:.1f}% 处于正常区间({TIGHTEN_THRESHOLD}%-{LOOSEN_THRESHOLD}%)，"
             f"维持当前策略参数"
         )
 
     if rating_analysis:
         reasoning += f"；评级分段分析: {rating_analysis}"
+
+    # 去重：参数与上轮完全相同时不重复写入
+    if last_reflection is not None:
+        same_params = (
+            new_threshold == last_reflection.suggested_rating_threshold
+            and abs(new_risk_ratio - last_reflection.suggested_risk_ratio) < 1e-6
+        )
+        # 胜率变化不超过 1% 且参数不变，视为无实质变化，跳过写入
+        win_rate_delta = abs(win_rate - last_reflection.win_rate)
+        if same_params and win_rate_delta < 1.0:
+            log.debug(
+                "[evolution] 胜率变化 %.2f%%，参数无变化，跳过写入 reflection_log "
+                "(strategy=%s)",
+                win_rate_delta,
+                strategy_tag,
+            )
+            return None
 
     return ReflectionLog(
         created_at=now,

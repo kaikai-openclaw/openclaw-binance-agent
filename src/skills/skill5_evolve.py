@@ -258,7 +258,9 @@ class Skill5Evolve(BaseSkill):
                 rating_score=rating_score,
                 position_size_pct=position_size_pct,
                 closed_at=datetime.now(timezone.utc),
-                strategy_tag=strategy_tag,
+                # 修复问题1：strategy_tag 为空时回退到 "crypto_generic"，
+                # 避免大量记录落入 "unknown" 桶导致按策略独立进化失效
+                strategy_tag=strategy_tag if strategy_tag and strategy_tag != "unknown" else "crypto_generic",
                 is_paper=(status == "paper_trade"),
             )
 
@@ -338,8 +340,8 @@ class Skill5Evolve(BaseSkill):
             tag = t.strategy_tag or "unknown"
             trades_by_strategy.setdefault(tag, []).append(t)
 
-        # 全局不足 10 笔时跳过
-        if trade_count < 10:
+        # 全局不足 20 笔时跳过（与 compute_evolution_adjustment 保持一致）
+        if trade_count < 20:
             log.info(
                 f"[{self.name}] 交易记录不足 10 笔 "
                 f"({trade_count} 笔)，跳过进化计算"
@@ -352,7 +354,7 @@ class Skill5Evolve(BaseSkill):
                 "trade_count": trade_count,
                 "adjustment_applied": False,
                 "adjustment_detail": (
-                    f"交易记录不足 10 笔（当前 {trade_count} 笔），"
+                    f"交易记录不足 20 笔（当前 {trade_count} 笔），"
                     "使用默认策略参数"
                 ),
                 "current_rating_threshold": DEFAULT_RATING_THRESHOLD,
@@ -428,12 +430,12 @@ class Skill5Evolve(BaseSkill):
         trade_count = len(trades)
         stats = self._memory_store.compute_stats(trades)
 
-        if trade_count < 10:
+        if trade_count < 20:
             return {
                 "win_rate": round(stats.win_rate, 2),
                 "trade_count": trade_count,
                 "adjustment_applied": False,
-                "adjustment_detail": f"交易不足 10 笔（{trade_count}），跳过",
+                "adjustment_detail": f"交易不足 20 笔（{trade_count}），跳过",
             }
 
         # 读取该策略的反思日志
@@ -450,6 +452,7 @@ class Skill5Evolve(BaseSkill):
             current_rating_threshold=current_threshold,
             current_risk_ratio=current_risk,
             strategy_tag=strategy_tag,
+            last_reflection=latest,
         )
 
         adjustment_applied = False

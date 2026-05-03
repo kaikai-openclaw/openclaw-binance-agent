@@ -3,8 +3,8 @@ Skill-5 展示与自我进化 单元测试。
 
 覆盖场景：
 1. 正常流程：读取账户状态 → 构建持仓展示 → 记录交易 → 计算进化
-2. 交易记录不足 10 笔 → 跳过进化计算
-3. 胜率低于 40% → 生成调优建议
+2. 交易记录不足 20 笔 → 跳过进化计算
+3. 胜率低于 38% → 生成调优建议（需连续两轮确认）
 4. 胜率正常 → 维持默认参数
 5. 空持仓列表
 6. Paper Mode 标记
@@ -272,16 +272,16 @@ class TestNormalExecution:
 
 
 # ══════════════════════════════════════════════════════════
-# 2. 交易记录不足 10 笔 → 跳过进化
+# 2. 交易记录不足 20 笔 → 跳过进化
 # ══════════════════════════════════════════════════════════
 
 class TestInsufficientTrades:
-    """测试交易记录不足 10 笔的场景（需求 5.7）。"""
+    """测试交易记录不足 20 笔的场景（需求 5.7）。"""
 
-    def test_less_than_10_trades_skips_evolution(
+    def test_less_than_20_trades_skips_evolution(
         self, state_store, memory_store
     ):
-        """不足 10 笔交易时应跳过进化计算。"""
+        """不足 20 笔交易时应跳过进化计算。"""
         # 插入 5 笔交易
         for _ in range(5):
             memory_store.record_trade(_make_trade_record())
@@ -291,7 +291,7 @@ class TestInsufficientTrades:
 
         assert result["evolution"]["adjustment_applied"] is False
         assert result["evolution"]["trade_count"] == 5
-        assert "不足 10 笔" in result["evolution"]["adjustment_detail"]
+        assert "不足 20 笔" in result["evolution"]["adjustment_detail"]
 
     def test_zero_trades_skips_evolution(
         self, state_store, memory_store
@@ -306,35 +306,61 @@ class TestInsufficientTrades:
 
 
 # ══════════════════════════════════════════════════════════
-# 3. 胜率低于 40% → 调优建议
+# 3. 胜率低于 38% → 调优建议（需连续两轮确认）
 # ══════════════════════════════════════════════════════════
 
 class TestLowWinRate:
-    """测试胜率低于 40% 时的调优逻辑（需求 5.5, 5.6）。"""
+    """测试胜率低于 38% 时的调优逻辑（需求 5.5, 5.6）。"""
 
     def test_low_win_rate_triggers_adjustment(
         self, state_store, memory_store
     ):
-        """胜率低于 40% 应触发参数调整。"""
-        # 插入 15 笔交易：3 笔盈利，12 笔亏损 → 胜率 20%
-        for i in range(15):
-            pnl = 10.0 if i < 3 else -5.0
+        """胜率低于 38% 且连续两轮确认后应触发参数调整。"""
+        # 插入 20 笔交易：4 笔盈利，16 笔亏损 → 胜率 20%
+        for i in range(20):
+            pnl = 10.0 if i < 4 else -5.0
             memory_store.record_trade(_make_trade_record(pnl_amount=pnl))
+
+        # 先写入一条上轮同向反思日志（模拟连续确认）
+        from src.models.types import ReflectionLog
+        from datetime import datetime, timezone
+        memory_store.save_reflection(ReflectionLog(
+            created_at=datetime.now(timezone.utc),
+            win_rate=25.0,
+            avg_pnl_ratio=-1.0,
+            suggested_rating_threshold=6,
+            suggested_risk_ratio=0.02,
+            reasoning="上轮低胜率",
+            strategy_tag="unknown",
+        ))
 
         skill = _make_skill(state_store, memory_store)
         result = skill.run({})
 
         assert result["evolution"]["adjustment_applied"] is True
-        assert result["evolution"]["trade_count"] == 15
+        assert result["evolution"]["trade_count"] == 20
         assert result["evolution"]["win_rate"] == 20.0
 
     def test_adjustment_saves_reflection(
         self, state_store, memory_store
     ):
         """调优时应保存反思日志到 Memory_Store。"""
-        for i in range(15):
-            pnl = 10.0 if i < 3 else -5.0
+        for i in range(20):
+            pnl = 10.0 if i < 4 else -5.0
             memory_store.record_trade(_make_trade_record(pnl_amount=pnl))
+
+        # 写入上轮同向反思日志
+        from src.models.types import ReflectionLog
+        from datetime import datetime, timezone
+        memory_store.save_reflection(ReflectionLog(
+            created_at=datetime.now(timezone.utc),
+            win_rate=25.0,
+            avg_pnl_ratio=-1.0,
+            suggested_rating_threshold=6,
+            suggested_risk_ratio=0.02,
+            reasoning="上轮低胜率",
+            strategy_tag="unknown",
+        ))
 
         skill = _make_skill(state_store, memory_store)
         skill.run({})
@@ -354,18 +380,18 @@ class TestNormalWinRate:
     def test_normal_win_rate_no_adjustment(
         self, state_store, memory_store
     ):
-        """胜率 >= 40% 时不应触发参数调整。"""
-        # 插入 10 笔交易：6 笔盈利，4 笔亏损 → 胜率 60%
-        for i in range(10):
-            pnl = 10.0 if i < 6 else -5.0
+        """胜率在 38%-62% 死区内时不应触发参数调整。"""
+        # 插入 20 笔交易：10 笔盈利，10 笔亏损 → 胜率 50%
+        for i in range(20):
+            pnl = 10.0 if i < 10 else -5.0
             memory_store.record_trade(_make_trade_record(pnl_amount=pnl))
 
         skill = _make_skill(state_store, memory_store)
         result = skill.run({})
 
         assert result["evolution"]["adjustment_applied"] is False
-        assert result["evolution"]["trade_count"] == 10
-        assert result["evolution"]["win_rate"] == 60.0
+        assert result["evolution"]["trade_count"] == 20
+        assert result["evolution"]["win_rate"] == 50.0
 
 
 # ══════════════════════════════════════════════════════════

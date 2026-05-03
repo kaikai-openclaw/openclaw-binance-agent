@@ -379,10 +379,123 @@ def _safe_int(val) -> Optional[int]:
         return None
 
 
+def _preload_indices(cache: KlineCache, start_date: str, end_date: str, adjust: str) -> None:
+    """预加载 A 股主要指数 K 线。
+
+    复用个股三源接口（腾讯→新浪→东方财富），_symbol_exchange 已为指数配置正确前缀。
+    缓存 key 格式：idx_{code}（与个股区分，避免 000001 平安银行 vs 上证综指混淆）
+    """
+    try:
+        import akshare as ak
+    except ImportError:
+        print("❌ akshare 未安装: pip install akshare")
+        return
+
+    # 主要指数：(纯代码, 腾讯/新浪前缀代码, 名称)
+    indices = [
+        ("000001", "sh000001", "上证综指"),
+        ("000300", "sh000300", "沪深300"),
+        ("000016", "sh000016", "上证50"),
+        ("000905", "sh000905", "中证500"),
+        ("399001", "sz399001", "深证成指"),
+        ("399006", "sz399006", "创业板指"),
+    ]
+
+    print(f"\n📡 预加载 A 股指数（{len(indices)} 个）")
+    print(f"   范围: {start_date} ~ {end_date}")
+    print(f"   数据源: 腾讯 → 新浪 → 东方财富（与个股相同接口）")
+    print("-" * 50)
+
+    for code, tx_code, name in indices:
+        cache_key = f"idx_{code}"
+        rows = None
+
+        # ── 优先：腾讯日线（stock_zh_a_hist_tx，纯HTTP，最稳定）──
+        try:
+            df = ak.stock_zh_a_hist_tx(
+                symbol=tx_code,
+                start_date=start_date,
+                end_date=end_date,
+                adjust=adjust if adjust != "none" else "",
+            )
+            if df is not None and not df.empty:
+                rows = _parse_kline_df(df, start_date, end_date, has_amount=False)
+        except Exception as e:
+            print(f"  ⚠️  {code} {name} 腾讯源失败: {type(e).__name__}")
+
+        # ── 备用：新浪日线（stock_zh_a_daily）──
+        if not rows:
+            try:
+                df = ak.stock_zh_a_daily(
+                    symbol=tx_code,
+                    adjust=adjust if adjust != "none" else "",
+                )
+                if df is not None and not df.empty:
+                    rows = _parse_kline_df(df, start_date, end_date, has_amount=True)
+            except Exception as e:
+                print(f"  ⚠️  {code} {name} 新浪源失败: {type(e).__name__}")
+
+        # ── 备用：东方财富日线（stock_zh_a_hist）──
+        if not rows:
+            try:
+                df = ak.stock_zh_a_hist(
+                    symbol=code, period="daily",
+                    start_date=start_date.replace("-", ""),
+                    end_date=end_date.replace("-", ""),
+                    adjust=adjust if adjust != "none" else "",
+                )
+                if df is not None and not df.empty:
+                    col_map = {"日期": "date", "开盘": "open", "收盘": "close",
+                               "最高": "high", "最低": "low", "成交量": "volume",
+                               "成交额": "amount"}
+                    df = df.rename(columns=col_map)
+                    rows = _parse_kline_df(df, start_date, end_date, has_amount=True)
+            except Exception as e:
+                print(f"  ⚠️  {code} {name} 东方财富源失败: {type(e).__name__}")
+
+        if rows:
+            n = cache.upsert_batch(cache_key, adjust, rows)
+            print(f"  ✅ {code} {name}: {n} 行 ({rows[0]['date']} ~ {rows[-1]['date']})")
+        else:
+            print(f"  ❌ {code} {name}: 所有数据源均失败")
+
+        time.sleep(0.3)  # 防封控
+
+    print("-" * 50)
+    print("✅ 指数预加载完成\n")
+
+
+def _parse_kline_df(df, start_date: str, end_date: str, has_amount: bool) -> list:
+    """解析 K 线 DataFrame → 标准 rows，过滤日期范围。"""
+    rows = []
+    for _, r in df.iterrows():
+        d = r.get("date", "")
+        d = d.strftime("%Y-%m-%d") if hasattr(d, "strftime") else str(d)[:10]
+        if d < start_date or d > end_date:
+            continue
+        close = _safe_float(r.get("close"))
+        if close is None or close <= 0:
+            continue
+        vol = _safe_int(r.get("volume")) or 0
+        amt = (_safe_float(r.get("amount")) or 0.0) if has_amount else 0.0
+        rows.append({
+            "date":   d,
+            "open":   _safe_float(r.get("open"))  or close,
+            "high":   _safe_float(r.get("high"))  or close,
+            "low":    _safe_float(r.get("low"))   or close,
+            "close":  close,
+            "volume": vol,
+            "amount": amt,
+        })
+    return rows
+
+
 def main():
     parser = argparse.ArgumentParser(description="A股历史K线批量预加载")
     parser.add_argument("--symbols", nargs="*", type=str,
                         help="指定股票代码（如 600519 000001）")
+    parser.add_argument("--index", action="store_true",
+                        help="预加载 A 股主要指数（000001/000300/399001/399006），走指数专用接口")
     parser.add_argument("--start", type=str, default=None,
                         help="开始日期 YYYY-MM-DD（默认 2 年前）")
     parser.add_argument("--end", type=str, default=None,
@@ -425,6 +538,12 @@ def main():
 
     if source == "tencent":
         print("📡 数据源: 腾讯日线（纯HTTP，稳定）")
+
+    # 指数预加载（--index 模式，走 akshare index_zh_a_hist 专用接口）
+    if args.index:
+        _preload_indices(cache, start_date, end_date, args.adjust)
+        cache.close()
+        return
 
     # 获取股票列表
     if args.symbols:

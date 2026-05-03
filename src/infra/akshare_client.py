@@ -44,6 +44,19 @@ def _normalize_symbol(symbol: str) -> str:
 
 
 def _symbol_exchange(code: str) -> str:
+    # 主要指数的交易所前缀（优先匹配，避免被通用规则误判）
+    _INDEX_EXCHANGE = {
+        "000001": "SH",  # 上证综指（非平安银行）
+        "000300": "SH",  # 沪深300
+        "000016": "SH",  # 上证50
+        "000905": "SH",  # 中证500
+        "000906": "SH",  # 中证800
+        "399001": "SZ",  # 深证成指
+        "399006": "SZ",  # 创业板指
+        "399300": "SZ",  # 沪深300（深交所版本）
+    }
+    if code in _INDEX_EXCHANGE:
+        return _INDEX_EXCHANGE[code]
     if code.startswith("6"):
         return "SH"
     elif code.startswith(("0", "3")):
@@ -326,8 +339,14 @@ class AkshareClient:
     # K 线：腾讯 → 新浪 → 东方财富
     # ══════════════════════════════════════════════════════
 
+    # A 股主要指数代码集合（用专用指数接口拉取，不走个股接口）
+    _INDEX_CODES = frozenset({"000001", "000300", "000016", "000905",
+                               "399001", "399006", "399300"})
+
     def get_klines(self, symbol: str, period: str = "daily", limit: int = 100) -> List[List]:
         """获取日线 K 线（前复权），带本地缓存 + 时效校验。
+
+        指数代码（000001/000300 等）自动走指数专用接口，不走个股接口。
 
         刷新策略（保证扫描拿到的一定是最新数据）：
           1. 估算当前应有的最新交易日（_expected_latest_trade_date）
@@ -337,32 +356,63 @@ class AkshareClient:
         """
         code = _normalize_symbol(symbol)
         adjust = "qfq"  # 当前固定前复权
+        # 指数用独立缓存 key，避免与同代码个股（如平安银行 000001）混淆
+        cache_key = f"idx_{code}" if code in self._INDEX_CODES else code
 
-        cached = self._cache.query_as_rows(code, adjust, limit)
+        cached = self._cache.query_as_rows(cache_key, adjust, limit)
         expected = _expected_latest_trade_date()
-        # cached 行格式: [date, open, high, low, close, volume]，cached[-1][0] 即最新日期
         fresh = bool(cached) and str(cached[-1][0]) >= expected
 
         if fresh and len(cached) >= limit:
             log.debug("[AkshareClient] K线缓存命中(新鲜): %s, %d行, max=%s",
-                      code, len(cached), cached[-1][0])
+                      cache_key, len(cached), cached[-1][0])
             return cached
 
-        df = self._get_klines_any(code, limit)
+        # 指数走专用接口，个股走原有三源接口
+        if code in self._INDEX_CODES:
+            df = self._get_index_klines(code, limit)
+        else:
+            df = self._get_klines_any(code, limit)
+
         if df is not None and not df.empty:
             rows = self._df_to_rows(df, limit)
             if rows:
-                self._cache.upsert_from_list_rows(code, adjust, rows)
+                self._cache.upsert_from_list_rows(cache_key, adjust, rows)
                 log.info("[AkshareClient] K线缓存更新: %s, %d行 (期望≥%s, 实际max=%s)",
-                         code, len(rows), expected, rows[-1][0])
+                         cache_key, len(rows), expected, rows[-1][0])
             return rows
 
         if cached:
             log.warning("[AkshareClient] K线联网失败，降级返回缓存: %s, %d行 (max=%s, 期望≥%s)",
-                        code, len(cached), cached[-1][0], expected)
+                        cache_key, len(cached), cached[-1][0], expected)
             return cached
 
+        # 指数专属 fallback：idx_ 缓存为空时，尝试旧 key（纯代码）
+        # 场景：preload_klines --index 还未跑过，但旧版本已缓存了同代码的个股数据
+        # 注意：旧 key 下的 000001 是平安银行，不是上证综指，close 量级完全不同
+        # 因此只在 idx_ 完全没有数据时才用，并打 WARNING 提示数据可能不准确
+        if code in self._INDEX_CODES:
+            legacy_cached = self._cache.query_as_rows(code, adjust, limit)
+            if legacy_cached:
+                log.warning(
+                    "[AkshareClient] 指数 %s 无专用缓存(idx_%s)，"
+                    "降级使用旧 key(%s) 数据 %d 行 — "
+                    "注意：该数据可能是同代码个股而非指数，请尽快运行 "
+                    "preload_klines.py --index 初始化指数缓存",
+                    code, code, code, len(legacy_cached),
+                )
+                return legacy_cached
+
         return []
+
+    def _get_index_klines(self, code: str, limit: int):
+        """A 股指数专用 K 线拉取。
+
+        直接复用个股三源接口（腾讯→新浪→东方财富），
+        _symbol_exchange 已为主要指数配置了正确的交易所前缀，
+        所以 sh000001/sh000300/sz399001 等都能正确拼接。
+        """
+        return self._get_klines_any(code, limit)
 
     def _get_klines_any(self, code: str, limit: int):
         """按优先级尝试所有 K 线数据源，返回第一个成功的 DataFrame。"""

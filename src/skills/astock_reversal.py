@@ -62,15 +62,18 @@ DEFAULT_MAX_CANDIDATES = 20
 _EXCLUDE_KEYWORDS = {"ST", "*ST", "退", "B股", "PT"}
 
 # ── 评分权重（满分 100）──────────────────────────────────
-W_VOLUME_SURGE = 20    # 底部放量（核心信号）
-W_PRICE_STABLE = 15    # 价格企稳
-W_MA_TURN = 15         # 均线拐头
-W_MACD_REVERSAL = 12   # MACD 反转信号
-W_DIST_BOTTOM = 10     # 距底部距离
-W_PRIOR_DROP = 8       # 前期跌幅深度
-W_TURNOVER = 8         # 换手率异常
-W_KDJ_CROSS = 7        # KDJ 低位金叉
-W_SHADOW = 5           # 长下影线
+# 权重依据：2021-2026 回测子维度分析（500只股票，115,606个样本点）
+# ✅ 有效：KDJ金叉(+0.54%) MACD反转(+0.19%) 前期跌幅(+0.20%)
+# ❌ 反效果：价格企稳(-0.66%) 距底部距离(-0.37%) 长下影线(-0.14%) 底部放量(-0.09%) 均线拐头(-0.08%)
+W_VOLUME_SURGE = 10    # 底部放量：降权（有信号反而略差，保留作辅助过滤）
+W_PRICE_STABLE = 5     # 价格企稳：大幅降权（回测最差维度 -0.66%）
+W_MA_TURN = 8          # 均线拐头：降权（-0.08% 轻微反效果）
+W_MACD_REVERSAL = 22   # MACD反转：大幅提权（有效 +0.19%，趋势转折核心信号）
+W_DIST_BOTTOM = 5      # 距底部距离：降权（-0.37% 反效果）
+W_PRIOR_DROP = 18      # 前期跌幅：大幅提权（有效 +0.20%，跌得越深反弹空间越大）
+W_TURNOVER = 5         # 换手率：降权（数据未传入实际无效）
+W_KDJ_CROSS = 22       # KDJ金叉：大幅提权（最有效维度 +0.54%）
+W_SHADOW = 5           # 长下影线：降权（-0.14% 轻微反效果）
 
 # ── 参数阈值 ──────────────────────────────────────────────
 VOLUME_SURGE_THRESHOLD = 2.0           # 放量倍数阈值（近 3 日均量 / 前 15 日均量）
@@ -97,6 +100,45 @@ class AStockReversalSkill(BaseSkill):
         self._client = client
 
     def run(self, input_data: dict) -> dict:
+        # ── 大盘环境过滤（前置检查）──
+        skip_regime = input_data.get("skip_market_regime", False)
+        if not skip_regime:
+            try:
+                from src.infra.market_regime import get_regime_filter
+                regime_filter = get_regime_filter(client=self._client)
+                regime = regime_filter.get_current_regime()
+
+                if not regime["allow_reversal"]:
+                    log.warning(
+                        "[%s] 大盘熊市且未企稳，底部反转策略暂停。"
+                        "trend=%s chg5d=%.1f%% reason=%s",
+                        self.name, regime["trend"], regime["chg5d"], regime["reason"],
+                    )
+                    return {
+                        "state_id": str(uuid.uuid4()),
+                        "candidates": [],
+                        "pipeline_run_id": str(uuid.uuid4()),
+                        "filter_summary": {
+                            "total_tickers": 0,
+                            "after_base_filter": 0,
+                            "after_reversal_filter": 0,
+                            "output_count": 0,
+                            "skipped_reason": "market_regime_bear",
+                            "market_trend": regime["trend"],
+                            "market_reason": regime["reason"],
+                        },
+                    }
+
+                # 熊市时提高评分门槛（input_data 未显式指定时才覆盖）
+                if "min_score" not in input_data and regime["trend"] == "bear":
+                    bumped = DEFAULT_MIN_SCORE + 15
+                    log.info("[%s] 大盘偏弱，底部反转门槛提升至 %d（原 %d）",
+                             self.name, bumped, DEFAULT_MIN_SCORE)
+                    input_data = {**input_data, "min_score": bumped}
+
+            except Exception as e:
+                log.warning("[%s] 大盘环境检查失败，降级继续运行: %s", self.name, e)
+
         min_amount = input_data.get("min_amount", DEFAULT_MIN_AMOUNT)
         min_price = input_data.get("min_price", DEFAULT_MIN_PRICE)
         min_klines = input_data.get("min_klines", DEFAULT_MIN_KLINES)
@@ -209,6 +251,53 @@ class AStockReversalSkill(BaseSkill):
 # 九维度反转评分
 # ══════════════════════════════════════════════════════════
 
+def _find_valid_bottom(
+    lows: List[float], closes: List[float], volumes: List[float],
+    lookback: int = 20,
+) -> tuple:
+    """判断近期最低点是否构成有效底部。
+
+    有效底部需满足：
+    1. 在最低点附近（±2%）停留了至少 3 个交易日（时间维度：筑底）
+    2. 底部区域有成交量放大（量能承接，不是无量阴跌）
+
+    Returns:
+        (bottom_price, is_valid, days_at_bottom, vol_confirm)
+        - bottom_price:    近期最低价
+        - is_valid:        是否构成有效底部（停留≥3天）
+        - days_at_bottom:  在底部区域停留的天数
+        - vol_confirm:     底部是否有量能确认（底部均量≥整体均量×1.2）
+    """
+    if len(lows) < lookback:
+        return None, False, 0, False
+
+    window_lows = lows[-lookback:]
+    bottom = min(window_lows)
+    if bottom <= 0:
+        return None, False, 0, False
+
+    # 底部区域：最低点上方 2% 以内
+    bottom_threshold = bottom * 1.02
+
+    # 统计在底部区域停留的天数
+    days_at_bottom = sum(1 for lo in window_lows if lo <= bottom_threshold)
+
+    # 底部区域的成交量 vs 整体均量
+    vol_confirm = False
+    if len(volumes) >= lookback:
+        vol_window = volumes[-lookback:]
+        bottom_indices = [i for i, lo in enumerate(window_lows) if lo <= bottom_threshold]
+        if bottom_indices:
+            bottom_vols = [vol_window[i] for i in bottom_indices]
+            base_avg = sum(vol_window) / len(vol_window)
+            bottom_avg = sum(bottom_vols) / len(bottom_vols)
+            vol_confirm = base_avg > 0 and bottom_avg >= base_avg * 1.2
+
+    is_valid = days_at_bottom >= 3
+
+    return bottom, is_valid, days_at_bottom, vol_confirm
+
+
 def _calc_reversal_score(
     closes: List[float], highs: List[float], lows: List[float],
     opens: List[float], volumes: List[float], turnover: float,
@@ -273,22 +362,44 @@ def _calc_reversal_score(
     if macd_detail:
         signals.append(macd_detail)
 
-    # ── 5. 距底部距离（10 分）──
+    # ── 5. 距底部距离（8 分）──
+    # 改进：底部必须经过有效性验证（筑底时间 + 量能承接），
+    # 且当前价格必须处于从底部向上离开的状态，而非仍在下跌途中。
     dist_bottom_pct = None
     dist_score = 0.0
     if len(lows) >= BOTTOM_LOOKBACK:
-        bottom = min(lows[-BOTTOM_LOOKBACK:])
-        if bottom > 0:
+        bottom, is_valid, days_at_bottom, vol_confirm = _find_valid_bottom(
+            lows, closes, volumes, BOTTOM_LOOKBACK
+        )
+        if bottom and bottom > 0:
             dist_bottom_pct = (last_close - bottom) / bottom * 100
-            # 3%-10% 是理想区间（刚离开底部，还有空间）
-            if DIST_BOTTOM_IDEAL_MIN <= dist_bottom_pct <= DIST_BOTTOM_IDEAL_MAX:
-                dist_score = W_DIST_BOTTOM
-                signals.append(f"距底部{dist_bottom_pct:.1f}%(理想)")
-            elif 0 < dist_bottom_pct < DIST_BOTTOM_IDEAL_MIN:
-                dist_score = W_DIST_BOTTOM * 0.5  # 太近，可能还没企稳
-            elif DIST_BOTTOM_IDEAL_MAX < dist_bottom_pct <= 20:
-                dist_score = W_DIST_BOTTOM * 0.3  # 稍远，但还行
-            # > 20% 说明已经涨了一段，不算底部反转
+            if is_valid:
+                # 必须是从底部向上离开（近 3 日收盘价在上涨）
+                is_rising = (len(closes) >= 3
+                             and closes[-1] > closes[-3]
+                             and last_close > bottom)
+                if is_rising and DIST_BOTTOM_IDEAL_MIN <= dist_bottom_pct <= DIST_BOTTOM_IDEAL_MAX:
+                    base = float(W_DIST_BOTTOM)
+                    if vol_confirm:
+                        base = min(base * 1.2, W_DIST_BOTTOM)   # 底部有量能确认
+                    if days_at_bottom >= 5:
+                        base = min(base * 1.1, W_DIST_BOTTOM)   # 筑底时间越长越可靠
+                    dist_score = base
+                    signals.append(
+                        f"有效底部反弹{dist_bottom_pct:.1f}%"
+                        f"(筑底{days_at_bottom}天{'·量确认' if vol_confirm else ''})"
+                    )
+                elif is_rising and 0 < dist_bottom_pct < DIST_BOTTOM_IDEAL_MIN:
+                    dist_score = W_DIST_BOTTOM * 0.4   # 刚离底，尚未确认
+                elif dist_bottom_pct > DIST_BOTTOM_IDEAL_MAX:
+                    dist_score = 0.0                   # 已涨太多，不算底部反转
+                # is_rising=False 时得 0 分（还在下跌途中）
+            else:
+                # 底部无效（停留时间不足）→ 0 分，但记录信号供参考
+                if dist_bottom_pct is not None and 0 < dist_bottom_pct <= DIST_BOTTOM_IDEAL_MAX:
+                    signals.append(f"底部未确认(仅停留{days_at_bottom}天)")
+        else:
+            bottom = None
 
     # ── 6. 前期跌幅深度（8 分）──
     prior_drop_pct = None

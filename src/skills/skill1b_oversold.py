@@ -75,7 +75,7 @@ _EXCLUDE_KEYWORDS = {"ST", "*ST", "退", "B股", "PT"}
 
 DEFAULT_MIN_AMOUNT = 50_000_000
 DEFAULT_MIN_PRICE = 3.0
-DEFAULT_MIN_OVERSOLD_SCORE = 25
+DEFAULT_MIN_OVERSOLD_SCORE = 35  # 回测验证：≥35 胜率60%+，低于此分段噪音过多
 DEFAULT_MAX_CANDIDATES = 30
 DEFAULT_PREFILTER_CHANGE_PCT = 0.0
 
@@ -198,6 +198,48 @@ class _AStockOversoldBase(BaseSkill):
 
     def _run_scan(self, input_data: dict, mode: str) -> dict:
         """通用扫描流程。mode = 'short' 或 'long'。"""
+        # ── 大盘环境过滤（前置检查，不影响评分逻辑）──
+        skip_regime = input_data.get("skip_market_regime", False)
+        if not skip_regime:
+            try:
+                from src.infra.market_regime import get_regime_filter
+                regime_filter = get_regime_filter(client=self._client)
+                regime = regime_filter.get_current_regime()
+
+                if not regime["allow_oversold"]:
+                    log.warning(
+                        "[%s] 大盘环境不适合超跌反弹，策略暂停。"
+                        "trend=%s chg5d=%.1f%% panic=%s reason=%s",
+                        self.name, regime["trend"], regime["chg5d"],
+                        regime["panic_mode"], regime["reason"],
+                    )
+                    return {
+                        "state_id": str(uuid.uuid4()),
+                        "candidates": [],
+                        "pipeline_run_id": str(uuid.uuid4()),
+                        "filter_summary": {
+                            "total_tickers": 0,
+                            "after_base_filter": 0,
+                            "after_oversold_filter": 0,
+                            "output_count": 0,
+                            "skipped_reason": "market_regime_bear",
+                            "market_trend": regime["trend"],
+                            "market_reason": regime["reason"],
+                        },
+                    }
+
+                # 横盘/熊市时自动提高评分门槛（input_data 未显式指定时才覆盖）
+                if "min_oversold_score" not in input_data:
+                    suggested = regime.get("suggested_oversold_min_score")
+                    if suggested and suggested > DEFAULT_MIN_OVERSOLD_SCORE:
+                        log.info("[%s] 大盘横盘/偏弱，评分门槛提升至 %d（原 %d）",
+                                 self.name, suggested, DEFAULT_MIN_OVERSOLD_SCORE)
+                        input_data = {**input_data, "min_oversold_score": suggested}
+
+            except Exception as e:
+                # 大盘过滤本身出错时不阻断策略，降级继续运行
+                log.warning("[%s] 大盘环境检查失败，降级继续运行: %s", self.name, e)
+
         min_amount = input_data.get("min_amount", DEFAULT_MIN_AMOUNT)
         min_price = input_data.get("min_price", DEFAULT_MIN_PRICE)
         min_score = input_data.get("min_oversold_score", DEFAULT_MIN_OVERSOLD_SCORE)
@@ -321,6 +363,10 @@ class _AStockOversoldBase(BaseSkill):
                     rsi_thresh, bias_thresh, consec_thresh,
                     drop_thresh, drop_lookback,
                 )
+                # 回测验证：长期超跌 70 分以上反而表现变差（过拟合极端信号）
+                # 70-85 胜率42% 均收益-11%，截断上限避免误入
+                if result["oversold_score"] > 70:
+                    return None
 
             if result["oversold_score"] < min_score and not is_target_mode:
                 return None

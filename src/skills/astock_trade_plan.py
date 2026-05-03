@@ -218,6 +218,8 @@ def _build_short_term_plan(
     risk_pct = round(abs(sl_pct), 2)
     reward_pct = round(ST_TP1_PCT, 2)
     rr_ratio = round(reward_pct / risk_pct, 2) if risk_pct > 0 else 0
+    
+    gap_risk = _assess_gap_risk(candidate, close, limit_pct)
 
     return {
         "symbol": symbol,
@@ -241,6 +243,7 @@ def _build_short_term_plan(
         "max_hold_days": ST_MAX_HOLD_DAYS,
         "entry_timing": "尾盘低吸或次日开盘限价单",
         "key_signals": candidate.get("signal_details", ""),
+        **gap_risk,
     }
 
 
@@ -302,6 +305,8 @@ def _build_long_term_plan(
     reward_pct = round(LT_TP2_PCT, 2)  # 用第二目标算盈亏比
     rr_ratio = round(reward_pct / risk_pct, 2) if risk_pct > 0 else 0
 
+    gap_risk = _assess_gap_risk(candidate, close, limit_pct)
+
     return {
         "symbol": symbol,
         "name": candidate.get("name", ""),
@@ -325,6 +330,7 @@ def _build_long_term_plan(
         "max_hold_days": LT_MAX_HOLD_DAYS,
         "entry_timing": "分批建仓：首次40%，缩量企稳确认后加仓60%",
         "key_signals": candidate.get("signal_details", ""),
+        **gap_risk,
     }
 
 
@@ -335,9 +341,62 @@ def _get_limit_pct(symbol: str) -> float:
     return LIMIT_PCT_MAIN
 
 
+def _assess_gap_risk(candidate: dict, close: float, limit_pct: float) -> dict:
+    """评估 T+1 跳空风险。
+
+    A 股 T+1 规则下，买入当天无法卖出。若次日跳空低开（尤其是跌停），
+    止损单无法在预设价位成交，实际亏损可能远超止损幅度。
+
+    风险等级：
+      HIGH   — 近期有跌停记录，或信号包含"跌停"关键词
+      MEDIUM — 近期跌幅 > 15%，或 RSI < 20（极端超卖，可能有未知利空）
+      LOW    — 正常超跌，无特殊风险信号
+    """
+    signals = candidate.get("signal_details", "")
+    limit_down_count = candidate.get("limit_down_count", 0)
+    rsi = candidate.get("rsi")
+    drop_pct = candidate.get("drop_pct")
+
+    # 最坏情况：次日直接跌停
+    worst_case_pct = -limit_pct
+    worst_case_price = round(close * (1 + worst_case_pct / 100), 2)
+
+    if limit_down_count and limit_down_count >= 1 or "跌停" in signals:
+        level = "HIGH"
+        note = (f"近期有{limit_down_count}个跌停记录，次日可能再次跌停，"
+                f"T+1 止损无法执行，最坏亏损 {worst_case_pct:.0f}%（¥{worst_case_price:.2f}）")
+    elif (rsi is not None and rsi < 20) or (drop_pct is not None and drop_pct < -20):
+        level = "MEDIUM"
+        note = (f"极端超跌（RSI={rsi:.1f if rsi else 'N/A'}，近期跌幅{drop_pct:.1f if drop_pct else 'N/A'}%），"
+                f"可能存在未披露利空，最坏亏损 {worst_case_pct:.0f}%（¥{worst_case_price:.2f}）")
+    else:
+        level = "LOW"
+        note = f"正常超跌，最坏情况（次日跌停）亏损 {worst_case_pct:.0f}%（¥{worst_case_price:.2f}）"
+
+    return {
+        "gap_risk_level": level,
+        "gap_risk_note": note,
+        "worst_case_price": worst_case_price,
+        "worst_case_pct": worst_case_pct,
+    }
+
+
+
+    """根据股票代码判断涨跌停幅度。"""
+    if symbol.startswith(_GEM_PREFIXES):
+        return LIMIT_PCT_GEM
+    return LIMIT_PCT_MAIN
+
+
 def format_trade_plan(plan: dict) -> str:
     """格式化单个交易计划为人类可读文本。"""
     mode_label = "短期反弹" if plan["mode"] == "short" else "长期蓄能"
+
+    # 风险等级图标
+    risk_icons = {"HIGH": "🔴", "MEDIUM": "🟡", "LOW": "🟢"}
+    risk_level = plan.get("gap_risk_level", "LOW")
+    risk_icon  = risk_icons.get(risk_level, "⚪")
+
     lines = [
         f"{'═' * 60}",
         f"  {plan['symbol']} {plan['name']}  [{mode_label}]  评分:{plan['oversold_score']}",
@@ -356,5 +415,8 @@ def format_trade_plan(plan: dict) -> str:
         f"  盈亏比: {plan['risk_reward_ratio']}:1 | 最大持仓: {plan['max_hold_days']}天",
         f"  入场时机: {plan['entry_timing']}",
         f"  信号: {plan['key_signals']}",
+        f"{'─' * 60}",
+        f"  {risk_icon} T+1跳空风险 [{risk_level}]",
+        f"  {plan.get('gap_risk_note', '')}",
     ]
     return "\n".join(lines)

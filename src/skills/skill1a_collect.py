@@ -96,10 +96,57 @@ class Skill1ACollect(BaseSkill):
         self._client = client
 
     def run(self, input_data: dict) -> dict:
+        # ── 大盘环境过滤（前置检查）──
+        skip_regime = input_data.get("skip_market_regime", False)
+        if not skip_regime:
+            try:
+                from src.infra.market_regime import get_regime_filter
+                regime_filter = get_regime_filter(client=self._client)
+                regime = regime_filter.get_current_regime()
+
+                if not regime["allow_trend"]:
+                    log.warning(
+                        "[%s] 大盘环境不适合趋势选股，策略暂停。"
+                        "trend=%s chg5d=%.1f%% reason=%s",
+                        self.name, regime["trend"], regime["chg5d"], regime["reason"],
+                    )
+                    return {
+                        "state_id": str(uuid.uuid4()),
+                        "candidates": [],
+                        "pipeline_run_id": str(uuid.uuid4()),
+                        "filter_summary": {
+                            "total_tickers": 0,
+                            "after_base_filter": 0,
+                            "after_signal_filter": 0,
+                            "output_count": 0,
+                            "skipped_reason": "market_regime_bear",
+                            "market_trend": regime["trend"],
+                            "market_reason": regime["reason"],
+                        },
+                    }
+
+                # 回测验证：趋势策略在非牛市环境下高分组反而更差（85+胜率37%）
+                # 横盘时大幅提高门槛，只保留最强势的标的
+                if "min_signal_score" not in input_data:
+                    suggested = regime.get("suggested_trend_min_score")
+                    if suggested and suggested > DEFAULT_MIN_SIGNAL_SCORE:
+                        log.info("[%s] 大盘横盘/偏弱，趋势评分门槛提升至 %d（原 %d）",
+                                 self.name, suggested, DEFAULT_MIN_SIGNAL_SCORE)
+                        input_data = {**input_data, "min_signal_score": suggested}
+                    elif regime["trend"] == "sideways":
+                        # 横盘时额外限制：只取评分 40-70 的标的，排除极高分（追高风险）
+                        input_data = {**input_data,
+                                      "min_signal_score": max(input_data.get("min_signal_score", 0), 55),
+                                      "max_signal_score": 75}
+
+            except Exception as e:
+                log.warning("[%s] 大盘环境检查失败，降级继续运行: %s", self.name, e)
+
         min_amount = input_data.get("min_amount", DEFAULT_MIN_AMOUNT)
         min_price = input_data.get("min_price", DEFAULT_MIN_PRICE)
         min_klines = input_data.get("min_klines", DEFAULT_MIN_KLINES)
         min_score = input_data.get("min_signal_score", DEFAULT_MIN_SIGNAL_SCORE)
+        max_score = input_data.get("max_signal_score", 100)   # 回测验证：85+分段表现最差
         max_cands = input_data.get("max_candidates", DEFAULT_MAX_CANDIDATES)
         target_symbols = input_data.get("target_symbols")
 
@@ -142,6 +189,11 @@ class Skill1ACollect(BaseSkill):
                     continue
 
                 if result["total_score"] < min_score and not target_symbols:
+                    continue
+
+                # 回测验证：85+ 分段胜率37%，是最差的区间（追高风险）
+                # 横盘时限制上限为 75，牛市时不限制（max_score 默认 100）
+                if result["total_score"] > max_score and not target_symbols:
                     continue
 
                 returns_map[symbol] = calc_returns(closes)

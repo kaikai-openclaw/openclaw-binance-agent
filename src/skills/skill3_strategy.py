@@ -330,6 +330,7 @@ class Skill3Strategy(BaseSkill):
         confidence = rating.get("confidence", 0.0)
         atr_pct = rating.get("atr_pct")  # Skill-1/Skill-2 透传的 ATR 百分比（可选）
         wick_tip_price = rating.get("wick_tip_price")  # 插针 Skill 透传的影线尖端价（可选）
+        rating_score = rating.get("rating_score", 0)  # 评级分数，用于判断是否临界通过
 
         # hold 信号时使用扫描层的预期方向（LLM 不确定但不反对）
         # 只有反方向才在 Skill2 被降级为 0 分拦截
@@ -404,6 +405,24 @@ class Skill3Strategy(BaseSkill):
         # 转换为头寸规模百分比
         position_value = position_size * entry_price
         position_size_pct = (position_value / account.total_balance) * 100
+
+        # ── 高波动/临界评分降仓 ─────────────────────────────────────────────
+        # 高波动：ATR% > 4 时，仓位减半（10x 杠杆下波动过大）
+        if atr_pct is not None and atr_pct > 4.0:
+            position_size_pct *= 0.5
+            position_size = (position_size_pct / 100.0 * account.total_balance) / entry_price
+            position_value = position_size * entry_price
+            log.info(
+                f"[{self.name}] {symbol} ATR%={atr_pct:.2f}>4% 高波动，仓位降至 {position_size_pct:.2f}%"
+            )
+        # 临界评分：评级 6 分刚好及格，仓位减半控制风险
+        elif rating_score == 6:
+            position_size_pct *= 0.5
+            position_size = (position_size_pct / 100.0 * account.total_balance) / entry_price
+            position_value = position_size * entry_price
+            log.info(
+                f"[{self.name}] {symbol} 评级分=6（临界），仓位降至 {position_size_pct:.2f}%"
+            )
 
         # 需求 3.4 & 3.5：风控预校验 — 单笔持仓不超过 max_position_pct
         cap = self._max_position_pct

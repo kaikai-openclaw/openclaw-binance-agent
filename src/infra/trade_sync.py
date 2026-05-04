@@ -41,7 +41,7 @@ class BinanceTradeSyncer:
         client: BinanceFapiClient,
         memory_store: MemoryStore,
         lookback_hours: int = DEFAULT_SYNC_LOOKBACK_HOURS,
-        risk_controller = None,
+        risk_controller: Optional[Any] = None,
     ) -> None:
         self._client = client
         self._memory_store = memory_store

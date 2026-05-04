@@ -312,7 +312,11 @@ try:
         pnl_pct = profit / entry * 100
         ratio = profit / sl_dist
 
-        if ratio < 1.0:
+        # 1h 策略收紧触发比例：浮盈达到 0.5 倍止损距离即触发（其他策略保持 1.0 倍）
+        strategy_tag = sym_state.get('strategy_tag') or _get_strategy_tag_map().get(sym, '')
+        trigger_ratio = 0.5 if strategy_tag.endswith('_1h') else 1.0
+
+        if ratio < trigger_ratio:
             # 未触发，不记录 skipped（避免每5分钟刷屏）
             continue
 

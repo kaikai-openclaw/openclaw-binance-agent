@@ -278,9 +278,9 @@ def run_report(args: argparse.Namespace) -> dict:
             strategy_tag=strategy_tag,
         )
         # 1h 反转信号噪音大，用小仓位 + 宽止损策略
-        # 单笔持仓上限 2%，2 笔最多 4% 总敞口
+        # 单笔持仓上限 8%，2 笔最多 16% 总敞口
         if args.mode == "1h":
-            risk_ratio = min(risk_ratio, 0.01)
+            risk_ratio = min(risk_ratio, 0.08)
         s1_data: dict = {"candidates": [], "filter_summary": {}}
         s2_data: dict = {"ratings": [], "filtered_count": 0, "failed_symbols": []}
         s3_data: dict = {"trade_plans": [], "pipeline_status": "no_opportunity"}
@@ -334,7 +334,7 @@ def run_report(args: argparse.Namespace) -> dict:
                     # 1h 模式：小仓位 + 宽止损，12h 持仓
                     #   止损 1.5× ATR（给 1h 噪音留呼吸空间，0.8× 太紧会被频繁扫掉）
                     #   止盈 3.0× ATR，盈亏比 2:1（胜率提升弥补盈亏比下降）
-                    #   单笔持仓上限 2%（2 笔 × 2% = 4% 总敞口，控制风险）
+                    #   单笔持仓上限 8%（2 笔 × 8% = 16% 总敞口，控制风险）
                     #   移动止损 1.5× ATR 激活（让趋势有空间发展）
                     # 4h 模式：48h 持仓，atr_stop_mult=1.2，ATR ≤ 4.2% 可进场
                     #   盈亏比 3:1（atr_tp_mult=3.6 / atr_stop_mult=1.2）
@@ -346,7 +346,7 @@ def run_report(args: argparse.Namespace) -> dict:
                     trailing_activation_mult_hv=2.0 if args.mode == "1h" else 1.8,
                     high_vol_tp_mult=3.5 if args.mode == "1h" else 4.0,
                     max_trades=2 if args.mode == "1h" else 3,
-                    max_position_pct=2.0 if args.mode == "1h" else 20.0,
+                    max_position_pct=8.0 if args.mode == "1h" else 20.0,
                 )
                 s3_input_id = state_store.save("skill3_input", {"input_state_id": s2_id})
                 s3_id = skill3.execute(s3_input_id)

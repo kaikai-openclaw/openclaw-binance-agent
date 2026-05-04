@@ -347,6 +347,7 @@ def run_report(args: argparse.Namespace) -> dict:
                     high_vol_tp_mult=3.5 if args.mode == "1h" else 4.0,
                     max_trades=2 if args.mode == "1h" else 3,
                     max_position_pct=6.0 if args.mode == "1h" else 20.0,
+                    max_margin_usdt=10.0 if args.mode == "1h" else None,
                 )
                 s3_input_id = state_store.save("skill3_input", {"input_state_id": s2_id})
                 s3_id = skill3.execute(s3_input_id)

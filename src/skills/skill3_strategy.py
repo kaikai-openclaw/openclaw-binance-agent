@@ -127,6 +127,7 @@ class Skill3Strategy(BaseSkill):
         trailing_activation_mult_hv: float = DEFAULT_TRAILING_ACTIVATION_MULT_HV,
         high_vol_tp_mult: float = DEFAULT_HIGH_VOL_TP_MULT,
         max_position_pct: float = 20.0,
+        max_margin_usdt: Optional[float] = None,
     ) -> None:
         """
         初始化 Skill-3。
@@ -161,6 +162,10 @@ class Skill3Strategy(BaseSkill):
                 risk_ratio，无需重启即可感知 Skill-5 的进化结果
             max_position_pct: 单笔持仓占账户资金的上限百分比，默认 20%。
                 1h 等高频策略建议设为 2-5% 以控制总敞口。
+            max_margin_usdt: 单笔保证金绝对金额上限（USDT）。设置后优先于
+                max_position_pct 生效，适合固定每笔风险金额的场景。
+                例如设为 10.0 则每笔保证金不超过 10 USDT（名义价值不超过
+                10 × 杠杆 USDT）。None 表示不限制（默认）。
         """
         super().__init__(state_store, input_schema, output_schema)
         self.name = "skill3_strategy"
@@ -187,6 +192,7 @@ class Skill3Strategy(BaseSkill):
         self._trading_rule_provider = trading_rule_provider
         self._memory_store = memory_store
         self._max_position_pct = max_position_pct
+        self._max_margin_usdt = max_margin_usdt
 
         # 预计算 round-trip 成本占比（每次下单一致，无需每笔重算）
         try:
@@ -408,6 +414,18 @@ class Skill3Strategy(BaseSkill):
             )
             position_size_pct = cap
             position_size = (account.total_balance * cap / 100.0) / entry_price
+
+        # 固定保证金金额上限：max_margin_usdt 优先于 max_position_pct
+        if self._max_margin_usdt is not None and self._max_margin_usdt > 0:
+            margin = position_value / self._leverage
+            if margin > self._max_margin_usdt:
+                log.info(
+                    f"[{self.name}] {symbol} 保证金 {margin:.2f} USDT "
+                    f"超过上限 {self._max_margin_usdt:.2f} USDT，裁剪"
+                )
+                position_size = (self._max_margin_usdt * self._leverage) / entry_price
+                position_value = position_size * entry_price
+                position_size_pct = (position_value / account.total_balance) * 100
 
         normalized_position_size = self._normalize_quantity_for_exchange(
             symbol=symbol,

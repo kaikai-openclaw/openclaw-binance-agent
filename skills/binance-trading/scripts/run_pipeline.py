@@ -168,7 +168,7 @@ def main():
     )
     market_price_provider = make_market_price_provider(public_client)
     trading_rule_provider = LazyBinanceTradingRuleProvider(public_client)
-    trade_syncer = BinanceTradeSyncer(fapi_client, memory_store)
+    trade_syncer = BinanceTradeSyncer(fapi_client, memory_store, risk_controller=risk_controller)
 
     # 从进化记忆读取调优参数
     rating_threshold, risk_ratio = memory_store.get_evolved_params()

@@ -41,10 +41,12 @@ class BinanceTradeSyncer:
         client: BinanceFapiClient,
         memory_store: MemoryStore,
         lookback_hours: int = DEFAULT_SYNC_LOOKBACK_HOURS,
+        risk_controller = None,
     ) -> None:
         self._client = client
         self._memory_store = memory_store
         self._lookback_hours = lookback_hours
+        self._risk_controller = risk_controller  # 可选，用于记录止损冷却期
 
     def sync_closed_trades(
         self,
@@ -88,6 +90,36 @@ class BinanceTradeSyncer:
                         closed_order.order_id,
                         closed_order.realized_pnl,
                     )
+                    # ── 亏损成交：记录止损冷却期，防止立即重新开仓 ──
+                    # 当 realized_pnl < 0 时，说明是止损触发（服务端保护单平仓）。
+                    # 需要记录冷却期，防止下一轮 pipeline 立即重新开仓。
+                    if (
+                        self._risk_controller is not None
+                        and closed_order.realized_pnl < 0
+                    ):
+                        direction = (
+                            "long"
+                            if closed_order.side == "SELL"
+                            else "short"
+                        )
+                        strategy_tag = str(
+                            metadata.get("strategy_tag", "server_close")
+                            or "server_close"
+                        )
+                        if strategy_tag in ("unknown", ""):
+                            strategy_tag = "server_close"
+                        self._risk_controller.record_stop_loss(
+                            closed_order.symbol,
+                            direction,
+                            strategy_tag=strategy_tag,
+                        )
+                        log.warning(
+                            "同步到亏损成交 %s %s pnl=%.8f，已记录冷却期 %.1f 小时",
+                            closed_order.symbol,
+                            direction,
+                            closed_order.realized_pnl,
+                            self._risk_controller.STOP_LOSS_COOLDOWN_HOURS,
+                        )
 
         return synced_count
 

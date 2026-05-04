@@ -354,7 +354,7 @@ def run_report(args: argparse.Namespace) -> dict:
             )
 
             # 同步服务端已平仓交易
-            syncer = BinanceTradeSyncer(fapi_client, memory_store)
+            syncer = BinanceTradeSyncer(fapi_client, memory_store, risk_controller=risk_controller)
             sync_symbols = set(scan_symbols)
             sync_symbols.update(
                 r.get("symbol", "") for r in s4_data.get("execution_results", [])

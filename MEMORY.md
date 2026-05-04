@@ -57,7 +57,7 @@ SkillDataProvider (run)        → SQLite 缓存 → akshare 增量拉取
 - 2026-04-29: 服务端保护单改为 `closePosition=true`，并在每轮执行开始清理无持仓残留 Algo 条件单。
 - 2026-04-29: 新增 `BinanceTradeSyncer`，从 Binance `userTrades.realizedPnl` 同步服务端触发后的真实平仓成交，幂等写入 MemoryStore。
 - 2026-04-29: 新增超跌定时任务固定报告入口 `skills/binance-trading/scripts/run_oversold_cron.py`，稳定输出扫描、评级、持仓、保护单、账户和风险状态。
-- 2026-05-03: 风控扩展为六大约束，新增总敞口上限（总资金 × 4x）和最大同时持仓数（12）。
+- 2026-05-03: 风控扩展为六大约束，新增总敞口上限（总资金 × 4x）和最大同时持仓数（30）。
 - 2026-05-03: Skill-4 新增止损上移（Break-even + 阶梯锁利，3步）和时间衰减止盈（持仓超时后下调止盈，2步）。
 - 2026-05-03: `scripts/manage_positions.py` 支持做空持仓管理，新增进程锁（fcntl.flock）防止 cron 重叠，原子写入状态文件。
 - 2026-05-03: 超买做空策略优化：评分门槛 40→30（回测胜率 63.6%），顶部确认扩展为 4 个信号（MACD 顶背离、RSI 顶背离、KDJ 死叉、量价背离），4h/1d 最大回撤门槛收紧至 15%。

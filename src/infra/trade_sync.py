@@ -184,8 +184,9 @@ class BinanceTradeSyncer:
             position_size_pct=float(metadata.get("position_size_pct", 0.0) or 0.0),
             closed_at=closed_order.closed_at,
             strategy_tag=(
-                lambda t: t if t and t != "unknown" else "crypto_generic"
+                lambda t: t if t and t not in ("unknown", "") else "crypto_generic"
             )(str(metadata.get("strategy_tag", "unknown") or "unknown")),
+            close_reason=str(metadata.get("close_reason", "server_close") or "server_close"),
         )
 
 

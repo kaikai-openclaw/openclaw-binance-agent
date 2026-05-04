@@ -43,7 +43,7 @@ class RiskController:
     DAILY_LOSS_THRESHOLD = 0.05       # 日亏损阈值 5%
     STOP_LOSS_COOLDOWN_HOURS = 24     # 止损后同方向冷却期（小时）
     MAX_TOTAL_EXPOSURE_RATIO = 4.0    # 全账户总持仓名义价值 <= 总资金 × 4x（P0）
-    MAX_OPEN_POSITIONS = 12           # 同时持仓数量上限（P0，全账户总共）
+    MAX_OPEN_POSITIONS = 20           # 同时持仓数量上限（P0，全账户总共）
 
     _CREATE_COOLDOWN_TABLE_SQL = """
         CREATE TABLE IF NOT EXISTS stop_loss_cooldowns (

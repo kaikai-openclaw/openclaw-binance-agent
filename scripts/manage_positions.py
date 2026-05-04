@@ -19,6 +19,7 @@
 import fcntl
 import json
 import os
+import sqlite3
 import sys
 import tempfile
 from datetime import datetime, timezone
@@ -39,10 +40,12 @@ if os.path.exists(env_path):
 from src.infra.binance_fapi import BinanceFapiClient
 from src.infra.rate_limiter import RateLimiter
 from src.infra.exchange_rules import parse_symbol_trading_rule
+from src.infra.state_store import StateStore
 from src.skills.skill4_execute import Skill4Execute
 from src.models.types import TradeDirection
 
 MAX_HOLD_HOURS = 24.0
+_DB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data')
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'manage_positions_state.json')
 LOCK_FILE  = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'manage_positions.lock')
 # 状态文件共享锁：与 partial_tp.py 互斥，防止并发 read-modify-write 竞态
@@ -80,6 +83,36 @@ def save_state(state: dict) -> None:
         json.dump(state, tmp, indent=2)
         tmp_path = tmp.name
     os.replace(tmp_path, STATE_FILE)
+
+
+def _load_strategy_tags_from_state_store() -> dict[str, str]:
+    """
+    从 state_store.db 的 skill4_execute 快照中提取 symbol → strategy_tag 映射。
+
+    遍历所有历史快照（旧到新），后写覆盖前写，确保每个 symbol 保留最近一次开仓的 strategy_tag。
+    """
+    tag_map: dict[str, str] = {}
+    db_path = os.path.join(_DB_DIR, "state_store.db")
+    if not os.path.exists(db_path):
+        return tag_map
+    try:
+        conn = sqlite3.connect(db_path)
+        rows = conn.execute(
+            "SELECT data FROM state_snapshots "
+            "WHERE skill_name = 'skill4_execute' "
+            "ORDER BY created_at ASC",
+        ).fetchall()
+        conn.close()
+        for (raw,) in rows:
+            data = json.loads(raw)
+            for e in data.get("execution_results", []):
+                sym = e.get("symbol", "")
+                tag = e.get("strategy_tag", "") or ""
+                if sym and tag and tag not in ("unknown", "crypto_generic"):
+                    tag_map[sym] = tag
+    except Exception:
+        pass
+    return tag_map
 
 
 # ── 价格规整辅助 ──────────────────────────────────────────
@@ -186,6 +219,7 @@ try:  # 锁保护区：确保任何异常都能释放文件锁
         raise
     try:
         state = load_state()
+        _strategy_tag_map = _load_strategy_tags_from_state_store()
 
         for sym in list(state.keys()):
             if sym not in active_symbols:
@@ -236,6 +270,13 @@ try:  # 锁保护区：确保任何异常都能释放文件锁
                         open_ms = now_ms
                 except (TypeError, ValueError):
                     open_ms = now_ms
+
+            # 确保 strategy_tag 存在：从 state_store.db 的 skill4 历史记录补充
+            if not state.get(sym, {}).get('strategy_tag'):
+                looked_up_tag = _strategy_tag_map.get(sym, '')
+                if looked_up_tag:
+                    state.setdefault(sym, {})['strategy_tag'] = looked_up_tag
+
             elapsed_s = max(0.0, (now_ms - open_ms) / 1000)
             elapsed_h = elapsed_s / 3600
             pnl_pct = (mark - entry) / entry * 100 * (1 if direction == TradeDirection.LONG else -1)
@@ -491,19 +532,21 @@ try:  # 锁保护区：确保任何异常都能释放文件锁
             _state_lock_fh.close()
 
     # ── 输出报告 ──────────────────────────────────────────────
-    lines = [f"## 持仓管理 {now.strftime('%m-%d %H:%M UTC')}"]
-    if sl_results:
-        lines.append("\n**方案二 止损上移**")
-        lines.extend(sl_results)
-    if tp_results:
-        lines.append("\n**方案三 止盈下调**")
-        lines.extend(tp_results)
+    # 只在有实际变动时输出，无变动则静默
     if not sl_results and not tp_results:
-        lines.append("\n无需调整（所有持仓均未触发阈值）")
-    if skipped:
-        lines.append(f"\n_跳过 {len(skipped)} 个持仓:_")
-        lines.extend(f"  - {s}" for s in skipped)
-    print("\n".join(lines))
+        pass  # 无变动，静默退出
+    else:
+        lines = [f"## 持仓管理 {now.strftime('%m-%d %H:%M UTC')}"]
+        if sl_results:
+            lines.append("\n**方案二 止损上移**")
+            lines.extend(sl_results)
+        if tp_results:
+            lines.append("\n**方案三 止盈下调**")
+            lines.extend(tp_results)
+        if skipped:
+            lines.append(f"\n_跳过 {len(skipped)} 个持仓:_")
+            lines.extend(f"  - {s}" for s in skipped)
+        print("\n".join(lines))
 
 finally:
     # 无论正常退出还是异常，都确保释放进程锁

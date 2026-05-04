@@ -19,6 +19,7 @@
 import fcntl
 import json
 import os
+import sqlite3
 import sys
 import tempfile
 from datetime import datetime, timezone
@@ -47,7 +48,51 @@ LOCK_FILE     = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'partia
 # 写状态时需同时持有此锁，防止与 manage_positions.py 并发写入状态文件产生竞态
 SHARED_STATE_LOCK_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'manage_positions_state.lock')
 
+# trading_state.db 路径
+_TRADING_STATE_DB = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'trading_state.db'
+)
+
 _rule_map: dict = {}
+
+# state_store.db 路径（用于 strategy_tag 兜底查询）
+_STATE_STORE_DB = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'state_store.db'
+)
+
+# strategy_tag 查询缓存（延迟加载）
+_strategy_tag_cache: dict[str, str] | None = None
+
+
+def _get_strategy_tag_map() -> dict[str, str]:
+    """
+    从 state_store.db 的 skill4_execute 快照中提取 symbol → strategy_tag 映射。
+    结果缓存，同一次执行内只查一次。
+    """
+    global _strategy_tag_cache
+    if _strategy_tag_cache is not None:
+        return _strategy_tag_cache
+    _strategy_tag_cache = {}
+    if not os.path.exists(_STATE_STORE_DB):
+        return _strategy_tag_cache
+    try:
+        conn = sqlite3.connect(_STATE_STORE_DB)
+        rows = conn.execute(
+            "SELECT data FROM state_snapshots "
+            "WHERE skill_name = 'skill4_execute' "
+            "ORDER BY created_at ASC",
+        ).fetchall()
+        conn.close()
+        for (raw,) in rows:
+            data = json.loads(raw)
+            for e in data.get("execution_results", []):
+                sym = e.get("symbol", "")
+                tag = e.get("strategy_tag", "") or ""
+                if sym and tag and tag not in ("unknown", "crypto_generic"):
+                    _strategy_tag_cache[sym] = tag
+    except Exception:
+        pass
+    return _strategy_tag_cache
 
 
 def _direction_of(position_amt: float) -> TradeDirection:
@@ -78,6 +123,68 @@ def save_state(state: dict) -> None:
         json.dump(state, tmp, indent=2)
         tmp_path = tmp.name
     os.replace(tmp_path, STATE_FILE)
+
+
+def record_partial_tp(
+    symbol: str,
+    direction: str,
+    entry_price: float,
+    exit_price: float,
+    partial_qty: float,
+    strategy_tag: str,
+    open_ms: float,
+    closed_at: str,
+    order_id: str = "",
+) -> None:
+    """将分批止盈写入 trade_records，使用幂等 sync_key 防止与 trade_sync 重复。"""
+    try:
+        pnl = (exit_price - entry_price) * partial_qty if direction == 'LONG' else (entry_price - exit_price) * partial_qty
+        hold_hours = max(0.0, (datetime.now(timezone.utc).timestamp() * 1000 - open_ms) / 3600000) if open_ms else 0.0
+
+        conn = sqlite3.connect(_TRADING_STATE_DB)
+        # 整个写入在同一事务内：sync_key + trade_record 要么都成功，要么都回滚
+        with conn:
+            # 使用 trade_sync_keys 做幂等保护，防止 _sync_server_closed_trades 重复记录
+            if order_id:
+                closed_at_ms = int(datetime.fromisoformat(closed_at).timestamp() * 1000)
+                # 写入自身的幂等 key
+                partial_key = f"partial_tp:{symbol}:{order_id}:{closed_at_ms}"
+                cursor = conn.execute(
+                    "INSERT OR IGNORE INTO trade_sync_keys (sync_key, trade_record_id, created_at) VALUES (?, ?, ?)",
+                    (partial_key, None, closed_at),
+                )
+                if cursor.rowcount == 0:
+                    conn.close()
+                    return  # 已记录过，跳过
+                # 同时写入 trade_sync 格式的 key，阻止 BinanceTradeSyncer 重复同步
+                binance_key = f"binance_user_order:{symbol}:{order_id}:{closed_at_ms}"
+                conn.execute(
+                    "INSERT OR IGNORE INTO trade_sync_keys (sync_key, trade_record_id, created_at) VALUES (?, ?, ?)",
+                    (binance_key, None, closed_at),
+                )
+
+            conn.execute(
+                "INSERT INTO trade_records "
+                "(symbol, direction, entry_price, exit_price, pnl_amount, "
+                "hold_duration_hours, rating_score, position_size_pct, closed_at, strategy_tag, close_reason) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    symbol,
+                    direction.lower(),
+                    entry_price,
+                    exit_price,
+                    round(pnl, 6),
+                    round(hold_hours, 4),
+                    0,
+                    0.0,
+                    closed_at,
+                    strategy_tag or 'unknown',
+                    'partial_tp',
+                ),
+            )
+        conn.close()
+    except Exception as exc:
+        print(f"⚠️ {symbol} 分批止盈写入数据库失败（不影响交易）: {exc}")
 
 
 # ── 初始化 ────────────────────────────────────────────────
@@ -244,6 +351,9 @@ try:
             'pnl_pct': pnl_pct,
             'ratio': ratio,
             'direction_str': current_direction_str,
+            'entry': entry,
+            'open_ms': sym_state.get('open_ms', 0.0),
+            'strategy_tag': sym_state.get('strategy_tag') or _get_strategy_tag_map().get(sym, 'unknown'),
         })
 
     # ── 执行分批止盈 ──────────────────────────────────────────
@@ -287,17 +397,39 @@ try:
                 results.append(f"ℹ️ **{sym}**({a['dir_label']}) 分批止盈已由其他进程执行，跳过")
                 continue
             try:
-                client.place_market_order(
+                order_result = client.place_market_order(
                     symbol=sym,
                     side=a['close_side'],
                     quantity=a['partial_qty'],
                 )
+                closed_at = datetime.now(timezone.utc).isoformat()
                 # 写入 partial_tp_done，与 manage_positions.py 共享状态
                 state[sym] = {
                     **state.get(sym, {}),
                     'partial_tp_done': True,
                     'direction': a['direction_str'],
                 }
+                # 获取实际成交均价，回退到 mark price，最终回退到 entry
+                exit_price = order_result.price if order_result.price > 0 else 0.0
+                if exit_price <= 0:
+                    pos_match = next((p for p in positions if p.symbol == sym), None)
+                    if pos_match:
+                        raw = getattr(pos_match, 'raw', {}) or {}
+                        exit_price = float(raw.get('markPrice', 0) or 0)
+                if exit_price <= 0:
+                    exit_price = a['entry']
+                # 写入 trade_records
+                record_partial_tp(
+                    symbol=sym,
+                    direction=a['direction_str'],
+                    entry_price=a['entry'],
+                    exit_price=exit_price,
+                    partial_qty=a['partial_qty'],
+                    strategy_tag=a['strategy_tag'],
+                    open_ms=a['open_ms'],
+                    closed_at=closed_at,
+                    order_id=order_result.order_id,
+                )
                 results.append(
                     f"✅ **{sym}**({a['dir_label']}) 分批止盈(50%): "
                     f"市价平仓 {a['partial_qty']} 手 "

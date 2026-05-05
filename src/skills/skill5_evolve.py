@@ -377,21 +377,40 @@ class Skill5Evolve(BaseSkill):
         返回:
             进化数据字典，包含全局汇总和按策略的独立结果
         """
-        # 获取全局最近交易用于汇总统计
-        recent_trades = self._memory_store.get_recent_trades(limit=50)
+        # ── 按策略独立取交易（修复：各策略分别取最多50笔，避免被其他策略占掉配额）
+        # 先从 trade_records 确定所有有交易的 strategy_tag
+        active_tags: set[str] = set()
+        for t in self._memory_store.get_recent_trades(limit=500):
+            if t.strategy_tag:
+                active_tags.add(t.strategy_tag)
+
+        trades_by_strategy: dict[str, list] = {}
+        for tag in active_tags:
+            trades_by_strategy[tag] = self._memory_store.get_recent_trades_by_strategy(
+                strategy_tag=tag, limit=50
+            )
+
+        # 全局汇总用所有策略的 trade（取每个策略最多50笔的合集）
+        recent_trades: list[TradeRecord] = []
+        for tag_trades in trades_by_strategy.values():
+            recent_trades.extend(tag_trades)
+        # 全局按时间排序去重（TradeRecord 无 id，用 symbol+closed_at 做复合键）
+        seen_keys = set()
+        recent_trades_deduped: list[TradeRecord] = []
+        for t in sorted(recent_trades, key=lambda x: x.closed_at, reverse=True):
+            key = (t.symbol, t.closed_at.isoformat())
+            if key not in seen_keys:
+                seen_keys.add(key)
+                recent_trades_deduped.append(t)
+        recent_trades = recent_trades_deduped
+
         trade_count = len(recent_trades)
         strategy_stats = self._strategy_stats_payload(recent_trades)
-
-        # 按策略分组
-        trades_by_strategy: dict[str, list] = {}
-        for t in recent_trades:
-            tag = t.strategy_tag or "unknown"
-            trades_by_strategy.setdefault(tag, []).append(t)
 
         # 全局不足 20 笔时跳过（与 compute_evolution_adjustment 保持一致）
         if trade_count < 20:
             log.info(
-                f"[{self.name}] 交易记录不足 10 笔 "
+                f"[{self.name}] 交易记录不足 20 笔 "
                 f"({trade_count} 笔)，跳过进化计算"
             )
             return {
@@ -415,7 +434,7 @@ class Skill5Evolve(BaseSkill):
         global_stats = self._memory_store.compute_stats(recent_trades)
         net_win_rate, net_avg_pnl = self._compute_net_stats(recent_trades)
 
-        # 按策略独立进化
+        # 按策略独立进化（每策略最多50笔，与进化阈值的20笔要求对齐）
         per_strategy: dict[str, dict] = {}
         any_adjustment = False
         all_details: list[str] = []

@@ -16,9 +16,10 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
-from typing import Callable, List, Optional
+from typing import Any, Callable, List, Optional
 
 from src.infra.binance_fapi import BinanceFapiClient
+from src.infra.circuit_breaker import CircuitBreaker, CircuitLevel
 from src.infra.exchange_rules import (
     TradingRuleProvider,
     normalize_order_quantity,
@@ -86,7 +87,10 @@ class Skill4Execute(BaseSkill):
         entry_confirm_timeout: float = DEFAULT_ENTRY_CONFIRM_TIMEOUT,
         max_concurrent_trades: int = DEFAULT_MAX_CONCURRENT_TRADES,
         fee_order_type: str = "taker",
-        fee_vip_discount: float = 0.0,        use_market_order: bool = False,
+        fee_vip_discount: float = 0.0,
+        use_market_order: bool = False,
+        circuit_breaker: Optional[CircuitBreaker] = None,
+        public_client: Optional[Any] = None,
     ) -> None:
         """
         初始化 Skill-4。
@@ -112,6 +116,9 @@ class Skill4Execute(BaseSkill):
             fee_vip_discount: Binance VIP 费率折扣系数（0-1）
             use_market_order: 是否使用市价单入场（默认 False 使用限价单）。
                 追势策略（如超买做空）建议开启，避免限价单挂单超时撤单。
+            circuit_breaker: 市场熔断器实例，不传则内部创建
+            public_client: Binance 公开市场数据客户端（用于熔断器获取 BTC K 线），
+                需实现 get_klines 或 get_klines_cached 方法
         """
         super().__init__(state_store, input_schema, output_schema)
         self.name = "skill4_execute"
@@ -127,6 +134,8 @@ class Skill4Execute(BaseSkill):
         self._fee_order_type = fee_order_type
         self._fee_vip_discount = fee_vip_discount
         self._use_market_order = use_market_order
+        self._circuit_breaker = circuit_breaker or CircuitBreaker()
+        self._public_client = public_client
 
     def run(self, input_data: dict) -> dict:
         """
@@ -336,9 +345,13 @@ class Skill4Execute(BaseSkill):
                 strategy_tag=strategy_tag,
             )
 
-        # 需求 4.12：Paper Mode 下不提交真实订单
-        if self._risk_controller.is_paper_mode():
-            log.info(f"[{self.name}] {symbol} Paper Mode，模拟下单")
+        # 需求 4.12：Paper Mode 下不提交真实订单（全局 或 策略级）
+        is_paper = (
+            self._risk_controller.is_paper_mode()
+            or self._risk_controller.is_strategy_paper_mode(strategy_tag)
+        )
+        if is_paper:
+            log.info(f"[{self.name}] {symbol} Paper Mode（global={self._risk_controller.is_paper_mode()} strategy={self._risk_controller.is_strategy_paper_mode(strategy_tag)}），模拟下单")
             return self._make_result(
                 symbol=symbol,
                 direction=direction_str,
@@ -439,6 +452,14 @@ class Skill4Execute(BaseSkill):
                 pre_order_position_amt=pre_order_position_amt,
                 confirm_timeout_override=effective_timeout,
             )
+            # 入场成功时记录策略标签，供后续 _protect_existing_positions 触发止损时
+            # 查找真实 strategy_tag，避免写 existing_position 导致跨策略 cooldown 漏拦
+            if entry_result.get("status") == OrderStatus.OPEN.value:
+                self._risk_controller.record_position_strategy_tag(
+                    symbol=symbol,
+                    direction=direction_str,
+                    strategy_tag=strategy_tag,
+                )
             return self._make_result(
                 symbol=symbol,
                 direction=direction_str,
@@ -618,6 +639,92 @@ class Skill4Execute(BaseSkill):
             current_price = pos_risk.mark_price
             position_amt = abs(pos_risk.position_amt)
 
+            # ── BTC 市场熔断检查 ──────────────────────────────────────
+            # BTC 急跌时分三级保护：收紧止损 → 减仓 → 强平
+            # 使用 public_client（K 线专用）而非 fapi_client（账户操作）
+            kline_client = self._public_client or self._binance_client
+            cb = self._circuit_breaker.check_from_klines(
+                lambda sym, iv, lm: (
+                    kline_client.get_klines_cached(sym, iv, lm)
+                    if hasattr(kline_client, "get_klines_cached")
+                    else kline_client.get_klines(sym, iv, lm)
+                )
+            )
+            if cb.level >= CircuitLevel.TIGHTEN and position_amt > 0:
+                if cb.level >= CircuitLevel.CLOSE_ALL:
+                    log.warning(
+                        f"[{self.name}] 🔴 BTC 4h跌幅 {cb.btc_4h_return_pct:.2f}%，触发熔断强平！"
+                    )
+                    self._cancel_algo_orders_safe(symbol)
+                    # 持久化 Paper Mode，防止下次 cron 继续开新仓
+                    self._risk_controller.enable_paper_mode("btc_circuit_breaker_paper_flag")
+                    close_result = self._close_position(
+                        symbol, close_side, position_amt, "btc_circuit_breaker", start_time
+                    )
+                    # 验仓：确保持仓已关闭；若平仓失败，记录 CRITICAL 并重试一次
+                    if close_result.get("status") != OrderStatus.FILLED.value:
+                        log.critical(
+                            f"[{self.name}] 🔴 {symbol} 熔断强平失败，尝试重试平仓..."
+                        )
+                        close_result = self._close_position(
+                            symbol, close_side, position_amt,
+                            "btc_circuit_breaker_retry", start_time
+                        )
+                        if close_result.get("status") != OrderStatus.FILLED.value:
+                            log.critical(
+                                f"[{self.name}] 🔴🔴 {symbol} 重试平仓仍失败，"
+                                f"持仓可能仍在！手动介入！status={close_result.get('status')}"
+                            )
+                    return close_result
+                if cb.level >= CircuitLevel.REDUCE:
+                    reduce_qty = position_amt * cb.reduce_ratio
+                    normed_reduce = normalize_order_quantity(
+                        symbol=symbol, quantity=reduce_qty, price=current_price,
+                        rule=self._trading_rule_provider() if self._trading_rule_provider else None,
+                    )
+                    if normed_reduce and normed_reduce > 0:
+                        log.warning(
+                            f"[{self.name}] 🟡 BTC 4h跌幅 {cb.btc_4h_return_pct:.2f}%，"
+                            f"熔断减仓 {normed_reduce} ({cb.reduce_ratio*100:.0f}%)！"
+                        )
+                        self._close_position(symbol, close_side, normed_reduce, "btc_circuit_reduce", start_time)
+                        # 重新查询持仓量
+                        updated_pos = self._binance_client.get_position_risk(symbol)
+                        position_amt = abs(updated_pos.position_amt)
+                        if position_amt <= 0:
+                            return self._make_monitor_result(
+                                status=OrderStatus.FILLED.value,
+                                close_price=current_price, fee=0.0,
+                                reason=f"btc_circuit_reduce_{cb.level.name}",
+                                start_time=start_time,
+                            )
+                # 收紧止损
+                new_sl = stop_loss_price
+                if direction == TradeDirection.LONG:
+                    new_sl = stop_loss_price * (1 - cb.tighten_ratio)
+                else:
+                    new_sl = stop_loss_price * (1 + cb.tighten_ratio)
+                log.warning(
+                    f"[{self.name}] 🟡 BTC 4h跌幅 {cb.btc_4h_return_pct:.2f}%，"
+                    f"收紧止损 {stop_loss_price:.6f} → {new_sl:.6f} ({cb.tighten_ratio*100:.0f}%)"
+                )
+                stop_loss_price = new_sl
+
+                # 如果服务端保护单已挂，必须更新到最新价格+数量
+                # 否则收紧的止损价格对已有服务端单无效
+                # 注意：server_sl_tp_placed 是 run() 方法内的局部变量，每次轮询循环重置
+                # 因此用 position_opened（同样在 run() 内但持久于 while 循环内）判断
+                if position_opened and position_amt > 0:
+                    self._cancel_algo_orders_safe(symbol)
+                    self._place_server_sl_tp(
+                        symbol=symbol,
+                        close_side=close_side,
+                        quantity=position_amt,
+                        stop_loss_price=stop_loss_price,
+                        take_profit_price=take_profit_price,
+                        trailing_stop=trailing_stop or {},
+                    )
+
             # 入场成交检测：首次观测到持仓后挂服务端止损/止盈单
             if position_amt > 0 and not position_opened:
                 position_opened = True
@@ -723,8 +830,10 @@ class Skill4Execute(BaseSkill):
             elapsed = time.monotonic() - start_time
 
             # ── 方案二：止损上移（Break-even + 阶梯锁利）──────────────────
-            # 仅在持仓已开、止损距离有效、服务端保护单已挂时执行
-            if position_opened and sl_dist > 0 and server_sl_tp_placed:
+            # 仅在持仓已开、止损距离有效时执行
+            # server_sl_tp_placed 在首次入场时由入场检测块设置，之后每次轮询重置为 False
+            # 因此用 position_opened 代替 server_sl_tp_placed 判断（持久于整个 while 循环）
+            if position_opened and sl_dist > 0:
                 new_sl, new_sl_step = self._calc_breakeven_sl(
                     direction=direction,
                     entry_price=entry_price,
@@ -753,9 +862,10 @@ class Skill4Execute(BaseSkill):
                         stop_loss_price = new_sl  # 同步本地止损检查价
 
             # ── 方案三：时间衰减止盈 ──────────────────────────────────────
-            # 持仓时间超过一定比例时，下调止盈目标，避免长时间悬挂消耗资金费率
+            # 持仓时间超过一定比例时，下调止盈目标
             # 只在止损未上移（仍在亏损区）时才做时间衰减，已保本后不需要催促止盈
-            if position_opened and server_sl_tp_placed and sl_step == 0:
+            # position_opened 持久于 while 循环，无需依赖 server_sl_tp_placed
+            if position_opened and sl_step == 0:
                 new_tp, new_tp_step = self._calc_time_decay_tp(
                     direction=direction,
                     entry_price=entry_price,
@@ -1279,8 +1389,8 @@ class Skill4Execute(BaseSkill):
         计算时间衰减后的止盈目标价和新阶段编号。
 
         衰减规则：
-          step 0→1：持仓时间 ≥ max_hold × 50% → 止盈目标向入场价方向收缩 20%
-          step 1→2：持仓时间 ≥ max_hold × 75% → 止盈目标向入场价方向收缩 40%
+          step 0→1：持仓时间 ≥ max_hold × 75% → 止盈目标向入场价方向收缩 40%
+          (已取消50%门槛的衰减，1h等短周期策略不再提前收缩止盈)
 
         收缩方向：做多时止盈价下移，做空时止盈价上移（向入场价靠近）。
 
@@ -1303,9 +1413,6 @@ class Skill4Execute(BaseSkill):
         if tp_decay_step < 2 and ratio >= 0.75:
             decay = 0.40
             new_step = 2
-        elif tp_decay_step < 1 and ratio >= 0.5:
-            decay = 0.20
-            new_step = 1
         else:
             return None, tp_decay_step
 
@@ -1741,7 +1848,13 @@ class Skill4Execute(BaseSkill):
                     f"[{self.name}] {symbol} 已有持仓触发保护性止损: "
                     f"当前价={current_price}, 止损价={stop_loss_price}"
                 )
-                self._risk_controller.record_stop_loss(symbol, direction.value, strategy_tag="existing_position")
+                # 查找该仓位的真实策略标签，避免跨策略冷却期漏拦
+                real_strategy_tag = self._risk_controller._get_position_strategy_tag(
+                    symbol, direction.value,
+                )
+                self._risk_controller.record_stop_loss(
+                    symbol, direction.value, strategy_tag=real_strategy_tag,
+                )
                 self._cancel_algo_orders_safe(symbol)
                 self._close_position(
                     symbol, close_side, quantity, "existing_stop_loss", time.monotonic()
@@ -2343,4 +2456,11 @@ class Skill4Execute(BaseSkill):
             result["position_size_pct"] = position_size_pct
         if strategy_tag:
             result["strategy_tag"] = strategy_tag
+        # 从 reason 推导 close_reason，供 skill5 写入 trade_records
+        _KNOWN_CLOSE_REASONS = {
+            "stop_loss", "take_profit", "timeout", "partial_tp",
+            "trailing_stop", "external_close",
+            "existing_stop_loss", "existing_take_profit",
+        }
+        result["close_reason"] = reason if reason in _KNOWN_CLOSE_REASONS else "unknown"
         return result

@@ -200,6 +200,7 @@ def mock_risk_controller():
     rc.validate_order.return_value = ValidationResult(passed=True)
     rc.check_daily_loss.return_value = False
     rc.is_paper_mode.return_value = False
+    rc.is_strategy_paper_mode.return_value = False
     return rc
 
 

@@ -466,6 +466,73 @@ class _CryptoOverboughtBase(BaseSkill):
                     weights,
                 )
 
+                # ── 阻力位检测 ──────────────────────────────────────────────
+                # 查找近20根K线的局部高点作为阻力位参考
+                recent_highs = []
+                lookback_resistance = 20
+                for i in range(lookback_resistance, len(highs)):
+                    window = highs[i - lookback_resistance : i]
+                    if window:
+                        max_val = max(window)
+                        max_idx = window.index(max_val)
+                        recent_highs.append(
+                            (max_val, i - lookback_resistance + max_idx)
+                        )
+                # 找到最近的高点
+                resistance_level = None
+                resistance_distance_pct = None
+                if recent_highs:
+                    resistance_level = recent_highs[-1][0]
+                    if resistance_level > 0:
+                        # 价格距离阻力位百分比（当前价在阻力位下方的比例）
+                        resistance_distance_pct = (
+                            (resistance_level - closes[-1]) / resistance_level * 100
+                            if closes[-1] > 0
+                            else None
+                        )
+                # 价格距离阻力位 < 5% 认为在阻力位附近
+                is_near_resistance = (
+                    resistance_distance_pct is not None
+                    and 0 <= resistance_distance_pct <= 5.0
+                )
+
+                # ── FOMO买入检测 ──────────────────────────────────────────
+                # FOMO买入特征：放量 + 快速上涨（单根K线涨幅 > 3%）+ 长上影线
+                fomo_detected = False
+                if len(klines) >= 4:
+                    recent_4h = klines[-4:]
+                    for k in recent_4h:
+                        k_open = float(k[1])
+                        k_close = float(k[4])
+                        k_high = float(k[2])
+                        k_low = float(k[3])
+                        k_change = (
+                            (k_close - k_open) / k_open * 100 if k_open > 0 else 0
+                        )
+                        body = abs(k_close - k_open)
+                        upper_shadow = k_high - max(k_open, k_close)
+                        # FOMO买入：涨幅 > 3%，上影线 > 实体的2倍
+                        if k_change > 3.0 and body > 0 and upper_shadow / body >= 2.0:
+                            fomo_detected = True
+                            break
+
+                # ── 空头踩踏检测 ──────────────────────────────────────────
+                # 特征：价格在阻力位附近盘整，突然放量下跌
+                short_squeeze_detected = False
+                if is_near_resistance and len(volumes) >= 2:
+                    vol_recent = sum(volumes[-3:]) / 3
+                    vol_avg = (
+                        sum(volumes[-10:-3]) / 7 if len(volumes) >= 10 else vol_recent
+                    )
+                    if vol_recent > vol_avg * 2:  # 放量2倍以上
+                        price_drop = (
+                            (closes[-1] - closes[-2]) / closes[-2] * 100
+                            if len(closes) >= 2 and closes[-2] > 0
+                            else 0
+                        )
+                        if price_drop > 2.0:  # 同时价格下跌>2%
+                            short_squeeze_detected = True
+
                 # ── 实时价格组合分析 ──────────────────────────────────────
                 # 在已关闭 K 线形态判断基础上，叠加当前实时价格变动
                 # 判断：4h收盘后价格是否仍在继续上涨（追空风险高）
@@ -612,6 +679,31 @@ class _CryptoOverboughtBase(BaseSkill):
                         result["hour_candles_in_4h"] = 0
                         result["elapsed_ratio"] = 1.0
 
+                # ── 阻力位/FOMO/空头踩踏加分 ──────────────────────────────
+                # 阻力位附近：价格回落概率高，做空信号更强
+                # 但如果在追空过程中（momentum_penalty > 0），加分应谨慎
+                if is_near_resistance and momentum_penalty == 0:
+                    result["overbought_score"] += 5
+                    result["resistance_bonus"] = 5
+                else:
+                    result["resistance_bonus"] = 0
+
+                # FOMO买入检测到：价格可能已到阶段性顶部
+                # FOMO本身是顶部信号，即使在动能追空中也可能有效（追高被套后的卖出压力）
+                if fomo_detected:
+                    result["overbought_score"] += 3
+                    result["fomo_bonus"] = 3
+                else:
+                    result["fomo_bonus"] = 0
+
+                # 空头踩踏确认：最佳做空时机
+                # 已在阻力位附近且放量下跌，是较强的做空信号
+                if short_squeeze_detected:
+                    result["overbought_score"] += 5
+                    result["short_squeeze_bonus"] = 5
+                else:
+                    result["short_squeeze_bonus"] = 0
+
                 if result["overbought_score"] < min_score and not target_symbols:
                     continue
 
@@ -691,6 +783,18 @@ class _CryptoOverboughtBase(BaseSkill):
                         "hour_candles_in_4h": result.get("hour_candles_in_4h", 0),
                         "elapsed_ratio": result.get("elapsed_ratio", 1.0),
                         "closing_period_bonus": result.get("closing_period_bonus", 0),
+                        # ── 阻力位/FOMO/空头踩踏字段 ────────────────────
+                        "resistance_distance_pct": (
+                            round(resistance_distance_pct, 2)
+                            if resistance_distance_pct is not None
+                            else None
+                        ),
+                        "is_near_resistance": is_near_resistance,
+                        "fomo_detected": fomo_detected,
+                        "fomo_bonus": result.get("fomo_bonus", 0),
+                        "short_squeeze_detected": short_squeeze_detected,
+                        "short_squeeze_bonus": result.get("short_squeeze_bonus", 0),
+                        "resistance_bonus": result.get("resistance_bonus", 0),
                         # ── 原有字段 ───────────────────────────────────
                         "rsi": result["rsi"],
                         "bias_20": result["bias_20"],

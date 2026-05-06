@@ -44,7 +44,8 @@ class MemoryStore:
             rating_score    INTEGER NOT NULL,
             position_size_pct REAL NOT NULL,
             closed_at       TEXT NOT NULL,
-            strategy_tag    TEXT NOT NULL DEFAULT 'unknown'
+            strategy_tag    TEXT NOT NULL DEFAULT 'unknown',
+            close_reason    TEXT NOT NULL DEFAULT 'unknown'
         )
     """
 
@@ -108,6 +109,7 @@ class MemoryStore:
         cursor.execute(self._CREATE_TRADE_SYNC_KEYS_TABLE_SQL)
         self._ensure_trade_records_strategy_tag(cursor)
         self._ensure_reflection_logs_strategy_tag(cursor)
+        self._ensure_trade_records_close_reason(cursor)
         self._conn.commit()
 
     @staticmethod
@@ -129,6 +131,13 @@ class MemoryStore:
                 "ADD COLUMN strategy_tag TEXT NOT NULL DEFAULT ''"
             )
 
+    def _ensure_trade_records_close_reason(self, cursor) -> None:
+        if not self._has_column(cursor, "trade_records", "close_reason"):
+            cursor.execute(
+                "ALTER TABLE trade_records "
+                "ADD COLUMN close_reason TEXT NOT NULL DEFAULT 'unknown'"
+            )
+
     def record_trade(self, trade: TradeRecord) -> None:
         """
         存储一笔已平仓交易的核心数据。
@@ -139,8 +148,8 @@ class MemoryStore:
         self._conn.execute(
             "INSERT INTO trade_records "
             "(symbol, direction, entry_price, exit_price, pnl_amount, "
-            "hold_duration_hours, rating_score, position_size_pct, closed_at, strategy_tag) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "hold_duration_hours, rating_score, position_size_pct, closed_at, strategy_tag, close_reason) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 trade.symbol,
                 trade.direction.value,
@@ -152,6 +161,7 @@ class MemoryStore:
                 trade.position_size_pct,
                 trade.closed_at.isoformat(),
                 trade.strategy_tag,
+                trade.close_reason,
             ),
         )
         self._conn.commit()
@@ -180,8 +190,8 @@ class MemoryStore:
             trade_cursor = self._conn.execute(
                 "INSERT INTO trade_records "
                 "(symbol, direction, entry_price, exit_price, pnl_amount, "
-                "hold_duration_hours, rating_score, position_size_pct, closed_at, strategy_tag) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "hold_duration_hours, rating_score, position_size_pct, closed_at, strategy_tag, close_reason) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     trade.symbol,
                     trade.direction.value,
@@ -193,6 +203,7 @@ class MemoryStore:
                     trade.position_size_pct,
                     trade.closed_at.isoformat(),
                     trade.strategy_tag,
+                    trade.close_reason,
                 ),
             )
             self._conn.execute(
@@ -200,6 +211,34 @@ class MemoryStore:
                 (trade_cursor.lastrowid, sync_key),
             )
             return True
+
+    def has_order_synced(self, symbol: str, order_id: str) -> bool:
+        """
+        检查指定币种和订单号是否已有同步记录。
+
+        用于 trade_sync 与 partial_tp.py 之间的去重——两者用不同的
+        sync_key 前缀（binance_user_order vs partial_tp），但 order_id
+        相同时说明是同一笔 Binance 成交，不应重复写入。
+        """
+        cursor = self._conn.execute(
+            "SELECT 1 FROM trade_sync_keys "
+            "WHERE sync_key LIKE ? AND sync_key LIKE ? LIMIT 1",
+            (f"%:{symbol}:%", f"%:{order_id}:%"),
+        )
+        return cursor.fetchone() is not None
+
+    def get_order_sync_keys(self, symbol: str, order_id: str) -> list[str]:
+        """
+        获取指定币种和订单号的所有 sync_key。
+
+        返回所有匹配的 sync_key（可能有多个，部分成交时分 timestamp 不同）。
+        """
+        cursor = self._conn.execute(
+            "SELECT sync_key FROM trade_sync_keys "
+            "WHERE sync_key LIKE ? AND sync_key LIKE ?",
+            (f"%:{symbol}:%", f"%:{order_id}:%"),
+        )
+        return [row[0] for row in cursor.fetchall()]
 
     def get_recent_trades(self, limit: int = 50) -> List[TradeRecord]:
         """
@@ -213,7 +252,8 @@ class MemoryStore:
         """
         cursor = self._conn.execute(
             "SELECT symbol, direction, entry_price, exit_price, pnl_amount, "
-            "hold_duration_hours, rating_score, position_size_pct, closed_at, strategy_tag "
+            "hold_duration_hours, rating_score, position_size_pct, closed_at, strategy_tag, "
+            "COALESCE(close_reason, 'unknown') "
             "FROM trade_records ORDER BY closed_at DESC LIMIT ?",
             (limit,),
         )
@@ -230,9 +270,24 @@ class MemoryStore:
                 position_size_pct=row[7],
                 closed_at=datetime.fromisoformat(row[8]),
                 strategy_tag=row[9],
+                close_reason=row[10],
             )
             for row in rows
         ]
+
+    def get_all_traded_symbols(self) -> List[str]:
+        """
+        返回历史上所有交易过的币种（去重），
+        供 BinanceTradeSyncer 兜底扫收使用，避免遗漏
+        跨 pipeline 运行周期被服务端强平的币种。
+        """
+        try:
+            cursor = self._conn.execute(
+                "SELECT DISTINCT symbol FROM position_strategy_tags"
+            )
+            return [row[0] for row in cursor.fetchall()]
+        except Exception:
+            return []  # 表不存在时返回空列表，不阻断扫收流程
 
     def get_recent_trades_by_strategy(
         self, strategy_tag: str, limit: int = 50
@@ -240,7 +295,8 @@ class MemoryStore:
         """获取指定策略最近 N 笔交易记录，按平仓时间倒序。"""
         cursor = self._conn.execute(
             "SELECT symbol, direction, entry_price, exit_price, pnl_amount, "
-            "hold_duration_hours, rating_score, position_size_pct, closed_at, strategy_tag "
+            "hold_duration_hours, rating_score, position_size_pct, closed_at, strategy_tag, "
+            "COALESCE(close_reason, 'unknown') "
             "FROM trade_records WHERE strategy_tag = ? "
             "ORDER BY closed_at DESC LIMIT ?",
             (strategy_tag, limit),
@@ -258,6 +314,7 @@ class MemoryStore:
                 position_size_pct=row[7],
                 closed_at=datetime.fromisoformat(row[8]),
                 strategy_tag=row[9],
+                close_reason=row[10],
             )
             for row in rows
         ]

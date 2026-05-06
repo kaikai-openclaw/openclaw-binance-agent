@@ -20,6 +20,8 @@ log = logging.getLogger(__name__)
 
 
 DEFAULT_SYNC_LOOKBACK_HOURS = 72
+# 用于兜底扫收时的回溯窗口（7天，捕捉跨多天持仓后被强平的币种）
+SWEEP_LOOKBACK_HOURS = 168
 
 
 @dataclass
@@ -74,7 +76,40 @@ class BinanceTradeSyncer:
 
             for closed_order in self._extract_closed_orders(symbol, trades):
                 metadata = metadata_by_symbol.get(symbol, {})
+                # 若 metadata 为空或 strategy_tag 缺失，用 risk_controller 兜底查询
+                if self._risk_controller is not None and (
+                    not metadata.get("strategy_tag")
+                    or metadata.get("strategy_tag") == "unknown"
+                ):
+                    direction = "long" if closed_order.side == "SELL" else "short"
+                    tag = self._risk_controller._get_position_strategy_tag(
+                        closed_order.symbol, direction
+                    )
+                    if tag and tag != "existing_position":
+                        metadata = {
+                            "strategy_tag": tag,
+                            "rating_score": metadata.get("rating_score", 6),
+                            "position_size_pct": metadata.get("position_size_pct", 0.0),
+                            "hold_duration_hours": metadata.get(
+                                "hold_duration_hours", 0.0
+                            ),
+                            "close_reason": metadata.get(
+                                "close_reason", "server_close"
+                            ),
+                        }
                 record = self._to_trade_record(closed_order, metadata)
+                # ── 去重：检查是否已被 partial_tp.py 或之前的同步写入 ──
+                # partial_tp.py 用 partial_tp 前缀，trade_sync 用 binance_user_order 前缀
+                # 两者 order_id 相同时说明是同一笔 Binance 成交，应跳过
+                if self._memory_store.has_order_synced(
+                    closed_order.symbol, closed_order.order_id
+                ):
+                    log.info(
+                        "跳过 %s order=%s（已同步过）",
+                        closed_order.symbol,
+                        closed_order.order_id,
+                    )
+                    continue
                 # 用 orderId + 成交时间戳（ms）组合作为幂等键，
                 # 防止 Binance 跨时间复用同一 orderId 导致漏记。
                 closed_at_ms = int(closed_order.closed_at.timestamp() * 1000)
@@ -97,11 +132,7 @@ class BinanceTradeSyncer:
                         self._risk_controller is not None
                         and closed_order.realized_pnl < 0
                     ):
-                        direction = (
-                            "long"
-                            if closed_order.side == "SELL"
-                            else "short"
-                        )
+                        direction = "long" if closed_order.side == "SELL" else "short"
                         strategy_tag = str(
                             metadata.get("strategy_tag", "server_close")
                             or "server_close"
@@ -190,9 +221,7 @@ class BinanceTradeSyncer:
         metadata: dict[str, Any],
     ) -> TradeRecord:
         direction = (
-            TradeDirection.LONG
-            if closed_order.side == "SELL"
-            else TradeDirection.SHORT
+            TradeDirection.LONG if closed_order.side == "SELL" else TradeDirection.SHORT
         )
         if direction == TradeDirection.LONG:
             entry_price = (
@@ -215,11 +244,90 @@ class BinanceTradeSyncer:
             rating_score=int(metadata.get("rating_score", 6) or 6),
             position_size_pct=float(metadata.get("position_size_pct", 0.0) or 0.0),
             closed_at=closed_order.closed_at,
-            strategy_tag=(
-                lambda t: t if t and t not in ("unknown", "") else "crypto_generic"
-            )(str(metadata.get("strategy_tag", "unknown") or "unknown")),
-            close_reason=str(metadata.get("close_reason", "server_close") or "server_close"),
+            strategy_tag=metadata.get("strategy_tag", "unknown") or "unknown",
+            close_reason=str(
+                metadata.get("close_reason", "server_close") or "server_close"
+            ),
         )
+
+    def sync_all_candidates(self) -> int:
+        """
+        兜底扫收：主动从 Binance 账户持仓发现所有近期有交易的币种，
+        同步其已实现盈亏成交。不依赖 pipeline 传入的 symbols 列表，
+        能捕捉到跨 pipeline 运行周期被服务端强平的币种（如 DEXEUSDT/COMPUSDT）。
+
+        发现范围：
+        1. 当前账户持仓中的所有币种
+        2. 历史上有过交易但当前已无持仓的币种（从 position_strategy_tags 表读取）
+
+        回溯窗口：SWEEP_LOOKBACK_HOURS（默认7天），确保跨多天持仓后被止损的情况不漏记。
+        """
+        # ── Step 1: 收集候选币种 ──────────────────────────────
+        candidate_symbols: set[str] = set()
+
+        # 1a. 当前持仓（使用 get_positions 返回 List[PositionInfo]）
+        try:
+            positions = self._client.get_positions()
+            for pos in positions:
+                if pos.position_amt != 0 and pos.symbol:
+                    candidate_symbols.add(pos.symbol)
+        except Exception as exc:
+            log.warning(f"[BinanceTradeSyncer] 获取持仓列表失败: {exc}")
+
+        # 1b. 历史交易过但已无持仓的币种（从 MemoryStore 读取）
+        try:
+            historical = self._memory_store.get_all_traded_symbols()
+            candidate_symbols.update(historical)
+        except Exception as exc:
+            log.warning(f"[BinanceTradeSyncer] 读取历史交易币种失败: {exc}")
+
+        if not candidate_symbols:
+            log.info("[BinanceTradeSyncer] 无候选币种，跳过兜底扫收")
+            return 0
+
+        log.info(
+            f"[BinanceTradeSyncer] 兜底扫收候选币种 {len(candidate_symbols)} 个: "
+            f"{sorted(candidate_symbols)}"
+        )
+
+        # ── Step 2: 用更长回溯窗口同步所有候选 ───────────────────
+        # 构建 metadata_by_symbol：用 risk_controller 查 position_strategy_tags 表
+        # 确保服务端平仓时能获取正确的 strategy_tag，避免回退到 crypto_generic
+        metadata_by_symbol: dict[str, dict[str, Any]] = {}
+        if self._risk_controller is not None:
+            for sym in candidate_symbols:
+                tag = self._risk_controller._get_position_strategy_tag(sym, "long")
+                if tag and tag != "existing_position":
+                    metadata_by_symbol[sym] = {
+                        "strategy_tag": tag,
+                        "rating_score": 6,
+                        "position_size_pct": 0.0,
+                        "hold_duration_hours": 0.0,
+                        "close_reason": "server_close",
+                    }
+                else:
+                    tag = self._risk_controller._get_position_strategy_tag(sym, "short")
+                    if tag and tag != "existing_position":
+                        metadata_by_symbol[sym] = {
+                            "strategy_tag": tag,
+                            "rating_score": 6,
+                            "position_size_pct": 0.0,
+                            "hold_duration_hours": 0.0,
+                            "close_reason": "server_close",
+                        }
+
+        original_lookback = self._lookback_hours
+        self._lookback_hours = SWEEP_LOOKBACK_HOURS
+        try:
+            synced = self.sync_closed_trades(
+                symbols=candidate_symbols,
+                metadata_by_symbol=metadata_by_symbol if metadata_by_symbol else None,
+            )
+        finally:
+            self._lookback_hours = original_lookback
+
+        log.info(f"[BinanceTradeSyncer] 兜底扫收完成，新增同步 {synced} 笔")
+        return synced
 
 
 def _to_float(value: Any) -> float:

@@ -714,13 +714,13 @@ class Skill5Evolve(BaseSkill):
 
     def _is_btc_market_stable(self) -> bool:
         """
-        检查 BTC 市场是否稳定（未处于熔断 Level 3 状态）。
+        检查 BTC 市场是否稳定（未处于熔断 Level 3 状态且趋势向上）。
 
-        通过检查 BTCUSDT 最近 6 根 4h K 线（24h）的回报率，
-        如果跌幅超过 8% 则认为市场不稳定，不建议恢复实盘。
+        通过检查 BTCUSDT 最近 6 根 1h K 线（6h）的回报率，
+        以及 EMA 多头排列（ema_fast > ema_slow），综合判断市场稳定性。
 
         Returns:
-            True 如果 BTC 市场稳定（4h 回报率 > -8%），否则 False。
+            True 如果 BTC 市场稳定（1h 回报率 > -8% 且 EMA 多头排列），否则 False。
         """
         if self._public_client is None:
             log.warning(
@@ -730,32 +730,55 @@ class Skill5Evolve(BaseSkill):
             return True
 
         try:
-            klines = self._public_client.get_klines("BTCUSDT", "4h", 6)
-            if not klines or len(klines) < 6:
+            klines = self._public_client.get_klines("BTCUSDT", "1h", 50)
+            if not klines or len(klines) < 50:
                 log.warning(
-                    "[%s] _is_btc_market_stable: BTC K 线不足，跳过检查", self.name
+                    "[%s] _is_btc_market_stable: BTC K 线不足（需要50根），跳过检查",
+                    self.name,
                 )
                 return True
 
-            current_price = float(klines[-1][4])
-            past_price = float(klines[-6][4])
+            closes = [float(k[4]) for k in klines]
+            current_price = closes[-1]
+            past_price = closes[-6]
+
             if past_price <= 0:
                 log.warning(
                     "[%s] _is_btc_market_stable: BTC 过去价格异常，跳过检查", self.name
                 )
                 return True
 
-            btc_4h_return = (current_price - past_price) / past_price
+            btc_1h_return = (current_price - past_price) / past_price
+            ema_fast = self._calc_ema(closes, 5)
+            ema_slow = self._calc_ema(closes, 20)
+            ema_bullish = ema_fast > ema_slow if ema_fast and ema_slow else False
+
             log.debug(
-                "[%s] _is_btc_market_stable: BTC 当前价 %.2f, 24h 前价格 %.2f, 回报率 %.2f%%",
+                "[%s] _is_btc_market_stable: BTC 当前价 %.2f, 6h前价格 %.2f, "
+                "回报率 %.2f%%, EMA(5)=%.2f, EMA(20)=%.2f, 多头排列=%s",
                 self.name,
                 current_price,
                 past_price,
-                btc_4h_return * 100,
+                btc_1h_return * 100,
+                ema_fast,
+                ema_slow,
+                ema_bullish,
             )
-            return btc_4h_return >= -0.08
+
+            price_stable = btc_1h_return >= -0.08
+            return price_stable and ema_bullish
         except Exception as exc:
             log.warning(
                 "[%s] _is_btc_market_stable: 检查失败: %s，跳过检查", self.name, exc
             )
             return True
+
+    def _calc_ema(self, closes: list, period: int) -> Optional[float]:
+        """计算 EMA"""
+        if len(closes) < period:
+            return None
+        multiplier = 2 / (period + 1)
+        ema = sum(closes[:period]) / period
+        for price in closes[period:]:
+            ema = (price - ema) * multiplier + ema
+        return ema

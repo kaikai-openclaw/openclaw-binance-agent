@@ -667,7 +667,7 @@ class Skill4Execute(BaseSkill):
             if cb.level >= CircuitLevel.TIGHTEN and position_amt > 0:
                 if cb.level >= CircuitLevel.CLOSE_ALL:
                     log.warning(
-                        f"[{self.name}] 🔴 BTC 4h跌幅 {cb.btc_4h_return_pct:.2f}%，触发熔断强平！"
+                        f"[{self.name}] 🔴 BTC 1h跌幅 {cb.btc_1h_return_pct:.2f}%，触发熔断强平！"
                     )
                     self._cancel_algo_orders_safe(symbol)
                     close_result = self._close_position(
@@ -723,7 +723,7 @@ class Skill4Execute(BaseSkill):
                     )
                     if normed_reduce and normed_reduce > 0:
                         log.warning(
-                            f"[{self.name}] 🟡 BTC 4h跌幅 {cb.btc_4h_return_pct:.2f}%，"
+                            f"[{self.name}] 🟡 BTC 1h跌幅 {cb.btc_1h_return_pct:.2f}%，"
                             f"熔断减仓 {normed_reduce} ({cb.reduce_ratio * 100:.0f}%)！"
                         )
                         self._close_position(
@@ -751,7 +751,7 @@ class Skill4Execute(BaseSkill):
                 else:
                     new_sl = stop_loss_price * (1 + cb.tighten_ratio)
                 log.warning(
-                    f"[{self.name}] 🟡 BTC 4h跌幅 {cb.btc_4h_return_pct:.2f}%，"
+                    f"[{self.name}] 🟡 BTC 1h跌幅 {cb.btc_1h_return_pct:.2f}%，"
                     f"收紧止损 {stop_loss_price:.6f} → {new_sl:.6f} ({cb.tighten_ratio * 100:.0f}%)"
                 )
                 stop_loss_price = new_sl
@@ -770,6 +770,13 @@ class Skill4Execute(BaseSkill):
                         take_profit_price=take_profit_price,
                         trailing_stop=trailing_stop or {},
                     )
+
+            # 短期快速下跌预警（但未触发熔断）
+            if cb.short_term_drop and cb.level == CircuitLevel.NORMAL:
+                log.warning(
+                    f"[{self.name}] 🟡 BTC 短期快速下跌 {cb.btc_1h_return_pct:.2f}%，"
+                    "但未触发熔断阈值，继续监控"
+                )
 
             # 入场成交检测：首次观测到持仓后挂服务端止损/止盈单
             if position_amt > 0 and not position_opened:

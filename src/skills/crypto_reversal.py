@@ -58,6 +58,7 @@
 import logging
 import math
 import re
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -75,6 +76,7 @@ from src.skills.skill1_collect import (
     CORRELATION_THRESHOLD,
     RSI_PERIOD,
     ATR_PERIOD,
+    ATR_PERIOD_FILTER,
 )
 
 log = logging.getLogger(__name__)
@@ -88,8 +90,8 @@ KDJ_M1 = 3
 KDJ_M2 = 3
 
 # 资金费率阈值
-FUNDING_RATE_EXTREME = -0.001           # -0.1%，极端负值
-FUNDING_RATE_NORMAL = 0.0001            # +0.01%，正常水平
+FUNDING_RATE_EXTREME = -0.001  # -0.1%，极端负值
+FUNDING_RATE_NORMAL = 0.0001  # +0.01%，正常水平
 
 # ══════════════════════════════════════════════════════════
 # 短期反转参数（4h K 线）
@@ -97,29 +99,29 @@ FUNDING_RATE_NORMAL = 0.0001            # +0.01%，正常水平
 
 ST_INTERVAL = "4h"
 ST_MIN_KLINES = 60
-ST_BOTTOM_LOOKBACK = 30                 # 近期最低点回看 30 根 4h = 5 天
-ST_PRICE_STABLE_WINDOW = 6             # 企稳观察窗口 6 根 4h = 1 天
-ST_DROP_LOOKBACK = 42                   # 前期跌幅回看 42 根 4h = 7 天
-ST_VOLUME_SURGE_THRESHOLD = 2.0         # 放量倍数阈值
-ST_VOLUME_SURGE_STRONG = 3.5            # 强放量（币圈波动大，阈值更高）
-ST_DIST_BOTTOM_IDEAL_MIN = 3.0          # 距底部理想距离下限（%）
-ST_DIST_BOTTOM_IDEAL_MAX = 12.0         # 距底部理想距离上限（%，币圈波动大）
-ST_SHADOW_RATIO_THRESHOLD = 2.0         # 下影线长度 / 实体长度 ≥ 2 倍
+ST_BOTTOM_LOOKBACK = 30  # 近期最低点回看 30 根 4h = 5 天
+ST_PRICE_STABLE_WINDOW = 6  # 企稳观察窗口 6 根 4h = 1 天
+ST_DROP_LOOKBACK = 42  # 前期跌幅回看 42 根 4h = 7 天
+ST_VOLUME_SURGE_THRESHOLD = 2.0  # 放量倍数阈值
+ST_VOLUME_SURGE_STRONG = 3.5  # 强放量（币圈波动大，阈值更高）
+ST_DIST_BOTTOM_IDEAL_MIN = 3.0  # 距底部理想距离下限（%）
+ST_DIST_BOTTOM_IDEAL_MAX = 12.0  # 距底部理想距离上限（%，币圈波动大）
+ST_SHADOW_RATIO_THRESHOLD = 2.0  # 下影线长度 / 实体长度 ≥ 2 倍
 
 # 短期评分权重（满分 100）— 回测优化后 v2
 # 回测结论（200币 × 6个月，持有 18 根 4h）：
 #   弱有效：底部放量(+0.24%) 距底部距离(+0.17%) KDJ金叉(+0.21%) 前期跌幅(+0.06%)
 #   反效果：价格企稳(-0.54%) MACD反转(-0.71%) 长下影线(-0.36%) 均线拐头(-0.31%)
 #   无数据：资金费率（实盘有效，保留高权重）
-ST_W_VOLUME_SURGE = 22     # 底部放量（弱有效，升权 18→22，是最可靠的信号）
-ST_W_PRICE_STABLE = 6      # 价格企稳（反效果，降权 15→6，保留少量因为逻辑上合理）
-ST_W_MA_TURN = 5           # 均线拐头（反效果，降权 12→5）
-ST_W_FUNDING = 20          # 资金费率回归（实盘有效，升权 15→20）
-ST_W_MACD_REVERSAL = 3     # MACD 反转（最差维度，降权 8→3）
-ST_W_DIST_BOTTOM = 14      # 距底部距离（弱有效，升权 10→14）
-ST_W_PRIOR_DROP = 12       # 前期跌幅深度（弱有效，升权 7→12）
-ST_W_KDJ_CROSS = 13        # KDJ 低位金叉（弱有效，升权 8→13）
-ST_W_SHADOW = 3            # 长下影线（反效果，降权 7→3）
+ST_W_VOLUME_SURGE = 22  # 底部放量（弱有效，升权 18→22，是最可靠的信号）
+ST_W_PRICE_STABLE = 6  # 价格企稳（反效果，降权 15→6，保留少量因为逻辑上合理）
+ST_W_MA_TURN = 5  # 均线拐头（反效果，降权 12→5）
+ST_W_FUNDING = 20  # 资金费率回归（实盘有效，升权 15→20）
+ST_W_MACD_REVERSAL = 3  # MACD 反转（最差维度，降权 8→3）
+ST_W_DIST_BOTTOM = 14  # 距底部距离（弱有效，升权 10→14）
+ST_W_PRIOR_DROP = 12  # 前期跌幅深度（弱有效，升权 7→12）
+ST_W_KDJ_CROSS = 13  # KDJ 低位金叉（弱有效，升权 8→13）
+ST_W_SHADOW = 3  # 长下影线（反效果，降权 7→3）
 # 总计：22+6+5+20+3+14+12+13+3 = 98（资金费率实盘补足）
 
 # ══════════════════════════════════════════════════════════
@@ -128,14 +130,18 @@ ST_W_SHADOW = 3            # 长下影线（反效果，降权 7→3）
 
 H1_INTERVAL = "1h"
 H1_MIN_KLINES = 80
-H1_BOTTOM_LOOKBACK = 72                 # 近期最低点回看 72 根 1h = 3 天
-H1_PRICE_STABLE_WINDOW = 12            # 企稳观察窗口 12 根 1h = 12 小时（从 8 收紧）
-H1_DROP_LOOKBACK = 120                  # 前期跌幅回看 120 根 1h = 5 天
-H1_VOLUME_SURGE_THRESHOLD = 3.0         # 放量倍数阈值（回测显示 1h 放量是反效果，放宽 4.5→3.0 仅作评分参考）
-H1_VOLUME_SURGE_STRONG = 5.0            # 强放量（从 6.5 放宽到 5.0）
-H1_DIST_BOTTOM_IDEAL_MIN = 1.5          # 距底部理想距离下限（%，从 2.0 放宽，给 1h 波动留空间）
-H1_DIST_BOTTOM_IDEAL_MAX = 6.0          # 距底部理想距离上限（%，从 4.0 放宽，2% 窗口对 1h 太窄）
-H1_SHADOW_RATIO_THRESHOLD = 2.5         # 下影线长度 / 实体长度 ≥ 2.5 倍
+H1_BOTTOM_LOOKBACK = 72  # 近期最低点回看 72 根 1h = 3 天
+H1_PRICE_STABLE_WINDOW = 12  # 企稳观察窗口 12 根 1h = 12 小时（从 8 收紧）
+H1_DROP_LOOKBACK = 120  # 前期跌幅回看 120 根 1h = 5 天
+H1_VOLUME_SURGE_THRESHOLD = (
+    3.0  # 放量倍数阈值（回测显示 1h 放量是反效果，放宽 4.5→3.0 仅作评分参考）
+)
+H1_VOLUME_SURGE_STRONG = 5.0  # 强放量（从 6.5 放宽到 5.0）
+H1_DIST_BOTTOM_IDEAL_MIN = 1.5  # 距底部理想距离下限（%，从 2.0 放宽，给 1h 波动留空间）
+H1_DIST_BOTTOM_IDEAL_MAX = (
+    6.0  # 距底部理想距离上限（%，从 4.0 放宽，2% 窗口对 1h 太窄）
+)
+H1_SHADOW_RATIO_THRESHOLD = 2.5  # 下影线长度 / 实体长度 ≥ 2.5 倍
 
 # 超短期评分权重 — 回测优化后 v2
 # 回测结论（200币 × 6个月，持有 24 根 1h）：
@@ -143,15 +149,15 @@ H1_SHADOW_RATIO_THRESHOLD = 2.5         # 下影线长度 / 实体长度 ≥ 2.5
 #   弱有效：均线拐头(+0.13%) MACD反转(+0.05%) 距底部距离(+0.01%) 前期跌幅(+0.16%) 长下影线(+0.17%)
 #   反效果：底部放量(-1.29%) 价格企稳(-0.06%)
 #   无数据：资金费率（实盘有效，保留）
-H1_W_VOLUME_SURGE = 8      # 底部放量（1h 最差维度 -1.29%，大幅降权 25→8）
-H1_W_PRICE_STABLE = 8      # 价格企稳（反效果，降权 15→8）
-H1_W_MA_TURN = 14          # 均线拐头（弱有效，升权 12→14）
-H1_W_FUNDING = 20          # 资金费率回归（实盘有效，升权 15→20）
-H1_W_MACD_REVERSAL = 8     # MACD 反转（弱有效，升权 3→8）
-H1_W_DIST_BOTTOM = 10      # 距底部距离（弱有效，升权 8→10）
-H1_W_PRIOR_DROP = 12       # 前期跌幅深度（弱有效，升权 10→12）
-H1_W_KDJ_CROSS = 15        # KDJ 低位金叉（唯一有效维度，大幅升权 7→15）
-H1_W_SHADOW = 5            # 长下影线（弱有效，保持）
+H1_W_VOLUME_SURGE = 8  # 底部放量（1h 最差维度 -1.29%，大幅降权 25→8）
+H1_W_PRICE_STABLE = 8  # 价格企稳（反效果，降权 15→8）
+H1_W_MA_TURN = 14  # 均线拐头（弱有效，升权 12→14）
+H1_W_FUNDING = 20  # 资金费率回归（实盘有效，升权 15→20）
+H1_W_MACD_REVERSAL = 8  # MACD 反转（弱有效，升权 3→8）
+H1_W_DIST_BOTTOM = 10  # 距底部距离（弱有效，升权 8→10）
+H1_W_PRIOR_DROP = 12  # 前期跌幅深度（弱有效，升权 10→12）
+H1_W_KDJ_CROSS = 15  # KDJ 低位金叉（唯一有效维度，大幅升权 7→15）
+H1_W_SHADOW = 5  # 长下影线（弱有效，保持）
 # 总计：8+8+14+20+8+10+12+15+5 = 100
 
 # ══════════════════════════════════════════════════════════
@@ -160,34 +166,48 @@ H1_W_SHADOW = 5            # 长下影线（弱有效，保持）
 
 LT_INTERVAL = "1d"
 LT_MIN_KLINES = 60
-LT_BOTTOM_LOOKBACK = 30                 # 近期最低点回看 30 天
-LT_PRICE_STABLE_WINDOW = 5             # 企稳观察窗口 5 天
-LT_DROP_LOOKBACK = 45                   # 前期跌幅回看 45 天
-LT_VOLUME_SURGE_THRESHOLD = 1.8         # 日线放量阈值（比 4h 略低）
-LT_VOLUME_SURGE_STRONG = 3.0            # 日线强放量
-LT_DIST_BOTTOM_IDEAL_MIN = 5.0          # 距底部理想距离下限（%）
-LT_DIST_BOTTOM_IDEAL_MAX = 15.0         # 距底部理想距离上限（%，日线级别更宽）
+LT_BOTTOM_LOOKBACK = 30  # 近期最低点回看 30 天
+LT_PRICE_STABLE_WINDOW = 5  # 企稳观察窗口 5 天
+LT_DROP_LOOKBACK = 45  # 前期跌幅回看 45 天
+LT_VOLUME_SURGE_THRESHOLD = 1.8  # 日线放量阈值（比 4h 略低）
+LT_VOLUME_SURGE_STRONG = 3.0  # 日线强放量
+LT_DIST_BOTTOM_IDEAL_MIN = 5.0  # 距底部理想距离下限（%）
+LT_DIST_BOTTOM_IDEAL_MAX = 15.0  # 距底部理想距离上限（%，日线级别更宽）
 LT_SHADOW_RATIO_THRESHOLD = 2.0
 
 # 长期评分权重（满分 100）
-LT_W_VOLUME_SURGE = 15     # 底部放量
-LT_W_PRICE_STABLE = 12     # 价格企稳
-LT_W_MA_TURN = 15          # 均线拐头（日线级别信号强）
-LT_W_FUNDING = 10          # 资金费率回归（长期看权重降低）
-LT_W_MACD_REVERSAL = 15    # MACD 反转信号（日线级别可靠性高）
-LT_W_DIST_BOTTOM = 10      # 距底部距离
-LT_W_PRIOR_DROP = 8        # 前期跌幅深度
-LT_W_KDJ_CROSS = 8         # KDJ 低位金叉
-LT_W_SHADOW = 7            # 长下影线
+LT_W_VOLUME_SURGE = 15  # 底部放量
+LT_W_PRICE_STABLE = 12  # 价格企稳
+LT_W_MA_TURN = 15  # 均线拐头（日线级别信号强）
+LT_W_FUNDING = 10  # 资金费率回归（长期看权重降低）
+LT_W_MACD_REVERSAL = 15  # MACD 反转信号（日线级别可靠性高）
+LT_W_DIST_BOTTOM = 10  # 距底部距离
+LT_W_PRIOR_DROP = 8  # 前期跌幅深度
+LT_W_KDJ_CROSS = 8  # KDJ 低位金叉
+LT_W_SHADOW = 7  # 长下影线
 
 DEFAULT_MIN_QUOTE_VOLUME = 10_000_000
-DEFAULT_MIN_REVERSAL_SCORE = 60   # 回测优化：55→60（评分≥60 胜率68.8% 均收益+3.75%）
+DEFAULT_MIN_REVERSAL_SCORE = (
+    65  # 收紧：60→65（1h策略57笔亏损，4h策略27笔盈利，问题在信号质量而非数量）
+)
 DEFAULT_MAX_CANDIDATES = 10
+
+# 反转策略黑名单：反复亏损币种（亏损≥2笔 or 合计亏损过大）直接排除，不再反向追
+REVERSAL_BLACKLIST = {
+    "ENJUSDT",  # 2笔合计 -9.0，场均 -12.3，极端亏损
+    "ORCAUSDT",  # 单笔亏损 -16.3，做空超跌均失败，极端风险
+    "SOONUSDT",  # 2笔合计 -3.6，流动性差
+    "CHZUSDT",  # 4h策略4笔合计 -6.95，2赢2输但亏的均值 -7.5 远大于赢的均值 +4.0
+    "TRUMPUSDT",  # MEME/政治币，庄家控盘
+    "PIPPINUSDT",  # 流动性极差，多次重复开仓
+    "LABUBUSDT",  # 强庄MEME币
+}
 
 
 # ══════════════════════════════════════════════════════════
 # 共享基类
 # ══════════════════════════════════════════════════════════
+
 
 class _CryptoReversalBase(BaseSkill):
     """底部反转筛选共享基类。"""
@@ -245,7 +265,10 @@ class _CryptoReversalBase(BaseSkill):
             if sym not in tradable:
                 continue
             base = sym.replace("USDT", "")
-            if base in exclude_bases or not re.match(r'^[A-Z0-9]{2,15}$', base):
+            if base in exclude_bases or not re.match(r"^[A-Z0-9]{2,15}$", base):
+                continue
+            # 黑名单币种直接排除（反复亏损币）
+            if sym in REVERSAL_BLACKLIST:
                 continue
             qv = float(t.get("quoteVolume", 0))
             if qv < min_qv:
@@ -262,7 +285,10 @@ class _CryptoReversalBase(BaseSkill):
             if len(selected) >= max_cands:
                 break
             rets = returns_map.get(item["symbol"], [])
-            if not any(calc_correlation(rets, sr) > CORRELATION_THRESHOLD for sr in selected_returns):
+            if not any(
+                calc_correlation(rets, sr) > CORRELATION_THRESHOLD
+                for sr in selected_returns
+            ):
                 selected.append(item)
                 selected_returns.append(rets)
         return selected
@@ -299,7 +325,7 @@ class _CryptoReversalBase(BaseSkill):
             if len(closes) > lookback and closes[-lookback] > 0
             else 0.0
         )
-        if recent_return_pct <= -8.0:
+        if recent_return_pct <= -5.0:
             return {
                 "status": "blocked",
                 "reason": f"BTC 短期暴跌 {recent_return_pct:.2f}%，反转信号不可靠",
@@ -313,12 +339,19 @@ class _CryptoReversalBase(BaseSkill):
             "recent_return_pct": round(recent_return_pct, 4),
         }
 
-
     def _run_scan(
-        self, input_data: dict, interval: str, min_klines: int,
-        bottom_lookback: int, price_stable_window: int, drop_lookback: int,
-        vol_thresh: float, vol_strong: float,
-        dist_min: float, dist_max: float, shadow_ratio: float,
+        self,
+        input_data: dict,
+        interval: str,
+        min_klines: int,
+        bottom_lookback: int,
+        price_stable_window: int,
+        drop_lookback: int,
+        vol_thresh: float,
+        vol_strong: float,
+        dist_min: float,
+        dist_max: float,
+        shadow_ratio: float,
         weights: dict,
     ) -> dict:
         """通用扫描流程，短期/长期共用。"""
@@ -378,14 +411,161 @@ class _CryptoReversalBase(BaseSkill):
                 volumes = [float(k[5]) for k in klines]
                 fr = funding_map.get(symbol)
 
+                # ── 实时价格组合分析 ──────────────────────────────────────
+                # 在已关闭 K 线形态判断基础上，叠加当前实时价格变动
+                # 判断：形态形成后价格是否已走完（追高风险），或仍在合理区间（机会）
+                last_closed_close = closes[-1]
+                current_price = float(item.get("lastPrice", 0))
+                price_change_since_close_pct = (
+                    (current_price - last_closed_close) / last_closed_close * 100
+                    if current_price > 0 and last_closed_close > 0
+                    else 0.0
+                )
+                # 实时 RSI 估算：用当前价扩展 closes，计算当前超买/超卖状态
+                closes_for_rsi = closes[:-1] + [current_price]
+                current_rsi = (
+                    calc_rsi(closes_for_rsi, RSI_PERIOD) if current_price > 0 else None
+                )
+                # ── 1h 增强：用真实 1h K 线替代推算 ──────────────────────
+                # 1h K 线数量 = 当前 4h 周期内已走完的 1h 蜡烛数（精准定位周期位置）
+                # 同时获取 1h RSI（比 4h RSI 更及时）
+                interval_ms = 4 * 3600 * 1000
+                now_ms = int(time.time() * 1000)
+                current_candle_open = (now_ms // interval_ms) * interval_ms
+                last_closed_open = klines[-1][0]
+                elapsed_ratio = (
+                    min(1.0, (now_ms - last_closed_open) / interval_ms)
+                    if last_closed_open >= current_candle_open
+                    and last_closed_open < now_ms
+                    else 1.0
+                )
+                # 精准进度：用 1h K 线计数
+                try:
+                    klines_1h = self._fetch_klines(
+                        symbol, "1h", 20
+                    )  # 至少需要 14 根算 RSI
+                    if klines_1h:
+                        last_1h_open = klines_1h[-1][0]
+                        # 当前 4h 周期内有多少根 1h K 线已关闭
+                        hour_candles_in_4h = sum(
+                            1
+                            for k in klines_1h
+                            if last_closed_open
+                            <= float(k[0])
+                            < (last_closed_open + interval_ms)
+                        )
+                        elapsed_ratio_precise = min(1.0, hour_candles_in_4h / 4.0)
+                        # 1h RSI：用最后 3 根 1h 关闭 + 当前价估算（比 4h RSI 领先约 1-3h）
+                        closes_1h = [float(k[4]) for k in klines_1h]
+                        rsi_1h_raw = (
+                            calc_rsi(closes_1h[:-1] + [current_price], RSI_PERIOD)
+                            if current_price > 0
+                            else None
+                        )
+                        rsi_1h = rsi_1h_raw
+                        # 1h 成交量强度：当前 4h 周期内均量 vs 历史 4h 均量
+                        vol_1h_recent = [float(k[5]) for k in klines_1h[-4:]]
+                        avg_vol_1h = sum(vol_1h_recent) / len(vol_1h_recent)
+                        vol_4h_hist = sum(volumes[-8:-1]) / 7
+                        vol_intraday_strength = (
+                            avg_vol_1h / vol_4h_hist if vol_4h_hist > 0 else 1.0
+                        )
+                    else:
+                        hour_candles_in_4h = int(elapsed_ratio * 4)
+                        elapsed_ratio_precise = elapsed_ratio
+                        rsi_1h = None
+                        vol_intraday_strength = 1.0
+                except Exception:
+                    hour_candles_in_4h = int(elapsed_ratio * 4)
+                    elapsed_ratio_precise = elapsed_ratio
+                    rsi_1h = None
+                    vol_intraday_strength = 1.0
+                # 用精准进度重新估算盘中成交量
+                avg_hist_volume = (
+                    sum(volumes[-6:-1]) / 5
+                    if len(volumes) >= 6
+                    else sum(volumes[-3:]) / max(1, len(volumes) - 1)
+                )
+                current_volume_estimate = (
+                    volumes[-1] / elapsed_ratio_precise
+                    if elapsed_ratio_precise > 0
+                    else volumes[-1]
+                )
+                volume_so_far_ratio = (
+                    current_volume_estimate / avg_hist_volume
+                    if avg_hist_volume > 0
+                    else 1.0
+                )
+                # ── 动能过滤（改为减分因子，不硬跳过）───
+                # 4h 收盘后价格已大幅上涨 → 形态"走出来"了，追入风险高但不该直接拒绝
+                # 4h 收盘后价格横盘/小回调 → 二次确认机会，更安全，给高分
+                # 用减分代替跳过：保留机会但降低优先级
+                _momentum_chase_thresh = 5.0 if interval == "4h" else 3.0
+                _momentum_drop_thresh = -5.0 if interval == "4h" else -3.0
+                momentum_penalty = 0.0
+                if price_change_since_close_pct > _momentum_chase_thresh:
+                    # 超过阈值越多，扣分越多（最多扣15分）
+                    excess = price_change_since_close_pct - _momentum_chase_thresh
+                    momentum_penalty = min(15.0, excess * 3.0)
+                    log.info(
+                        "[%s] %s 4h 收盘后已涨 %.2f%%，动能追高扣分 %.1f",
+                        self.name,
+                        symbol,
+                        price_change_since_close_pct,
+                        momentum_penalty,
+                    )
+                elif price_change_since_close_pct < _momentum_drop_thresh:
+                    # 收盘后继续大跌 → 底部未稳，扣分（最多扣10分）
+                    deficit = abs(price_change_since_close_pct) - abs(
+                        _momentum_drop_thresh
+                    )
+                    momentum_penalty = min(10.0, deficit * 2.0)
+                    log.info(
+                        "[%s] %s 4h 收盘后继续跌 %.2f%%，底部未稳扣分 %.1f",
+                        self.name,
+                        symbol,
+                        price_change_since_close_pct,
+                        momentum_penalty,
+                    )
+
                 result = calc_reversal_score(
-                    closes, highs, lows, opens, volumes,
+                    closes,
+                    highs,
+                    lows,
+                    opens,
+                    volumes,
                     fr,
-                    bottom_lookback, price_stable_window, drop_lookback,
-                    vol_thresh, vol_strong,
-                    dist_min, dist_max, shadow_ratio,
+                    bottom_lookback,
+                    price_stable_window,
+                    drop_lookback,
+                    vol_thresh,
+                    vol_strong,
+                    dist_min,
+                    dist_max,
+                    shadow_ratio,
                     weights,
                 )
+
+                # ── 动能减分：应用到最终评分 ────────────────────────────────
+                if momentum_penalty > 0:
+                    result["reversal_score"] = max(
+                        1, result["reversal_score"] - momentum_penalty
+                    )
+                    result["momentum_penalty"] = momentum_penalty
+
+                # ── 1h RSI 先行信号加分 ──────────────────────────────────────
+                # 1h RSI 已率先站上 50 轴，但 4h RSI 尚未同步强势
+                # 说明盘中已有资金介入，比 4h 信号领先 1-3h
+                if rsi_1h is not None and current_rsi is not None:
+                    if 50 <= rsi_1h < 60:
+                        result["reversal_score"] += 4
+                        result["rsi_1h_bonus"] = 4
+                    elif 60 <= rsi_1h < 70:
+                        result["reversal_score"] += 5
+                        result["rsi_1h_bonus"] = 5
+                    elif rsi_1h >= 70:
+                        result["reversal_score"] -= 3
+                        result["rsi_1h_bonus"] = -3
 
                 if result["reversal_score"] < min_score and not target_symbols:
                     continue
@@ -393,38 +573,47 @@ class _CryptoReversalBase(BaseSkill):
                 # 1h 模式放量软过滤：回测显示 1h 放量是反效果维度（-1.29%），
                 # 不再作为硬门槛，改为无放量时扣分（评分体系已通过低权重 8 分处理）
                 # 保留日志便于观察
-                if interval == "1h" and result.get("volume_surge_ratio", 0) < vol_thresh:
+                if (
+                    interval == "1h"
+                    and result.get("volume_surge_ratio", 0) < vol_thresh
+                ):
                     log.debug(
                         "[%s] %s 1h 无放量信号 (ratio=%.1f < %.1f)，不再硬性过滤",
-                        self.name, symbol,
-                        result.get("volume_surge_ratio", 0), vol_thresh,
+                        self.name,
+                        symbol,
+                        result.get("volume_surge_ratio", 0),
+                        vol_thresh,
                     )
 
                 # 追高过滤：24h 涨幅过大说明反转行情已走大半，此时做多是追高
-                # 4h 模式阈值 25%（波段级别容忍度更高），1h 模式阈值 15%（更敏感）
+                # 收紧追高阈值：4h 25%→15%，1h 15%→12%（减少追涨被套）
                 _price_change_pct = float(item.get("priceChangePercent", 0))
-                _chase_threshold = 15.0 if interval == "1h" else 20.0
+                _chase_threshold = 12.0 if interval == "1h" else 15.0
                 if _price_change_pct > _chase_threshold and not target_symbols:
                     log.info(
                         "[%s] %s 24h 涨幅 %.2f%% 超过 %.0f%%，跳过（追高风险）",
-                        self.name, symbol, _price_change_pct, _chase_threshold,
+                        self.name,
+                        symbol,
+                        _price_change_pct,
+                        _chase_threshold,
                     )
                     continue
 
-                # 1h 模式底部确认：放宽为 OR 逻辑（三选二）
+                # 1h 模式底部确认：强制执行（三选二），不只是特定条件才触发
                 # 原逻辑要求 dist_bottom 在 2%~4% AND 技术确认，窗口太窄导致几乎无币通过
                 # 新逻辑：以下三个条件满足至少两个即可
                 #   a) 距底部在理想区间（1.5%~6%，已放宽）
                 #   b) KDJ 低位金叉（回测最有效维度 +0.33%）
                 #   c) MACD 底背离或零轴下方金叉
                 # 仍保留最低安全线：dist_bottom 必须 ≥ 1%（防止接刀）
-                if interval == "1h" and not target_symbols:
+                if interval == "1h":
                     dist_bottom_pct = result.get("dist_bottom_pct")
                     # 安全线：反弹不足 1% 说明还在下跌途中，直接跳过
                     if dist_bottom_pct is None or dist_bottom_pct < 1.0:
                         log.info(
                             "[%s] %s 反弹不足 1%%，跳过接刀: dist_bottom=%.2f%%",
-                            self.name, symbol,
+                            self.name,
+                            symbol,
                             dist_bottom_pct if dist_bottom_pct is not None else 0.0,
                         )
                         continue
@@ -435,51 +624,122 @@ class _CryptoReversalBase(BaseSkill):
                     if confirm_count < 2:
                         log.info(
                             "[%s] %s 底部确认不足（%d/3）: dist=%.2f%%(%s) kdj=%s macd=%s",
-                            self.name, symbol, confirm_count,
-                            dist_bottom_pct, cond_dist, cond_kdj, cond_macd,
+                            self.name,
+                            symbol,
+                            confirm_count,
+                            dist_bottom_pct,
+                            cond_dist,
+                            cond_kdj,
+                            cond_macd,
+                        )
+                        continue
+
+                # 4h 模式底部确认：至少满足2个条件（比1h宽松）
+                # 4h 策略已有盈利，但CHZ等币亏损较大，加底部确认减少接刀
+                # 条件：KDJ金叉 OR MACD底背离 OR 距底部在理想区间
+                if interval == "4h" and not target_symbols:
+                    dist_bottom_pct = result.get("dist_bottom_pct")
+                    if (
+                        dist_bottom_pct is None or dist_bottom_pct < 2.0
+                    ):  # 4h安全线略宽：2%
+                        log.info(
+                            "[%s] %s 4h反弹不足2%%，跳过接刀: dist_bottom=%.2f%%",
+                            self.name,
+                            symbol,
+                            dist_bottom_pct if dist_bottom_pct is not None else 0.0,
+                        )
+                        continue
+                    cond_dist_4h = 3.0 <= dist_bottom_pct <= 12.0
+                    cond_kdj_4h = result.get("kdj_score", 0) > 0
+                    cond_macd_4h = result.get("macd_reversal_score", 0) > 0
+                    confirm_count_4h = sum([cond_dist_4h, cond_kdj_4h, cond_macd_4h])
+                    if confirm_count_4h < 2:
+                        log.info(
+                            "[%s] %s 4h底部确认不足（%d/3）: dist=%.2f%% kdj=%s macd=%s",
+                            self.name,
+                            symbol,
+                            confirm_count_4h,
+                            dist_bottom_pct,
+                            cond_kdj_4h,
+                            cond_macd_4h,
                         )
                         continue
 
                 returns_map[symbol] = calc_returns(closes)
                 atr_val = calc_atr(highs, lows, closes, ATR_PERIOD)
+                atr_filter_val = calc_atr(highs, lows, closes, ATR_PERIOD_FILTER)
                 last_close = closes[-1]
-                atr_pct = round(atr_val / last_close * 100, 2) if (atr_val and last_close > 0) else None
+                atr_pct = (
+                    round(atr_val / last_close * 100, 2)
+                    if (atr_val and last_close > 0)
+                    else None
+                )
+                atr_filter_pct = (
+                    round(atr_filter_val / last_close * 100, 2)
+                    if (atr_filter_val and last_close > 0)
+                    else None
+                )
 
-                scored.append({
-                    "symbol": symbol,
-                    "close": last_close,
-                    "quote_volume_24h": item.get("quoteVolume", 0),
-                    "price_change_pct": item.get("priceChangePercent", 0),
-                    "reversal_score": result["reversal_score"],
-                    "volume_surge_score": result["volume_surge_score"],
-                    "volume_surge_ratio": result["volume_surge_ratio"],
-                    "price_stable_score": result["price_stable_score"],
-                    "ma_turn_score": result["ma_turn_score"],
-                    "ma_turn_detail": result["ma_turn_detail"],
-                    "funding_reversal_score": result["funding_reversal_score"],
-                    "funding_rate": result["funding_rate"],
-                    "macd_reversal_score": result["macd_reversal_score"],
-                    "macd_detail": result["macd_detail"],
-                    "dist_bottom_pct": result["dist_bottom_pct"],
-                    "dist_bottom_score": result["dist_bottom_score"],
-                    "prior_drop_pct": result["prior_drop_pct"],
-                    "prior_drop_score": result["prior_drop_score"],
-                    "kdj_score": result["kdj_score"],
-                    "shadow_score": result["shadow_score"],
-                    "signal_details": result["signal_details"],
-                    "atr_pct": atr_pct,
-                    "signal_direction": "long",
-                    "strategy_tag": self.name,
-                    "collected_at": datetime.now(timezone.utc).isoformat(),
-                })
+                scored.append(
+                    {
+                        "symbol": symbol,
+                        "close": last_close,
+                        "current_price": current_price,
+                        "quote_volume_24h": item.get("quoteVolume", 0),
+                        "price_change_pct": item.get("priceChangePercent", 0),
+                        "reversal_score": result["reversal_score"],
+                        # ── 实时价格组合分析字段 ───────────────────────────────
+                        "price_change_since_close_pct": round(
+                            price_change_since_close_pct, 2
+                        ),
+                        "current_rsi": round(current_rsi, 1)
+                        if current_rsi is not None
+                        else None,
+                        "volume_so_far_ratio": round(volume_so_far_ratio, 2),
+                        # ── 1h 增强字段 ──────────────────────────────────────
+                        "rsi_1h": round(rsi_1h, 1) if rsi_1h is not None else None,
+                        "vol_intraday_strength": round(vol_intraday_strength, 2),
+                        "hour_candles_in_4h": hour_candles_in_4h,
+                        "elapsed_ratio_precise": round(elapsed_ratio_precise, 2),
+                        "rsi_1h_bonus": result.get("rsi_1h_bonus"),
+                        "momentum_penalty": result.get("momentum_penalty"),
+                        # ── 形态评分 ─────────────────────────────────────────
+                        "volume_surge_score": result["volume_surge_score"],
+                        "volume_surge_ratio": result["volume_surge_ratio"],
+                        "price_stable_score": result["price_stable_score"],
+                        "ma_turn_score": result["ma_turn_score"],
+                        "ma_turn_detail": result["ma_turn_detail"],
+                        "funding_reversal_score": result["funding_reversal_score"],
+                        "funding_rate": result["funding_rate"],
+                        "macd_reversal_score": result["macd_reversal_score"],
+                        "macd_detail": result["macd_detail"],
+                        "dist_bottom_pct": result["dist_bottom_pct"],
+                        "dist_bottom_score": result["dist_bottom_score"],
+                        "prior_drop_pct": result["prior_drop_pct"],
+                        "prior_drop_score": result["prior_drop_score"],
+                        "kdj_score": result["kdj_score"],
+                        "shadow_score": result["shadow_score"],
+                        "signal_details": result["signal_details"],
+                        "atr_pct": atr_pct,
+                        "atr_filter_pct": atr_filter_pct,
+                        "signal_direction": "long",
+                        "strategy_tag": self.name,
+                        "collected_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                )
             except Exception as exc:
                 log.warning("[%s] %s 分析失败: %s", self.name, symbol, exc)
 
         scored.sort(key=lambda x: x["reversal_score"], reverse=True)
         candidates = self._deduplicate(scored, returns_map, max_cands)
 
-        log.info("[%s] 完成: pool=%d, scored=%d, output=%d",
-                 self.name, len(pool), len(scored), len(candidates))
+        log.info(
+            "[%s] 完成: pool=%d, scored=%d, output=%d",
+            self.name,
+            len(pool),
+            len(scored),
+            len(candidates),
+        )
 
         return {
             "state_id": str(uuid.uuid4()),
@@ -499,6 +759,7 @@ class _CryptoReversalBase(BaseSkill):
 # 短期反转 Skill（4h）
 # ══════════════════════════════════════════════════════════
 
+
 class ShortTermReversalSkill(_CryptoReversalBase):
     """短期底部放量反转筛选（4h K 线）。
 
@@ -508,9 +769,12 @@ class ShortTermReversalSkill(_CryptoReversalBase):
 
     def __init__(self, state_store, input_schema, output_schema, client) -> None:
         super().__init__(state_store, input_schema, output_schema, client)
-        self.name = "crypto_reversal_short"
+        self.name = "crypto_reversal_4h"
 
     def run(self, input_data: dict) -> dict:
+        # 4h 门槛：65（收紧自默认值的 60）
+        if "min_reversal_score" not in input_data:
+            input_data = {**input_data, "min_reversal_score": 65}
         return self._run_scan(
             input_data,
             interval=ST_INTERVAL,
@@ -541,6 +805,7 @@ class ShortTermReversalSkill(_CryptoReversalBase):
 # 超短期反转 Skill（1h）
 # ══════════════════════════════════════════════════════════
 
+
 class HourlyReversalSkill(_CryptoReversalBase):
     """超短期底部放量反转筛选（1h K 线）。
 
@@ -554,6 +819,9 @@ class HourlyReversalSkill(_CryptoReversalBase):
         self.name = "crypto_reversal_1h"
 
     def run(self, input_data: dict) -> dict:
+        # 1h 门槛：70（1h策略57笔亏损-21，4h策略27笔盈利+47，主因是1h信号质量差）
+        if "min_reversal_score" not in input_data:
+            input_data = {**input_data, "min_reversal_score": 70}
         return self._run_scan(
             input_data,
             interval=H1_INTERVAL,
@@ -584,6 +852,7 @@ class HourlyReversalSkill(_CryptoReversalBase):
 # 长期反转 Skill（1d）
 # ══════════════════════════════════════════════════════════
 
+
 class LongTermReversalSkill(_CryptoReversalBase):
     """长期底部放量反转筛选（1d K 线）。
 
@@ -593,7 +862,7 @@ class LongTermReversalSkill(_CryptoReversalBase):
 
     def __init__(self, state_store, input_schema, output_schema, client) -> None:
         super().__init__(state_store, input_schema, output_schema, client)
-        self.name = "crypto_reversal_long"
+        self.name = "crypto_reversal_1d"
 
     def run(self, input_data: dict) -> dict:
         return self._run_scan(
@@ -630,13 +899,22 @@ CryptoReversalSkill = ShortTermReversalSkill
 # 九维度反转评分（纯函数，短期/长期共用）
 # ══════════════════════════════════════════════════════════
 
+
 def calc_reversal_score(
-    closes: List[float], highs: List[float], lows: List[float],
-    opens: List[float], volumes: List[float],
+    closes: List[float],
+    highs: List[float],
+    lows: List[float],
+    opens: List[float],
+    volumes: List[float],
     funding_rate: Optional[float],
-    bottom_lookback: int, price_stable_window: int, drop_lookback: int,
-    vol_thresh: float, vol_strong: float,
-    dist_min: float, dist_max: float, shadow_ratio: float,
+    bottom_lookback: int,
+    price_stable_window: int,
+    drop_lookback: int,
+    vol_thresh: float,
+    vol_strong: float,
+    dist_min: float,
+    dist_max: float,
+    shadow_ratio: float,
     weights: dict,
 ) -> dict:
     """计算底部反转综合评分（满分 100）。"""
@@ -657,7 +935,9 @@ def calc_reversal_score(
                 vol_surge_score = w["volume_surge"]
                 signals.append(f"强放量{vol_surge_ratio:.1f}x")
             elif vol_surge_ratio >= vol_thresh:
-                vol_surge_score = w["volume_surge"] * (vol_surge_ratio - 1.0) / (vol_strong - 1.0)
+                vol_surge_score = (
+                    w["volume_surge"] * (vol_surge_ratio - 1.0) / (vol_strong - 1.0)
+                )
                 signals.append(f"放量{vol_surge_ratio:.1f}x")
 
     # ── 2. 价格企稳 ──
@@ -665,14 +945,22 @@ def calc_reversal_score(
     price_stable_score = 0.0
     if len(closes) >= bottom_lookback + price_stable_window:
         recent_low = min(lows[-price_stable_window:])
-        prior_low = min(lows[-(bottom_lookback + price_stable_window):-price_stable_window])
+        prior_low = min(
+            lows[-(bottom_lookback + price_stable_window) : -price_stable_window]
+        )
         # 近期最低价高于前期最低价 = 不再创新低（允许 1.5% 误差，币圈波动大）
         if recent_low >= prior_low * 0.985:
             price_stable_score += w["price_stable"] * 0.55
             signals.append("不再创新低")
         # 近期振幅收窄
-        recent_range = max(highs[-price_stable_window:]) - min(lows[-price_stable_window:])
-        prior_range = max(highs[-15:-5]) - min(lows[-15:-5]) if len(highs) >= 15 else recent_range * 2
+        recent_range = max(highs[-price_stable_window:]) - min(
+            lows[-price_stable_window:]
+        )
+        prior_range = (
+            max(highs[-15:-5]) - min(lows[-15:-5])
+            if len(highs) >= 15
+            else recent_range * 2
+        )
         if prior_range > 0 and recent_range < prior_range * 0.7:
             price_stable_score += w["price_stable"] * 0.45
             signals.append("波动收窄")
@@ -728,7 +1016,7 @@ def calc_reversal_score(
     prior_drop_pct = None
     prior_drop_score = 0.0
     if len(closes) >= drop_lookback + 1:
-        base = max(closes[-(drop_lookback + 1):-price_stable_window])
+        base = max(closes[-(drop_lookback + 1) : -price_stable_window])
         if base > 0:
             prior_drop_pct = (last_close - base) / base * 100
             # 币圈波动大，跌 25% 以上才算深度回调
@@ -744,13 +1032,23 @@ def calc_reversal_score(
         signals.append("KDJ低位金叉")
 
     # ── 9. 长下影线 ──
-    shadow_score = _score_lower_shadow(closes, opens, highs, lows, shadow_ratio, w["shadow"])
+    shadow_score = _score_lower_shadow(
+        closes, opens, highs, lows, shadow_ratio, w["shadow"]
+    )
     if shadow_score > 0:
         signals.append("长下影线")
 
-    total = (vol_surge_score + price_stable_score + ma_turn_score +
-             funding_reversal_score + macd_score + dist_score +
-             prior_drop_score + kdj_score + shadow_score)
+    total = (
+        vol_surge_score
+        + price_stable_score
+        + ma_turn_score
+        + funding_reversal_score
+        + macd_score
+        + dist_score
+        + prior_drop_score
+        + kdj_score
+        + shadow_score
+    )
 
     return {
         "reversal_score": round(total),
@@ -763,9 +1061,13 @@ def calc_reversal_score(
         "funding_rate": fr_display,
         "macd_reversal_score": round(macd_score),
         "macd_detail": macd_detail,
-        "dist_bottom_pct": round(dist_bottom_pct, 2) if dist_bottom_pct is not None else None,
+        "dist_bottom_pct": round(dist_bottom_pct, 2)
+        if dist_bottom_pct is not None
+        else None,
         "dist_bottom_score": round(dist_score),
-        "prior_drop_pct": round(prior_drop_pct, 2) if prior_drop_pct is not None else None,
+        "prior_drop_pct": round(prior_drop_pct, 2)
+        if prior_drop_pct is not None
+        else None,
         "prior_drop_score": round(prior_drop_score),
         "kdj_score": round(kdj_score),
         "shadow_score": round(shadow_score),
@@ -776,6 +1078,7 @@ def calc_reversal_score(
 # ══════════════════════════════════════════════════════════
 # 子维度评分函数
 # ══════════════════════════════════════════════════════════
+
 
 def _score_ma_turn(closes: List[float], max_score: float) -> tuple:
     """均线拐头评分。
@@ -817,7 +1120,11 @@ def _score_ma_turn(closes: List[float], max_score: float) -> tuple:
     # EMA10 拐头向上
     if len(ema10_series) >= 7:
         ema10_6ago = ema10_series[-7]
-        if not math.isnan(ema10_6ago) and ema10_now > ema10_3ago and ema10_3ago < ema10_6ago:
+        if (
+            not math.isnan(ema10_6ago)
+            and ema10_now > ema10_3ago
+            and ema10_3ago < ema10_6ago
+        ):
             return max_score * 0.5, "EMA10拐头向上"
 
     return 0.0, ""
@@ -862,18 +1169,20 @@ def _check_macd_divergence(closes: List[float], lookback: int = 40) -> bool:
     base_idx = len(closes) - lookback
     min_idx = min(range(len(recent)), key=lambda i: recent[i])
     prev_min_idx = None
-    for i in range(max(0, min_idx - 5) - 1, -1, -1):
+    for i in range(min_idx - 1, -1, -1):
         if prev_min_idx is None or recent[i] < recent[prev_min_idx]:
             prev_min_idx = i
     if prev_min_idx is None or recent[min_idx] >= recent[prev_min_idx]:
         return False
-    h1 = calc_macd(closes[:base_idx + prev_min_idx + 1]).get("histogram")
-    h2 = calc_macd(closes[:base_idx + min_idx + 1]).get("histogram")
+    h1 = calc_macd(closes[: base_idx + prev_min_idx + 1]).get("histogram")
+    h2 = calc_macd(closes[: base_idx + min_idx + 1]).get("histogram")
     return h1 is not None and h2 is not None and h2 > h1
 
 
 def _score_kdj_golden_cross(
-    closes: List[float], highs: List[float], lows: List[float],
+    closes: List[float],
+    highs: List[float],
+    lows: List[float],
     max_score: float,
 ) -> float:
     """KDJ 低位金叉评分。
@@ -886,8 +1195,8 @@ def _score_kdj_golden_cross(
     def _calc_kdj(c, h, l):
         rsvs = []
         for i in range(KDJ_PERIOD - 1, len(c)):
-            hh = max(h[i - KDJ_PERIOD + 1: i + 1])
-            ll = min(l[i - KDJ_PERIOD + 1: i + 1])
+            hh = max(h[i - KDJ_PERIOD + 1 : i + 1])
+            ll = min(l[i - KDJ_PERIOD + 1 : i + 1])
             rsvs.append(50.0 if hh == ll else (c[i] - ll) / (hh - ll) * 100)
         if not rsvs:
             return None, None, None
@@ -917,9 +1226,12 @@ def _score_kdj_golden_cross(
 
 
 def _score_lower_shadow(
-    closes: List[float], opens: List[float],
-    highs: List[float], lows: List[float],
-    shadow_ratio: float, max_score: float,
+    closes: List[float],
+    opens: List[float],
+    highs: List[float],
+    lows: List[float],
+    shadow_ratio: float,
+    max_score: float,
 ) -> float:
     """长下影线评分。
 

@@ -8,6 +8,9 @@
 import math
 from datetime import datetime, timedelta
 
+import pytest
+
+hypothesis = pytest.importorskip("hypothesis")
 from hypothesis import given, settings, assume
 from hypothesis import strategies as st
 
@@ -31,11 +34,17 @@ class TestPnlRatioCalculation:
     """
 
     @given(
-        entry_price=st.floats(min_value=1e-8, max_value=1e12, allow_nan=False, allow_infinity=False),
-        current_price=st.floats(min_value=1e-8, max_value=1e12, allow_nan=False, allow_infinity=False),
+        entry_price=st.floats(
+            min_value=1e-8, max_value=1e12, allow_nan=False, allow_infinity=False
+        ),
+        current_price=st.floats(
+            min_value=1e-8, max_value=1e12, allow_nan=False, allow_infinity=False
+        ),
     )
     @settings(max_examples=20)
-    def test_pnl_ratio_long_formula(self, entry_price: float, current_price: float) -> None:
+    def test_pnl_ratio_long_formula(
+        self, entry_price: float, current_price: float
+    ) -> None:
         """做多方向：盈亏比例 = (当前价格 - 入场价格) / 入场价格 × 100"""
         result = calculate_pnl_ratio(entry_price, current_price, TradeDirection.LONG)
         expected = ((current_price - entry_price) / entry_price) * 100
@@ -44,11 +53,17 @@ class TestPnlRatioCalculation:
         )
 
     @given(
-        entry_price=st.floats(min_value=1e-8, max_value=1e12, allow_nan=False, allow_infinity=False),
-        current_price=st.floats(min_value=1e-8, max_value=1e12, allow_nan=False, allow_infinity=False),
+        entry_price=st.floats(
+            min_value=1e-8, max_value=1e12, allow_nan=False, allow_infinity=False
+        ),
+        current_price=st.floats(
+            min_value=1e-8, max_value=1e12, allow_nan=False, allow_infinity=False
+        ),
     )
     @settings(max_examples=20)
-    def test_pnl_ratio_short_formula(self, entry_price: float, current_price: float) -> None:
+    def test_pnl_ratio_short_formula(
+        self, entry_price: float, current_price: float
+    ) -> None:
         """做空方向：盈亏比例 = (入场价格 - 当前价格) / 入场价格 × 100"""
         result = calculate_pnl_ratio(entry_price, current_price, TradeDirection.SHORT)
         expected = ((entry_price - current_price) / entry_price) * 100
@@ -57,27 +72,42 @@ class TestPnlRatioCalculation:
         )
 
     @given(
-        entry_price=st.floats(min_value=1e-8, max_value=1e12, allow_nan=False, allow_infinity=False),
+        entry_price=st.floats(
+            min_value=1e-8, max_value=1e12, allow_nan=False, allow_infinity=False
+        ),
         direction=st.sampled_from([TradeDirection.LONG, TradeDirection.SHORT]),
     )
     @settings(max_examples=20)
-    def test_pnl_ratio_same_price_is_zero(self, entry_price: float, direction: TradeDirection) -> None:
+    def test_pnl_ratio_same_price_is_zero(
+        self, entry_price: float, direction: TradeDirection
+    ) -> None:
         """当入场价格等于当前价格时，盈亏比例应为 0"""
         result = calculate_pnl_ratio(entry_price, entry_price, direction)
         assert result == 0.0, f"相同价格时盈亏比例应为 0, got {result}"
 
     @given(
-        entry_price=st.floats(min_value=1e-8, max_value=1e12, allow_nan=False, allow_infinity=False),
-        current_price=st.floats(min_value=1e-8, max_value=1e12, allow_nan=False, allow_infinity=False),
+        entry_price=st.floats(
+            min_value=1e-8, max_value=1e12, allow_nan=False, allow_infinity=False
+        ),
+        current_price=st.floats(
+            min_value=1e-8, max_value=1e12, allow_nan=False, allow_infinity=False
+        ),
     )
     @settings(max_examples=20)
-    def test_pnl_ratio_long_short_symmetry(self, entry_price: float, current_price: float) -> None:
+    def test_pnl_ratio_long_short_symmetry(
+        self, entry_price: float, current_price: float
+    ) -> None:
         """做多和做空的盈亏比例互为相反数"""
-        long_ratio = calculate_pnl_ratio(entry_price, current_price, TradeDirection.LONG)
-        short_ratio = calculate_pnl_ratio(entry_price, current_price, TradeDirection.SHORT)
+        long_ratio = calculate_pnl_ratio(
+            entry_price, current_price, TradeDirection.LONG
+        )
+        short_ratio = calculate_pnl_ratio(
+            entry_price, current_price, TradeDirection.SHORT
+        )
         assert math.isclose(long_ratio + short_ratio, 0.0, abs_tol=1e-9), (
             f"做多({long_ratio}) + 做空({short_ratio}) 应为 0"
         )
+
 
 # Feature: openclaw-binance-agent, Property 16: 数值参数边界校验
 # **Validates: Requirements 3.8**
@@ -94,13 +124,23 @@ class TestNumericBoundaryValidation:
 
     @given(
         account_balance=st.floats(max_value=0, allow_nan=False, allow_infinity=False),
-        risk_ratio=st.floats(min_value=0.001, max_value=0.20, allow_nan=False, allow_infinity=False),
-        entry_price=st.floats(min_value=1e-8, max_value=1e12, allow_nan=False, allow_infinity=False),
-        stop_loss_price=st.floats(min_value=1e-8, max_value=1e12, allow_nan=False, allow_infinity=False),
+        risk_ratio=st.floats(
+            min_value=0.001, max_value=0.20, allow_nan=False, allow_infinity=False
+        ),
+        entry_price=st.floats(
+            min_value=1e-8, max_value=1e12, allow_nan=False, allow_infinity=False
+        ),
+        stop_loss_price=st.floats(
+            min_value=1e-8, max_value=1e12, allow_nan=False, allow_infinity=False
+        ),
     )
     @settings(max_examples=20)
     def test_non_positive_account_balance_rejected(
-        self, account_balance: float, risk_ratio: float, entry_price: float, stop_loss_price: float
+        self,
+        account_balance: float,
+        risk_ratio: float,
+        entry_price: float,
+        stop_loss_price: float,
     ) -> None:
         """非正数的账户余额（0 或负数）应被拒绝"""
         import pytest
@@ -108,12 +148,18 @@ class TestNumericBoundaryValidation:
 
         assume(entry_price != stop_loss_price)
         with pytest.raises(ValueError, match="账户余额必须为正数"):
-            calculate_position_size(account_balance, risk_ratio, entry_price, stop_loss_price)
+            calculate_position_size(
+                account_balance, risk_ratio, entry_price, stop_loss_price
+            )
 
     @given(
-        account_balance=st.floats(min_value=100, max_value=1e8, allow_nan=False, allow_infinity=False),
+        account_balance=st.floats(
+            min_value=100, max_value=1e8, allow_nan=False, allow_infinity=False
+        ),
         entry_price=st.floats(max_value=0, allow_nan=False, allow_infinity=False),
-        stop_loss_price=st.floats(min_value=1e-8, max_value=1e12, allow_nan=False, allow_infinity=False),
+        stop_loss_price=st.floats(
+            min_value=1e-8, max_value=1e12, allow_nan=False, allow_infinity=False
+        ),
     )
     @settings(max_examples=20)
     def test_non_positive_entry_price_rejected(
@@ -126,8 +172,12 @@ class TestNumericBoundaryValidation:
             calculate_position_size(account_balance, 0.02, entry_price, stop_loss_price)
 
     @given(
-        account_balance=st.floats(min_value=100, max_value=1e8, allow_nan=False, allow_infinity=False),
-        entry_price=st.floats(min_value=1e-8, max_value=1e12, allow_nan=False, allow_infinity=False),
+        account_balance=st.floats(
+            min_value=100, max_value=1e8, allow_nan=False, allow_infinity=False
+        ),
+        entry_price=st.floats(
+            min_value=1e-8, max_value=1e12, allow_nan=False, allow_infinity=False
+        ),
         stop_loss_price=st.floats(max_value=0, allow_nan=False, allow_infinity=False),
     )
     @settings(max_examples=20)
@@ -141,17 +191,29 @@ class TestNumericBoundaryValidation:
             calculate_position_size(account_balance, 0.02, entry_price, stop_loss_price)
 
     @given(
-        account_balance=st.floats(min_value=100, max_value=1e8, allow_nan=False, allow_infinity=False),
+        account_balance=st.floats(
+            min_value=100, max_value=1e8, allow_nan=False, allow_infinity=False
+        ),
         risk_ratio=st.one_of(
             st.floats(max_value=0, allow_nan=False, allow_infinity=False),
-            st.floats(min_value=0.201, max_value=1.0, allow_nan=False, allow_infinity=False),
+            st.floats(
+                min_value=0.201, max_value=1.0, allow_nan=False, allow_infinity=False
+            ),
         ),
-        entry_price=st.floats(min_value=1e-8, max_value=1e12, allow_nan=False, allow_infinity=False),
-        stop_loss_price=st.floats(min_value=1e-8, max_value=1e12, allow_nan=False, allow_infinity=False),
+        entry_price=st.floats(
+            min_value=1e-8, max_value=1e12, allow_nan=False, allow_infinity=False
+        ),
+        stop_loss_price=st.floats(
+            min_value=1e-8, max_value=1e12, allow_nan=False, allow_infinity=False
+        ),
     )
     @settings(max_examples=20)
     def test_risk_ratio_out_of_range_rejected(
-        self, account_balance: float, risk_ratio: float, entry_price: float, stop_loss_price: float
+        self,
+        account_balance: float,
+        risk_ratio: float,
+        entry_price: float,
+        stop_loss_price: float,
     ) -> None:
         """risk_ratio 超出 (0, 0.20] 范围应被拒绝"""
         import pytest
@@ -159,11 +221,17 @@ class TestNumericBoundaryValidation:
 
         assume(entry_price != stop_loss_price)
         with pytest.raises(ValueError, match="风险比例必须在"):
-            calculate_position_size(account_balance, risk_ratio, entry_price, stop_loss_price)
+            calculate_position_size(
+                account_balance, risk_ratio, entry_price, stop_loss_price
+            )
 
     @given(
-        account_balance=st.floats(min_value=100, max_value=1e8, allow_nan=False, allow_infinity=False),
-        price=st.floats(min_value=1e-8, max_value=1e12, allow_nan=False, allow_infinity=False),
+        account_balance=st.floats(
+            min_value=100, max_value=1e8, allow_nan=False, allow_infinity=False
+        ),
+        price=st.floats(
+            min_value=1e-8, max_value=1e12, allow_nan=False, allow_infinity=False
+        ),
     )
     @settings(max_examples=20)
     def test_entry_equals_stop_loss_rejected(
@@ -181,7 +249,9 @@ class TestNumericBoundaryValidation:
 
     @given(
         entry_price=st.floats(max_value=0, allow_nan=False, allow_infinity=False),
-        current_price=st.floats(min_value=1e-8, max_value=1e12, allow_nan=False, allow_infinity=False),
+        current_price=st.floats(
+            min_value=1e-8, max_value=1e12, allow_nan=False, allow_infinity=False
+        ),
         direction=st.sampled_from([TradeDirection.LONG, TradeDirection.SHORT]),
     )
     @settings(max_examples=20)
@@ -195,7 +265,9 @@ class TestNumericBoundaryValidation:
             calculate_pnl_ratio(entry_price, current_price, direction)
 
     @given(
-        entry_price=st.floats(min_value=1e-8, max_value=1e12, allow_nan=False, allow_infinity=False),
+        entry_price=st.floats(
+            min_value=1e-8, max_value=1e12, allow_nan=False, allow_infinity=False
+        ),
         current_price=st.floats(max_value=0, allow_nan=False, allow_infinity=False),
         direction=st.sampled_from([TradeDirection.LONG, TradeDirection.SHORT]),
     )
@@ -406,12 +478,20 @@ class TestRiskControllerInvariant:
     """
 
     @given(
-        total_balance=st.floats(min_value=1000.0, max_value=1e8, allow_nan=False, allow_infinity=False),
-        price=st.floats(min_value=1.0, max_value=1e6, allow_nan=False, allow_infinity=False),
-        quantity=st.floats(min_value=0.001, max_value=100.0, allow_nan=False, allow_infinity=False),
+        total_balance=st.floats(
+            min_value=1000.0, max_value=1e8, allow_nan=False, allow_infinity=False
+        ),
+        price=st.floats(
+            min_value=1.0, max_value=1e6, allow_nan=False, allow_infinity=False
+        ),
+        quantity=st.floats(
+            min_value=0.001, max_value=100.0, allow_nan=False, allow_infinity=False
+        ),
         leverage=st.integers(min_value=1, max_value=125),
         direction=st.sampled_from([TradeDirection.LONG, TradeDirection.SHORT]),
-        existing_qty=st.floats(min_value=0.0, max_value=50.0, allow_nan=False, allow_infinity=False),
+        existing_qty=st.floats(
+            min_value=0.0, max_value=50.0, allow_nan=False, allow_infinity=False
+        ),
         has_cooldown=st.booleans(),
     )
     @settings(max_examples=20)
@@ -436,11 +516,13 @@ class TestRiskControllerInvariant:
         # 构造已有持仓
         positions = []
         if existing_qty > 0:
-            positions.append({
-                "symbol": "BTCUSDT",
-                "quantity": existing_qty,
-                "entry_price": price,
-            })
+            positions.append(
+                {
+                    "symbol": "BTCUSDT",
+                    "quantity": existing_qty,
+                    "entry_price": price,
+                }
+            )
 
         account = AccountState(
             total_balance=total_balance,
@@ -482,9 +564,7 @@ class TestRiskControllerInvariant:
             )
 
             # (c) 该币种该方向不在止损冷却期内
-            assert not has_cooldown, (
-                "通过校验但该币种该方向处于止损冷却期内"
-            )
+            assert not has_cooldown, "通过校验但该币种该方向处于止损冷却期内"
 
 
 # Feature: openclaw-binance-agent, Property 8: 止损冷却期
@@ -500,7 +580,9 @@ class TestStopLossCooldown:
     @given(
         symbol=st.sampled_from(["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT"]),
         direction=st.sampled_from(["long", "short"]),
-        hours_elapsed=st.floats(min_value=0.0, max_value=23.99, allow_nan=False, allow_infinity=False),
+        hours_elapsed=st.floats(
+            min_value=0.0, max_value=23.99, allow_nan=False, allow_infinity=False
+        ),
     )
     @settings(max_examples=20)
     def test_stop_loss_cooldown(
@@ -519,7 +601,7 @@ class TestStopLossCooldown:
 
         # 手动插入一条止损记录，时间为 hours_elapsed 小时前
         record_time = datetime.now() - timedelta(hours=hours_elapsed)
-        rc._stop_loss_records.append((symbol, direction, record_time))
+        rc._stop_loss_records.append((symbol, direction, "", record_time))
 
         # 构造一个保证金和持仓都在限额内的订单
         trade_dir = TradeDirection.LONG if direction == "long" else TradeDirection.SHORT
@@ -548,7 +630,9 @@ class TestStopLossCooldown:
     @given(
         symbol=st.sampled_from(["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT"]),
         direction=st.sampled_from(["long", "short"]),
-        hours_elapsed=st.floats(min_value=24.01, max_value=720.0, allow_nan=False, allow_infinity=False),
+        hours_elapsed=st.floats(
+            min_value=24.01, max_value=720.0, allow_nan=False, allow_infinity=False
+        ),
     )
     @settings(max_examples=20)
     def test_stop_loss_cooldown_expired(
@@ -567,7 +651,7 @@ class TestStopLossCooldown:
 
         # 手动插入一条止损记录，时间为 hours_elapsed 小时前（已过期）
         record_time = datetime.now() - timedelta(hours=hours_elapsed)
-        rc._stop_loss_records.append((symbol, direction, record_time))
+        rc._stop_loss_records.append((symbol, direction, "", record_time))
 
         trade_dir = TradeDirection.LONG if direction == "long" else TradeDirection.SHORT
         account = AccountState(
@@ -605,8 +689,12 @@ class TestDailyLossDegradation:
     """
 
     @given(
-        total_balance=st.floats(min_value=100.0, max_value=1e8, allow_nan=False, allow_infinity=False),
-        loss_ratio=st.floats(min_value=0.0501, max_value=1.0, allow_nan=False, allow_infinity=False),
+        total_balance=st.floats(
+            min_value=100.0, max_value=1e8, allow_nan=False, allow_infinity=False
+        ),
+        loss_ratio=st.floats(
+            min_value=0.0501, max_value=1.0, allow_nan=False, allow_infinity=False
+        ),
     )
     @settings(max_examples=20)
     def test_daily_loss_degradation(
@@ -637,13 +725,15 @@ class TestDailyLossDegradation:
         # 执行降级后必须进入 Paper Mode
         assert rc.is_paper_mode() is False  # 降级前不是 Paper Mode
         rc.execute_degradation(account)
-        assert rc.is_paper_mode() is True, (
-            "执行降级后系统未进入 Paper_Trading_Mode"
-        )
+        assert rc.is_paper_mode() is True, "执行降级后系统未进入 Paper_Trading_Mode"
 
     @given(
-        total_balance=st.floats(min_value=100.0, max_value=1e8, allow_nan=False, allow_infinity=False),
-        loss_ratio=st.floats(min_value=0.0, max_value=0.0499, allow_nan=False, allow_infinity=False),
+        total_balance=st.floats(
+            min_value=100.0, max_value=1e8, allow_nan=False, allow_infinity=False
+        ),
+        loss_ratio=st.floats(
+            min_value=0.0, max_value=0.0499, allow_nan=False, allow_infinity=False
+        ),
     )
     @settings(max_examples=20)
     def test_daily_loss_below_threshold_no_degradation(
@@ -690,7 +780,7 @@ class TestExponentialBackoffSequence:
         from src.infra.binance_fapi import calculate_backoff
 
         result = calculate_backoff(attempt)
-        expected = 2 ** attempt
+        expected = 2**attempt
 
         # 不变量：退避时间 = 2^attempt
         assert result == expected, (
@@ -738,6 +828,7 @@ class TestExponentialBackoffSequence:
 # 交易记录生成策略（供 Property 15 使用）
 # ============================================================
 
+
 def _trade_record_strategy(pnl_positive: bool | None = None):
     """
     生成随机 TradeRecord 的策略。
@@ -746,25 +837,41 @@ def _trade_record_strategy(pnl_positive: bool | None = None):
         pnl_positive: None=随机盈亏, True=强制盈利, False=强制亏损
     """
     if pnl_positive is True:
-        pnl_st = st.floats(min_value=0.01, max_value=1e6, allow_nan=False, allow_infinity=False)
+        pnl_st = st.floats(
+            min_value=0.01, max_value=1e6, allow_nan=False, allow_infinity=False
+        )
     elif pnl_positive is False:
-        pnl_st = st.floats(min_value=-1e6, max_value=-0.01, allow_nan=False, allow_infinity=False)
+        pnl_st = st.floats(
+            min_value=-1e6, max_value=-0.01, allow_nan=False, allow_infinity=False
+        )
     else:
-        pnl_st = st.floats(min_value=-1e6, max_value=1e6, allow_nan=False, allow_infinity=False)
+        pnl_st = st.floats(
+            min_value=-1e6, max_value=1e6, allow_nan=False, allow_infinity=False
+        )
 
     return st.builds(
         TradeRecord,
         symbol=st.sampled_from(["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT"]),
         direction=st.sampled_from([TradeDirection.LONG, TradeDirection.SHORT]),
-        entry_price=st.floats(min_value=1.0, max_value=1e6, allow_nan=False, allow_infinity=False),
-        exit_price=st.floats(min_value=1.0, max_value=1e6, allow_nan=False, allow_infinity=False),
+        entry_price=st.floats(
+            min_value=1.0, max_value=1e6, allow_nan=False, allow_infinity=False
+        ),
+        exit_price=st.floats(
+            min_value=1.0, max_value=1e6, allow_nan=False, allow_infinity=False
+        ),
         pnl_amount=pnl_st,
-        hold_duration_hours=st.floats(min_value=0.1, max_value=720.0, allow_nan=False, allow_infinity=False),
+        hold_duration_hours=st.floats(
+            min_value=0.1, max_value=720.0, allow_nan=False, allow_infinity=False
+        ),
         rating_score=st.integers(min_value=1, max_value=10),
-        position_size_pct=st.floats(min_value=0.1, max_value=20.0, allow_nan=False, allow_infinity=False),
+        position_size_pct=st.floats(
+            min_value=0.1, max_value=20.0, allow_nan=False, allow_infinity=False
+        ),
         closed_at=st.builds(
             lambda days: datetime(2025, 1, 1) + timedelta(days=days),
-            days=st.floats(min_value=0, max_value=365, allow_nan=False, allow_infinity=False),
+            days=st.floats(
+                min_value=0, max_value=365, allow_nan=False, allow_infinity=False
+            ),
         ),
     )
 
@@ -827,19 +934,19 @@ class TestStrategyStatsAndTuning:
             store.close()
 
     # ------------------------------------------------------------------
-    # 交易记录不足 10 笔时返回 None
+    # 交易记录不足 20 笔时返回 None
     # ------------------------------------------------------------------
 
     @given(
         trades=st.lists(
             _trade_record_strategy(),
             min_size=0,
-            max_size=9,
+            max_size=19,
         ),
     )
     @settings(max_examples=20)
     def test_insufficient_trades_returns_none(self, trades: list[TradeRecord]) -> None:
-        """交易记录不足 10 笔时，compute_evolution_adjustment 返回 None"""
+        """交易记录不足 20 笔时，compute_evolution_adjustment 返回 None"""
         result = compute_evolution_adjustment(trades)
         assert result is None, (
             f"交易记录仅 {len(trades)} 笔（< 10），应返回 None，实际返回 {result}"
@@ -856,8 +963,8 @@ class TestStrategyStatsAndTuning:
         - 新评级阈值 >= 默认阈值（6）
         - 新风险比例 <= 默认风险比例（0.02）
         """
-        # 生成 10~50 笔交易，控制胜率 < 40%
-        total = data.draw(st.integers(min_value=10, max_value=50), label="total")
+        # 生成 20~50 笔交易，控制胜率 < 40%
+        total = data.draw(st.integers(min_value=20, max_value=50), label="total")
         # 盈利笔数严格 < 40%
         max_winning = int(total * 0.4) - 1
         if max_winning < 0:
@@ -869,11 +976,19 @@ class TestStrategyStatsAndTuning:
 
         # 生成盈利交易和亏损交易
         winning_trades = data.draw(
-            st.lists(_trade_record_strategy(pnl_positive=True), min_size=winning_count, max_size=winning_count),
+            st.lists(
+                _trade_record_strategy(pnl_positive=True),
+                min_size=winning_count,
+                max_size=winning_count,
+            ),
             label="winning_trades",
         )
         losing_trades = data.draw(
-            st.lists(_trade_record_strategy(pnl_positive=False), min_size=losing_count, max_size=losing_count),
+            st.lists(
+                _trade_record_strategy(pnl_positive=False),
+                min_size=losing_count,
+                max_size=losing_count,
+            ),
             label="losing_trades",
         )
 
@@ -922,8 +1037,8 @@ class TestStrategyStatsAndTuning:
         - 风险比例 = 0.02
         胜率 > 60% 时应放松参数（阈值下降，风险上升）。
         """
-        # 生成 10~50 笔交易，控制胜率 >= 40%
-        total = data.draw(st.integers(min_value=10, max_value=50), label="total")
+        # 生成 20~50 笔交易，控制胜率 >= 40%
+        total = data.draw(st.integers(min_value=20, max_value=50), label="total")
         min_winning = int(math.ceil(total * 0.4))
         winning_count = data.draw(
             st.integers(min_value=min_winning, max_value=total), label="winning_count"
@@ -932,11 +1047,19 @@ class TestStrategyStatsAndTuning:
 
         # 生成盈利交易和亏损交易
         winning_trades = data.draw(
-            st.lists(_trade_record_strategy(pnl_positive=True), min_size=winning_count, max_size=winning_count),
+            st.lists(
+                _trade_record_strategy(pnl_positive=True),
+                min_size=winning_count,
+                max_size=winning_count,
+            ),
             label="winning_trades",
         )
         losing_trades = data.draw(
-            st.lists(_trade_record_strategy(pnl_positive=False), min_size=losing_count, max_size=losing_count),
+            st.lists(
+                _trade_record_strategy(pnl_positive=False),
+                min_size=losing_count,
+                max_size=losing_count,
+            ),
             label="losing_trades",
         )
 
@@ -985,6 +1108,7 @@ class TestStrategyStatsAndTuning:
 
 import json
 import os
+
 
 def _load_all_schemas() -> dict[str, dict]:
     """
@@ -1064,6 +1188,15 @@ class TestSchemaInvalidDataRejected:
             (name, schema)
             for name, schema in _ALL_SCHEMAS.items()
             if schema.get("required")
+        ]
+
+    @staticmethod
+    def _schemas_with_additional_props_false() -> list[tuple[str, dict]]:
+        """返回所有设置了 additionalProperties: false 的 Schema（名称, schema）列表。"""
+        return [
+            (name, schema)
+            for name, schema in _ALL_SCHEMAS.items()
+            if schema.get("additionalProperties") is False
         ]
 
     @staticmethod
@@ -1167,11 +1300,16 @@ class TestSchemaInvalidDataRejected:
         添加一个额外字段后，校验应失败。"""
         from jsonschema import validate, ValidationError
 
-        # 所有 Schema 都设置了 additionalProperties: false
-        schema_name = data.draw(
-            st.sampled_from(sorted(_ALL_SCHEMAS.keys())), label="schema_name"
+        schemas_with_no_additional = self._schemas_with_additional_props_false()
+        assert len(schemas_with_no_additional) > 0, (
+            "没有设置 additionalProperties: false 的 Schema"
         )
-        schema = _ALL_SCHEMAS[schema_name]
+
+        schema_name = data.draw(
+            st.sampled_from([name for name, _ in schemas_with_no_additional]),
+            label="schema_name",
+        )
+        schema = dict(schemas_with_no_additional)[schema_name]
 
         # 构建最小合法对象
         obj = self._build_valid_object(schema)
@@ -1219,13 +1357,8 @@ class TestSchemaInvalidDataRejected:
         required_fields = schema["required"]
 
         # 选择一个有明确类型定义的必填字段
-        typed_fields = [
-            f for f in required_fields
-            if f in props and "type" in props[f]
-        ]
-        assert len(typed_fields) > 0, (
-            f"Schema '{schema_name}' 没有带类型定义的必填字段"
-        )
+        typed_fields = [f for f in required_fields if f in props and "type" in props[f]]
+        assert len(typed_fields) > 0, f"Schema '{schema_name}' 没有带类型定义的必填字段"
 
         field_to_corrupt = data.draw(
             st.sampled_from(typed_fields), label="field_to_corrupt"
@@ -1377,9 +1510,7 @@ class TestExecutionLogCompleteness:
 
             # 验证开始日志
             start_msgs = [m for m in messages if "开始执行" in m]
-            assert len(start_msgs) >= 1, (
-                f"缺少开始执行日志，所有日志: {messages}"
-            )
+            assert len(start_msgs) >= 1, f"缺少开始执行日志，所有日志: {messages}"
             start_msg = start_msgs[0]
             # 开始日志包含 Skill 名称
             assert f"[{skill_name}]" in start_msg, (
@@ -1392,9 +1523,7 @@ class TestExecutionLogCompleteness:
 
             # 验证完成日志
             end_msgs = [m for m in messages if "执行完成" in m]
-            assert len(end_msgs) >= 1, (
-                f"缺少执行完成日志，所有日志: {messages}"
-            )
+            assert len(end_msgs) >= 1, f"缺少执行完成日志，所有日志: {messages}"
             end_msg = end_msgs[0]
             # 完成日志包含 Skill 名称
             assert f"[{skill_name}]" in end_msg, (
@@ -1405,13 +1534,9 @@ class TestExecutionLogCompleteness:
                 f"完成日志缺少 output_state_id: {end_msg}"
             )
             # 完成日志包含耗时
-            assert "耗时=" in end_msg, (
-                f"完成日志缺少耗时字段: {end_msg}"
-            )
+            assert "耗时=" in end_msg, f"完成日志缺少耗时字段: {end_msg}"
             # 完成日志包含成功状态
-            assert "状态=success" in end_msg, (
-                f"完成日志缺少 '状态=success': {end_msg}"
-            )
+            assert "状态=success" in end_msg, f"完成日志缺少 '状态=success': {end_msg}"
         finally:
             store.close()
 
@@ -1500,17 +1625,11 @@ class TestExecutionLogCompleteness:
                 f"失败日志缺少 Skill 名称 [{skill_name}]: {fail_msg}"
             )
             # 失败日志包含耗时
-            assert "耗时=" in fail_msg, (
-                f"失败日志缺少耗时字段: {fail_msg}"
-            )
+            assert "耗时=" in fail_msg, f"失败日志缺少耗时字段: {fail_msg}"
             # 失败日志包含失败状态
-            assert "状态=failed" in fail_msg, (
-                f"失败日志缺少 '状态=failed': {fail_msg}"
-            )
+            assert "状态=failed" in fail_msg, f"失败日志缺少 '状态=failed': {fail_msg}"
             # 失败日志包含失败原因
-            assert "原因=" in fail_msg, (
-                f"失败日志缺少 '原因=' 字段: {fail_msg}"
-            )
+            assert "原因=" in fail_msg, f"失败日志缺少 '原因=' 字段: {fail_msg}"
         finally:
             store.close()
 
@@ -1530,7 +1649,9 @@ class TestDataSourceAnnotation:
 
     @given(
         symbol=st.from_regex(r"[A-Z]{2,10}USDT", fullmatch=True),
-        quote_volume=st.floats(min_value=50_000_000, max_value=1e12, allow_nan=False, allow_infinity=False),
+        quote_volume=st.floats(
+            min_value=50_000_000, max_value=1e12, allow_nan=False, allow_infinity=False
+        ),
     )
     @settings(max_examples=20)
     def test_data_source_annotation(self, symbol: str, quote_volume: float) -> None:
@@ -1544,21 +1665,45 @@ class TestDataSourceAnnotation:
         # 构造 mock client
         client = MagicMock()
         client.get_exchange_info.return_value = {
-            "symbols": [{"symbol": symbol, "status": "TRADING", "quoteAsset": "USDT", "contractType": "PERPETUAL"}]
+            "symbols": [
+                {
+                    "symbol": symbol,
+                    "status": "TRADING",
+                    "quoteAsset": "USDT",
+                    "contractType": "PERPETUAL",
+                }
+            ]
         }
-        client.get_tickers_24hr.return_value = [{
-            "symbol": symbol,
-            "quoteVolume": str(quote_volume),
-            "highPrice": "110",
-            "lowPrice": "100",
-            "priceChangePercent": "5.0",
-        }]
+        client.get_tickers_24hr.return_value = [
+            {
+                "symbol": symbol,
+                "quoteVolume": str(quote_volume),
+                "highPrice": "110",
+                "lowPrice": "100",
+                "priceChangePercent": "5.0",
+            }
+        ]
         # 构造温和上涨 K 线（确保技术指标有信号）
         closes = [100 + i * 0.3 for i in range(100)]
         volumes = [1000.0] * 95 + [3000.0] * 5
         klines = []
         for c, v in zip(closes, volumes):
-            klines.append([0, str(c), str(c * 1.01), str(c * 0.99), str(c), str(v), 0, "0", 0, "0", "0", "0"])
+            klines.append(
+                [
+                    0,
+                    str(c),
+                    str(c * 1.01),
+                    str(c * 0.99),
+                    str(c),
+                    str(v),
+                    0,
+                    "0",
+                    0,
+                    "0",
+                    "0",
+                    "0",
+                ]
+            )
         client.get_klines.return_value = klines
 
         input_schema = {"type": "object", "additionalProperties": True}
@@ -1580,11 +1725,15 @@ class TestDataSourceAnnotation:
 
             for i, candidate in enumerate(candidates):
                 # ── 验证 collected_at 存在且为合法 ISO 8601 时间戳 ──
-                assert "collected_at" in candidate, f"候选记录 {i} 缺少 collected_at 字段"
+                assert "collected_at" in candidate, (
+                    f"候选记录 {i} 缺少 collected_at 字段"
+                )
                 collected_at = candidate["collected_at"]
                 assert isinstance(collected_at, str) and len(collected_at) > 0
                 parsed_dt = datetime.fromisoformat(collected_at)
-                assert parsed_dt.tzinfo is not None, f"候选记录 {i} 的 collected_at 缺少时区信息"
+                assert parsed_dt.tzinfo is not None, (
+                    f"候选记录 {i} 的 collected_at 缺少时区信息"
+                )
 
                 # ── 验证量化指标字段存在 ──
                 assert "signal_score" in candidate, f"候选记录 {i} 缺少 signal_score"
@@ -1592,6 +1741,7 @@ class TestDataSourceAnnotation:
                 assert candidate["signal_score"] >= 0
         finally:
             store.close()
+
 
 # Feature: openclaw-binance-agent, Property 5: 评级过滤阈值不变量
 # **Validates: Requirements 2.4**
@@ -1606,21 +1756,35 @@ class TestRatingFilterThreshold:
     @staticmethod
     def _candidate_strategy():
         """生成随机候选币种的策略。"""
-        return st.fixed_dictionaries({
-            "symbol": st.from_regex(r"[A-Z]{2,10}USDT", fullmatch=True),
-            "heat_score": st.floats(min_value=0.0, max_value=100.0, allow_nan=False, allow_infinity=False),
-            "source_url": st.just("https://example.com/data"),
-            "collected_at": st.just("2025-01-01T00:00:00Z"),
-        })
+        return st.fixed_dictionaries(
+            {
+                "symbol": st.from_regex(r"[A-Z]{2,10}USDT", fullmatch=True),
+                "heat_score": st.floats(
+                    min_value=0.0,
+                    max_value=100.0,
+                    allow_nan=False,
+                    allow_infinity=False,
+                ),
+                "source_url": st.just("https://example.com/data"),
+                "collected_at": st.just("2025-01-01T00:00:00Z"),
+            }
+        )
 
     @staticmethod
     def _rating_result_strategy():
         """生成随机评级结果的策略（rating_score 在 1~10 之间）。"""
-        return st.fixed_dictionaries({
-            "rating_score": st.integers(min_value=1, max_value=10),
-            "signal": st.sampled_from(["long", "short", "hold"]),
-            "confidence": st.floats(min_value=0.0, max_value=100.0, allow_nan=False, allow_infinity=False),
-        })
+        return st.fixed_dictionaries(
+            {
+                "rating_score": st.integers(min_value=1, max_value=10),
+                "signal": st.sampled_from(["long", "short", "hold"]),
+                "confidence": st.floats(
+                    min_value=0.0,
+                    max_value=100.0,
+                    allow_nan=False,
+                    allow_infinity=False,
+                ),
+            }
+        )
 
     @given(
         candidates_with_ratings=st.lists(
@@ -1628,7 +1792,12 @@ class TestRatingFilterThreshold:
                 st.from_regex(r"[A-Z]{2,10}USDT", fullmatch=True),
                 st.integers(min_value=1, max_value=10),
                 st.sampled_from(["long", "short", "hold"]),
-                st.floats(min_value=0.0, max_value=100.0, allow_nan=False, allow_infinity=False),
+                st.floats(
+                    min_value=0.0,
+                    max_value=100.0,
+                    allow_nan=False,
+                    allow_infinity=False,
+                ),
             ),
             min_size=1,
             max_size=20,
@@ -1658,12 +1827,14 @@ class TestRatingFilterThreshold:
         for symbol, rating_score, signal, confidence in candidates_with_ratings:
             # 确保每个 symbol 唯一（追加索引后缀）
             unique_symbol = f"{symbol}{len(candidates)}"
-            candidates.append({
-                "symbol": unique_symbol,
-                "heat_score": 50.0,
-                "source_url": "https://example.com/data",
-                "collected_at": "2025-01-01T00:00:00Z",
-            })
+            candidates.append(
+                {
+                    "symbol": unique_symbol,
+                    "heat_score": 50.0,
+                    "source_url": "https://example.com/data",
+                    "collected_at": "2025-01-01T00:00:00Z",
+                }
+            )
             analyzer_results[unique_symbol] = {
                 "rating_score": rating_score,
                 "signal": signal,
@@ -1718,8 +1889,7 @@ class TestRatingFilterThreshold:
             # 手动计算期望的过滤数量
             total_analyzed = len(candidates_with_ratings)
             expected_passed = sum(
-                1 for _, score, _, _ in candidates_with_ratings
-                if score >= threshold
+                1 for _, score, _, _ in candidates_with_ratings if score >= threshold
             )
             expected_filtered = total_analyzed - expected_passed
 
@@ -1754,12 +1924,14 @@ class TestRatingFilterThreshold:
         # 所有评级分设为 1（远低于默认阈值 6）
         candidates = []
         for i in range(num_candidates):
-            candidates.append({
-                "symbol": f"LOW{i}USDT",
-                "heat_score": 50.0,
-                "source_url": "https://example.com/data",
-                "collected_at": "2025-01-01T00:00:00Z",
-            })
+            candidates.append(
+                {
+                    "symbol": f"LOW{i}USDT",
+                    "heat_score": 50.0,
+                    "source_url": "https://example.com/data",
+                    "collected_at": "2025-01-01T00:00:00Z",
+                }
+            )
 
         def mock_analyzer(symbol: str, market_data: dict) -> dict:
             return {"rating_score": 1, "signal": "hold", "confidence": 10.0}
@@ -1800,13 +1972,14 @@ class TestRatingFilterThreshold:
         finally:
             store.close()
 
-
     @given(
         num_results=st.integers(min_value=1, max_value=5),
         data=st.data(),
     )
     @settings(max_examples=20)
-    def test_data_source_annotation_multiple_candidates(self, num_results: int, data) -> None:
+    def test_data_source_annotation_multiple_candidates(
+        self, num_results: int, data
+    ) -> None:
         """多个币种通过筛选时，每条候选记录都必须包含合法的 collected_at 和量化指标。"""
         import tempfile
         from unittest.mock import MagicMock
@@ -1822,18 +1995,25 @@ class TestRatingFilterThreshold:
                 st.from_regex(r"[A-Z]{2,10}USDT", fullmatch=True), label="symbol"
             )
             symbols.append(sym)
-            tickers.append({
-                "symbol": sym,
-                "quoteVolume": "100000000",
-                "highPrice": "110",
-                "lowPrice": "100",
-                "priceChangePercent": "5.0",
-            })
+            tickers.append(
+                {
+                    "symbol": sym,
+                    "quoteVolume": "100000000",
+                    "highPrice": "110",
+                    "lowPrice": "100",
+                    "priceChangePercent": "5.0",
+                }
+            )
 
         client = MagicMock()
         client.get_exchange_info.return_value = {
             "symbols": [
-                {"symbol": s, "status": "TRADING", "quoteAsset": "USDT", "contractType": "PERPETUAL"}
+                {
+                    "symbol": s,
+                    "status": "TRADING",
+                    "quoteAsset": "USDT",
+                    "contractType": "PERPETUAL",
+                }
                 for s in symbols
             ]
         }
@@ -1843,7 +2023,22 @@ class TestRatingFilterThreshold:
         volumes = [1000.0] * 95 + [3000.0] * 5
         klines = []
         for c, v in zip(closes, volumes):
-            klines.append([0, str(c), str(c * 1.01), str(c * 0.99), str(c), str(v), 0, "0", 0, "0", "0", "0"])
+            klines.append(
+                [
+                    0,
+                    str(c),
+                    str(c * 1.01),
+                    str(c * 0.99),
+                    str(c),
+                    str(v),
+                    0,
+                    "0",
+                    0,
+                    "0",
+                    "0",
+                    "0",
+                ]
+            )
         client.get_klines.return_value = klines
 
         input_schema = {"type": "object", "additionalProperties": True}
@@ -1890,10 +2085,18 @@ class TestPositionSizeCalculation:
     """
 
     @given(
-        balance=st.floats(min_value=100, max_value=1e8, allow_nan=False, allow_infinity=False),
-        risk_ratio=st.floats(min_value=0.001, max_value=0.20, allow_nan=False, allow_infinity=False),
-        entry_price=st.floats(min_value=0.01, max_value=1e6, allow_nan=False, allow_infinity=False),
-        stop_loss_price=st.floats(min_value=0.01, max_value=1e6, allow_nan=False, allow_infinity=False),
+        balance=st.floats(
+            min_value=100, max_value=1e8, allow_nan=False, allow_infinity=False
+        ),
+        risk_ratio=st.floats(
+            min_value=0.001, max_value=0.20, allow_nan=False, allow_infinity=False
+        ),
+        entry_price=st.floats(
+            min_value=0.01, max_value=1e6, allow_nan=False, allow_infinity=False
+        ),
+        stop_loss_price=st.floats(
+            min_value=0.01, max_value=1e6, allow_nan=False, allow_infinity=False
+        ),
     )
     @settings(max_examples=20)
     def test_position_size_calculation(
@@ -1903,26 +2106,25 @@ class TestPositionSizeCalculation:
         entry_price: float,
         stop_loss_price: float,
     ) -> None:
-        """头寸规模计算公式正确且头寸价值不超过 20%。
+        """头寸规模计算公式正确且头寸价值不超过 35%。
 
         公式：position_size = (risk_ratio × balance) / |entry_price - stop_loss_price|
-        风控上限：position_value = position_size × entry_price ≤ balance × 0.20
+        风控上限：position_value = position_size × entry_price ≤ balance × 0.35
         """
         assume(entry_price != stop_loss_price)
 
-        size = calculate_position_size(balance, risk_ratio, entry_price, stop_loss_price)
+        size = calculate_position_size(
+            balance, risk_ratio, entry_price, stop_loss_price
+        )
 
-        # 计算未裁剪的理论头寸规模
         price_distance = abs(entry_price - stop_loss_price)
         expected_raw_size = (risk_ratio * balance) / price_distance
 
-        # 计算头寸价值百分比
         position_value = size * entry_price
         position_pct = (position_value / balance) * 100
 
-        # 不变量 1：头寸价值不超过账户余额的 20%（浮点容差）
-        assert position_pct <= 20.0 + 1e-9, (
-            f"头寸价值百分比 {position_pct:.6f}% 超过 20% 上限"
+        assert position_pct <= 35.0 + 1e-9, (
+            f"头寸价值百分比 {position_pct:.6f}% 超过 35% 上限"
         )
 
         # 不变量 2：头寸规模为正数
@@ -1930,14 +2132,12 @@ class TestPositionSizeCalculation:
 
         # 不变量 3：若未触发裁剪，头寸规模应等于理论值
         expected_raw_pct = (expected_raw_size * entry_price / balance) * 100
-        if expected_raw_pct <= 20.0:
-            # 未裁剪场景：实际值应等于理论值
+        if expected_raw_pct <= 35.0:
             assert math.isclose(size, expected_raw_size, rel_tol=1e-9), (
                 f"未裁剪时头寸规模不匹配: got {size}, expected {expected_raw_size}"
             )
         else:
-            # 裁剪场景：头寸规模应被裁剪至 20% 对应的值
-            expected_clipped = (balance * 0.20) / entry_price
+            expected_clipped = (balance * 0.35) / entry_price
             assert math.isclose(size, expected_clipped, rel_tol=1e-9), (
                 f"裁剪后头寸规模不匹配: got {size}, expected {expected_clipped}"
             )
@@ -1959,11 +2159,17 @@ class TestClosePositionTrigger:
     # ------------------------------------------------------------------
 
     @given(
-        current_price=st.floats(min_value=0.01, max_value=1e6, allow_nan=False, allow_infinity=False),
-        stop_loss_price=st.floats(min_value=0.01, max_value=1e6, allow_nan=False, allow_infinity=False),
+        current_price=st.floats(
+            min_value=0.01, max_value=1e6, allow_nan=False, allow_infinity=False
+        ),
+        stop_loss_price=st.floats(
+            min_value=0.01, max_value=1e6, allow_nan=False, allow_infinity=False
+        ),
     )
     @settings(max_examples=20)
-    def test_long_stop_loss_trigger(self, current_price: float, stop_loss_price: float) -> None:
+    def test_long_stop_loss_trigger(
+        self, current_price: float, stop_loss_price: float
+    ) -> None:
         """做多方向：当前价 <= 止损价时触发止损，否则不触发。"""
         import tempfile
         from unittest.mock import MagicMock
@@ -1985,7 +2191,9 @@ class TestClosePositionTrigger:
                 poll_interval=0,
             )
 
-            result = skill._should_stop_loss(TradeDirection.LONG, current_price, stop_loss_price)
+            result = skill._should_stop_loss(
+                TradeDirection.LONG, current_price, stop_loss_price
+            )
 
             # 不变量：做多时，当前价 <= 止损价 → True
             if current_price <= stop_loss_price:
@@ -2000,11 +2208,17 @@ class TestClosePositionTrigger:
             store.close()
 
     @given(
-        current_price=st.floats(min_value=0.01, max_value=1e6, allow_nan=False, allow_infinity=False),
-        stop_loss_price=st.floats(min_value=0.01, max_value=1e6, allow_nan=False, allow_infinity=False),
+        current_price=st.floats(
+            min_value=0.01, max_value=1e6, allow_nan=False, allow_infinity=False
+        ),
+        stop_loss_price=st.floats(
+            min_value=0.01, max_value=1e6, allow_nan=False, allow_infinity=False
+        ),
     )
     @settings(max_examples=20)
-    def test_short_stop_loss_trigger(self, current_price: float, stop_loss_price: float) -> None:
+    def test_short_stop_loss_trigger(
+        self, current_price: float, stop_loss_price: float
+    ) -> None:
         """做空方向：当前价 >= 止损价时触发止损，否则不触发。"""
         import tempfile
         from unittest.mock import MagicMock
@@ -2025,7 +2239,9 @@ class TestClosePositionTrigger:
                 poll_interval=0,
             )
 
-            result = skill._should_stop_loss(TradeDirection.SHORT, current_price, stop_loss_price)
+            result = skill._should_stop_loss(
+                TradeDirection.SHORT, current_price, stop_loss_price
+            )
 
             # 不变量：做空时，当前价 >= 止损价 → True
             if current_price >= stop_loss_price:
@@ -2044,11 +2260,17 @@ class TestClosePositionTrigger:
     # ------------------------------------------------------------------
 
     @given(
-        current_price=st.floats(min_value=0.01, max_value=1e6, allow_nan=False, allow_infinity=False),
-        take_profit_price=st.floats(min_value=0.01, max_value=1e6, allow_nan=False, allow_infinity=False),
+        current_price=st.floats(
+            min_value=0.01, max_value=1e6, allow_nan=False, allow_infinity=False
+        ),
+        take_profit_price=st.floats(
+            min_value=0.01, max_value=1e6, allow_nan=False, allow_infinity=False
+        ),
     )
     @settings(max_examples=20)
-    def test_long_take_profit_trigger(self, current_price: float, take_profit_price: float) -> None:
+    def test_long_take_profit_trigger(
+        self, current_price: float, take_profit_price: float
+    ) -> None:
         """做多方向：当前价 >= 止盈价时触发止盈，否则不触发。"""
         import tempfile
         from unittest.mock import MagicMock
@@ -2069,7 +2291,9 @@ class TestClosePositionTrigger:
                 poll_interval=0,
             )
 
-            result = skill._should_take_profit(TradeDirection.LONG, current_price, take_profit_price)
+            result = skill._should_take_profit(
+                TradeDirection.LONG, current_price, take_profit_price
+            )
 
             # 不变量：做多时，当前价 >= 止盈价 → True
             if current_price >= take_profit_price:
@@ -2084,11 +2308,17 @@ class TestClosePositionTrigger:
             store.close()
 
     @given(
-        current_price=st.floats(min_value=0.01, max_value=1e6, allow_nan=False, allow_infinity=False),
-        take_profit_price=st.floats(min_value=0.01, max_value=1e6, allow_nan=False, allow_infinity=False),
+        current_price=st.floats(
+            min_value=0.01, max_value=1e6, allow_nan=False, allow_infinity=False
+        ),
+        take_profit_price=st.floats(
+            min_value=0.01, max_value=1e6, allow_nan=False, allow_infinity=False
+        ),
     )
     @settings(max_examples=20)
-    def test_short_take_profit_trigger(self, current_price: float, take_profit_price: float) -> None:
+    def test_short_take_profit_trigger(
+        self, current_price: float, take_profit_price: float
+    ) -> None:
         """做空方向：当前价 <= 止盈价时触发止盈，否则不触发。"""
         import tempfile
         from unittest.mock import MagicMock
@@ -2109,7 +2339,9 @@ class TestClosePositionTrigger:
                 poll_interval=0,
             )
 
-            result = skill._should_take_profit(TradeDirection.SHORT, current_price, take_profit_price)
+            result = skill._should_take_profit(
+                TradeDirection.SHORT, current_price, take_profit_price
+            )
 
             # 不变量：做空时，当前价 <= 止盈价 → True
             if current_price <= take_profit_price:
@@ -2129,10 +2361,14 @@ class TestClosePositionTrigger:
 
     @given(
         direction=st.sampled_from([TradeDirection.LONG, TradeDirection.SHORT]),
-        current_price=st.floats(min_value=50.0, max_value=150.0, allow_nan=False, allow_infinity=False),
+        current_price=st.floats(
+            min_value=50.0, max_value=150.0, allow_nan=False, allow_infinity=False
+        ),
     )
     @settings(max_examples=20)
-    def test_timeout_triggers_close(self, direction: TradeDirection, current_price: float) -> None:
+    def test_timeout_triggers_close(
+        self, direction: TradeDirection, current_price: float
+    ) -> None:
         """持仓超时时应触发平仓，返回 close_reason='timeout'。
 
         设置 max_hold_hours 极小值（接近 0），使得首次轮询即超时。
@@ -2147,11 +2383,11 @@ class TestClosePositionTrigger:
 
         # 确保当前价不触发止损/止盈（止损价远低于当前价，止盈价远高于当前价）
         if direction == TradeDirection.LONG:
-            stop_loss_price = 0.01   # 远低于任何 current_price
+            stop_loss_price = 0.01  # 远低于任何 current_price
             take_profit_price = 1e7  # 远高于任何 current_price
         else:
-            stop_loss_price = 1e7    # 远高于任何 current_price（做空止损）
-            take_profit_price = 0.01 # 远低于任何 current_price（做空止盈）
+            stop_loss_price = 1e7  # 远高于任何 current_price（做空止损）
+            take_profit_price = 0.01  # 远低于任何 current_price（做空止盈）
 
         # mock binance_client
         mock_binance = MagicMock()
@@ -2244,52 +2480,81 @@ class TestPaperModeBehavior:
                 st.from_regex(r"[A-Z]{2,6}", fullmatch=True), label="symbol_base"
             )
             symbol = f"{symbol_base}USDT"
-            direction = data.draw(
-                st.sampled_from(["long", "short"]), label="direction"
-            )
+            direction = data.draw(st.sampled_from(["long", "short"]), label="direction")
             entry_upper = data.draw(
-                st.floats(min_value=10.0, max_value=1e5, allow_nan=False, allow_infinity=False),
+                st.floats(
+                    min_value=10.0, max_value=1e5, allow_nan=False, allow_infinity=False
+                ),
                 label="entry_upper",
             )
             entry_lower = data.draw(
-                st.floats(min_value=1.0, max_value=entry_upper, allow_nan=False, allow_infinity=False),
+                st.floats(
+                    min_value=1.0,
+                    max_value=entry_upper,
+                    allow_nan=False,
+                    allow_infinity=False,
+                ),
                 label="entry_lower",
             )
             position_size_pct = data.draw(
-                st.floats(min_value=0.1, max_value=20.0, allow_nan=False, allow_infinity=False),
+                st.floats(
+                    min_value=0.1, max_value=20.0, allow_nan=False, allow_infinity=False
+                ),
                 label="position_size_pct",
             )
             # 根据方向设置合理的止损/止盈价
             mid_price = (entry_upper + entry_lower) / 2
             if direction == "long":
                 stop_loss = data.draw(
-                    st.floats(min_value=0.01, max_value=mid_price * 0.99, allow_nan=False, allow_infinity=False),
+                    st.floats(
+                        min_value=0.01,
+                        max_value=mid_price * 0.99,
+                        allow_nan=False,
+                        allow_infinity=False,
+                    ),
                     label="stop_loss",
                 )
                 take_profit = data.draw(
-                    st.floats(min_value=mid_price * 1.01, max_value=1e6, allow_nan=False, allow_infinity=False),
+                    st.floats(
+                        min_value=mid_price * 1.01,
+                        max_value=1e6,
+                        allow_nan=False,
+                        allow_infinity=False,
+                    ),
                     label="take_profit",
                 )
             else:
                 stop_loss = data.draw(
-                    st.floats(min_value=mid_price * 1.01, max_value=1e6, allow_nan=False, allow_infinity=False),
+                    st.floats(
+                        min_value=mid_price * 1.01,
+                        max_value=1e6,
+                        allow_nan=False,
+                        allow_infinity=False,
+                    ),
                     label="stop_loss",
                 )
                 take_profit = data.draw(
-                    st.floats(min_value=0.01, max_value=mid_price * 0.99, allow_nan=False, allow_infinity=False),
+                    st.floats(
+                        min_value=0.01,
+                        max_value=mid_price * 0.99,
+                        allow_nan=False,
+                        allow_infinity=False,
+                    ),
                     label="take_profit",
                 )
 
-            trade_plans.append({
-                "symbol": symbol,
-                "direction": direction,
-                "entry_price_upper": entry_upper,
-                "entry_price_lower": entry_lower,
-                "position_size_pct": position_size_pct,
-                "stop_loss_price": stop_loss,
-                "take_profit_price": take_profit,
-                "max_hold_hours": 24.0,
-            })
+            trade_plans.append(
+                {
+                    "symbol": symbol,
+                    "direction": direction,
+                    "entry_price_upper": entry_upper,
+                    "entry_price_lower": entry_lower,
+                    "position_size_pct": position_size_pct,
+                    "stop_loss_price": stop_loss,
+                    "take_profit_price": take_profit,
+                    "max_hold_hours": 24.0,
+                }
+            )
 
         # 构造上游数据
         upstream_data = {

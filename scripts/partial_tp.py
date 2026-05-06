@@ -16,6 +16,7 @@
 - 独立锁文件 partial_tp.lock，与 manage_positions.lock 互不干扰
 - 两个脚本可以安全并发运行（操作不同的订单类型）
 """
+
 import fcntl
 import json
 import os
@@ -26,13 +27,13 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-env_path = os.path.join(os.path.dirname(__file__), '..', '.env')
+env_path = os.path.join(os.path.dirname(__file__), "..", ".env")
 if os.path.exists(env_path):
     with open(env_path) as f:
         for line in f:
             line = line.strip()
-            if line and not line.startswith('#') and '=' in line:
-                k, v = line.split('=', 1)
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
                 v = v.strip().strip('"').strip("'")
                 os.environ[k] = v
 
@@ -43,22 +44,47 @@ from src.skills.skill4_execute import Skill4Execute
 from src.models.types import TradeDirection
 
 # 与 manage_positions.py 共享同一状态文件，partial_tp_done 标记互通
-STATE_FILE    = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'manage_positions_state.json')
-LOCK_FILE     = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'partial_tp.lock')
+STATE_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "manage_positions_state.json"
+)
+LOCK_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "partial_tp.lock")
 # 写状态时需同时持有此锁，防止与 manage_positions.py 并发写入状态文件产生竞态
-SHARED_STATE_LOCK_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'manage_positions_state.lock')
+SHARED_STATE_LOCK_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "manage_positions_state.lock"
+)
 
 # trading_state.db 路径
 _TRADING_STATE_DB = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'trading_state.db'
+    os.path.dirname(os.path.abspath(__file__)), "..", "data", "trading_state.db"
 )
 
 _rule_map: dict = {}
 
 # state_store.db 路径（用于 strategy_tag 兜底查询）
 _STATE_STORE_DB = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'state_store.db'
+    os.path.dirname(os.path.abspath(__file__)), "..", "data", "state_store.db"
 )
+
+
+def _get_open_ms_from_db(symbol: str, direction: str) -> float:
+    """
+    从 position_open_times 表读取持仓开启时间（毫秒）。
+    如果 JSON 文件中的 open_ms 为 0 或缺失，则尝试从数据库读取。
+    """
+    try:
+        conn = sqlite3.connect(_TRADING_STATE_DB)
+        try:
+            cursor = conn.execute(
+                "SELECT open_ms FROM position_open_times WHERE symbol = ? AND direction = ?",
+                (symbol, direction.lower()),
+            )
+            row = cursor.fetchone()
+            return float(row[0]) if row else 0.0
+        finally:
+            conn.close()
+    except sqlite3.OperationalError:
+        return 0.0
+
 
 # strategy_tag 查询缓存（延迟加载）
 _strategy_tag_cache: dict[str, str] | None = None
@@ -100,7 +126,7 @@ def _direction_of(position_amt: float) -> TradeDirection:
 
 
 def _close_side_of(direction: TradeDirection) -> str:
-    return 'SELL' if direction == TradeDirection.LONG else 'BUY'
+    return "SELL" if direction == TradeDirection.LONG else "BUY"
 
 
 def load_state() -> dict:
@@ -118,7 +144,7 @@ def save_state(state: dict) -> None:
     state_dir = os.path.dirname(STATE_FILE)
     os.makedirs(state_dir, exist_ok=True)
     with tempfile.NamedTemporaryFile(
-        mode='w', dir=state_dir, suffix='.tmp', delete=False
+        mode="w", dir=state_dir, suffix=".tmp", delete=False
     ) as tmp:
         json.dump(state, tmp, indent=2)
         tmp_path = tmp.name
@@ -138,8 +164,18 @@ def record_partial_tp(
 ) -> None:
     """将分批止盈写入 trade_records，使用幂等 sync_key 防止与 trade_sync 重复。"""
     try:
-        pnl = (exit_price - entry_price) * partial_qty if direction == 'LONG' else (entry_price - exit_price) * partial_qty
-        hold_hours = max(0.0, (datetime.now(timezone.utc).timestamp() * 1000 - open_ms) / 3600000) if open_ms else 0.0
+        pnl = (
+            (exit_price - entry_price) * partial_qty
+            if direction == "LONG"
+            else (entry_price - exit_price) * partial_qty
+        )
+        hold_hours = (
+            max(
+                0.0, (datetime.now(timezone.utc).timestamp() * 1000 - open_ms) / 3600000
+            )
+            if open_ms
+            else 0.0
+        )
 
         conn = sqlite3.connect(_TRADING_STATE_DB)
         # 整个写入在同一事务内：sync_key + trade_record 要么都成功，要么都回滚
@@ -178,8 +214,8 @@ def record_partial_tp(
                     0,
                     0.0,
                     closed_at,
-                    strategy_tag or 'unknown',
-                    'partial_tp',
+                    strategy_tag or "unknown",
+                    "partial_tp",
                 ),
             )
         conn.close()
@@ -194,7 +230,7 @@ if not api_key or not api_secret:
     print("🚨 BINANCE_API_KEY / BINANCE_API_SECRET 未配置，退出")
     sys.exit(1)
 
-_lock_fh = open(LOCK_FILE, 'w')
+_lock_fh = open(LOCK_FILE, "w")
 try:
     fcntl.flock(_lock_fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
 except BlockingIOError:
@@ -203,24 +239,22 @@ except BlockingIOError:
     sys.exit(0)
 
 client = BinanceFapiClient(
-    api_key=api_key,
-    api_secret=api_secret,
-    rate_limiter=RateLimiter()
+    api_key=api_key, api_secret=api_secret, rate_limiter=RateLimiter()
 )
 
 try:
     # 预加载数量精度规则（分批止盈需要规整 qty）
     # 注意：exchangeInfo 在获取共享状态锁之前加载，避免长时间持锁。
     try:
-        _exchange_raw = client._request_with_retry('GET', '/fapi/v1/exchangeInfo', {})
+        _exchange_raw = client._request_with_retry("GET", "/fapi/v1/exchangeInfo", {})
     except Exception as _exc:
         print(f"🚨 获取 exchangeInfo 失败，退出: {_exc}")
         sys.exit(1)
 
-    for _s in _exchange_raw.get('symbols', []):
+    for _s in _exchange_raw.get("symbols", []):
         _rule = parse_symbol_trading_rule(_s)
         if _rule:
-            _rule_map[_s['symbol']] = _rule
+            _rule_map[_s["symbol"]] = _rule
 
     state = load_state()
     positions = client.get_positions()
@@ -241,8 +275,8 @@ try:
         if abs(pos.position_amt) == 0:
             continue
 
-        raw = getattr(pos, 'raw', {}) or {}
-        mark = float(raw.get('markPrice') or 0)
+        raw = getattr(pos, "raw", {}) or {}
+        mark = float(raw.get("markPrice") or 0)
         entry = pos.entry_price
         qty = abs(pos.position_amt)
 
@@ -252,20 +286,20 @@ try:
 
         direction = _direction_of(pos.position_amt)
         close_side = _close_side_of(direction)
-        dir_label = '多' if direction == TradeDirection.LONG else '空'
+        dir_label = "多" if direction == TradeDirection.LONG else "空"
 
         sym_state = state.get(sym, {})
 
         # ── 方向反转检测 ──────────────────────────────────────
         # 与 manage_positions.py 保持一致：方向变化时重置 partial_tp_done
-        saved_direction = sym_state.get('direction')
-        current_direction_str = 'LONG' if direction == TradeDirection.LONG else 'SHORT'
+        saved_direction = sym_state.get("direction")
+        current_direction_str = "LONG" if direction == TradeDirection.LONG else "SHORT"
         if saved_direction is not None and saved_direction != current_direction_str:
             sym_state = {}
             state[sym] = {}
 
         # 已执行过分批止盈，跳过
-        if sym_state.get('partial_tp_done', False):
+        if sym_state.get("partial_tp_done", False):
             continue
 
         sym_rule = _rule_map.get(sym)
@@ -275,8 +309,9 @@ try:
 
         # 找止损单，计算 sl_dist
         sl_orders = [
-            o for o in algo_orders
-            if o.get('symbol') == sym
+            o
+            for o in algo_orders
+            if o.get("symbol") == sym
             and Skill4Execute._is_stop_loss_order(o, close_side, entry, direction)
         ]
         if not sl_orders:
@@ -284,11 +319,11 @@ try:
             continue
 
         if direction == TradeDirection.LONG:
-            sl_order = min(sl_orders, key=lambda o: float(o.get('triggerPrice') or 0))
+            sl_order = min(sl_orders, key=lambda o: float(o.get("triggerPrice") or 0))
         else:
-            sl_order = max(sl_orders, key=lambda o: float(o.get('triggerPrice') or 0))
+            sl_order = max(sl_orders, key=lambda o: float(o.get("triggerPrice") or 0))
 
-        sl_price = float(sl_order.get('triggerPrice') or 0)
+        sl_price = float(sl_order.get("triggerPrice") or 0)
         if sl_price <= 0:
             skipped.append(f"{sym}({dir_label}): 止损触发价无效，跳过")
             continue
@@ -298,23 +333,24 @@ try:
         # 记录原始止损距离：首次见到 sl_dist > 0 时存入状态，
         # 后续止损上移到保本位（sl_dist==0）时复用原始值
         if sl_dist > 0:
-            sym_state['original_sl_dist'] = sl_dist
-            state[sym] = {**state.get(sym, {}), 'original_sl_dist': sl_dist}
+            sym_state["original_sl_dist"] = sl_dist
+            state[sym] = {**state.get(sym, {}), "original_sl_dist": sl_dist}
         elif sl_dist == 0:
-            original_sl_dist = sym_state.get('original_sl_dist')
+            original_sl_dist = sym_state.get("original_sl_dist")
             if original_sl_dist and float(original_sl_dist) > 0:
                 sl_dist = float(original_sl_dist)
             else:
-                skipped.append(f"{sym}({dir_label}): sl_dist=0（止损已在保本位）且无原始记录，跳过")
+                skipped.append(
+                    f"{sym}({dir_label}): sl_dist=0（止损已在保本位）且无原始记录，跳过"
+                )
                 continue
 
         profit = (mark - entry) if direction == TradeDirection.LONG else (entry - mark)
         pnl_pct = profit / entry * 100
         ratio = profit / sl_dist
 
-        # 1h 策略收紧触发比例：浮盈达到 0.5 倍止损距离即触发（其他策略保持 1.0 倍）
-        strategy_tag = sym_state.get('strategy_tag') or _get_strategy_tag_map().get(sym, '')
-        trigger_ratio = 0.5 if strategy_tag.endswith('_1h') else 1.0
+        # 触发比例：浮盈达到 1.0 倍止损距离即触发（所有策略统一）
+        trigger_ratio = 1.0
 
         if ratio < trigger_ratio:
             # 未触发，不记录 skipped（避免每5分钟刷屏）
@@ -323,7 +359,10 @@ try:
         # 规整 50% 数量
         raw_partial = qty / 2.0
         normed_partial = normalize_order_quantity(
-            symbol=sym, quantity=raw_partial, price=mark, rule=sym_rule,
+            symbol=sym,
+            quantity=raw_partial,
+            price=mark,
+            rule=sym_rule,
         )
         if normed_partial is None or normed_partial <= 0:
             skipped.append(
@@ -337,8 +376,12 @@ try:
         remaining_ok = (
             remaining <= 0
             or normalize_order_quantity(
-                symbol=sym, quantity=remaining, price=mark, rule=sym_rule,
-            ) is not None
+                symbol=sym,
+                quantity=remaining,
+                price=mark,
+                rule=sym_rule,
+            )
+            is not None
         )
         if not remaining_ok:
             skipped.append(
@@ -347,18 +390,22 @@ try:
             )
             continue
 
-        partial_tp_actions.append({
-            'symbol': sym,
-            'partial_qty': float(normed_partial),
-            'close_side': close_side,
-            'dir_label': dir_label,
-            'pnl_pct': pnl_pct,
-            'ratio': ratio,
-            'direction_str': current_direction_str,
-            'entry': entry,
-            'open_ms': sym_state.get('open_ms', 0.0),
-            'strategy_tag': sym_state.get('strategy_tag') or _get_strategy_tag_map().get(sym, 'unknown'),
-        })
+        partial_tp_actions.append(
+            {
+                "symbol": sym,
+                "partial_qty": float(normed_partial),
+                "close_side": close_side,
+                "dir_label": dir_label,
+                "pnl_pct": pnl_pct,
+                "ratio": ratio,
+                "direction_str": current_direction_str,
+                "entry": entry,
+                "open_ms": sym_state.get("open_ms", 0.0)
+                or _get_open_ms_from_db(sym, current_direction_str),
+                "strategy_tag": sym_state.get("strategy_tag")
+                or _get_strategy_tag_map().get(sym, "unknown"),
+            }
+        )
 
     # ── 执行分批止盈 ──────────────────────────────────────────
     # 无触发时也需要保存状态（original_sl_dist 等字段可能已更新）
@@ -366,7 +413,9 @@ try:
         save_state(state)
         if skipped:
             # 有跳过记录时才输出，方便排查
-            lines = [f"## 分批止盈 {datetime.now(timezone.utc).strftime('%m-%d %H:%M UTC')} (无触发)"]
+            lines = [
+                f"## 分批止盈 {datetime.now(timezone.utc).strftime('%m-%d %H:%M UTC')} (无触发)"
+            ]
             lines.append(f"\n_跳过 {len(skipped)} 个持仓:_")
             lines.extend(f"  - {s}" for s in skipped)
             print("\n".join(lines))
@@ -375,11 +424,13 @@ try:
     # 获取共享状态锁（非阻塞）：
     # manage_positions.py 正在写状态时持有此锁，本次跳过，等下次5分钟再跑。
     # 这防止两个脚本并发 read-modify-write 状态文件导致 partial_tp_done 被覆盖。
-    _state_lock_fh = open(SHARED_STATE_LOCK_FILE, 'w')
+    _state_lock_fh = open(SHARED_STATE_LOCK_FILE, "w")
     try:
         fcntl.flock(_state_lock_fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
-        print("⚠️ manage_positions.py 正在写入状态，本次分批止盈跳过（状态锁被占用），等待下次执行")
+        print(
+            "⚠️ manage_positions.py 正在写入状态，本次分批止盈跳过（状态锁被占用），等待下次执行"
+        )
         _state_lock_fh.close()
         sys.exit(0)
 
@@ -394,43 +445,45 @@ try:
                 del state[sym]
 
         for a in partial_tp_actions:
-            sym = a['symbol']
+            sym = a["symbol"]
             # 二次检查：获取锁后再次确认 partial_tp_done，
             # 防止锁等待期间 manage_positions.py 已写入 partial_tp_done=True
-            if state.get(sym, {}).get('partial_tp_done', False):
-                results.append(f"ℹ️ **{sym}**({a['dir_label']}) 分批止盈已由其他进程执行，跳过")
+            if state.get(sym, {}).get("partial_tp_done", False):
+                results.append(
+                    f"ℹ️ **{sym}**({a['dir_label']}) 分批止盈已由其他进程执行，跳过"
+                )
                 continue
             try:
                 order_result = client.place_market_order(
                     symbol=sym,
-                    side=a['close_side'],
-                    quantity=a['partial_qty'],
+                    side=a["close_side"],
+                    quantity=a["partial_qty"],
                 )
                 closed_at = datetime.now(timezone.utc).isoformat()
                 # 写入 partial_tp_done，与 manage_positions.py 共享状态
                 state[sym] = {
                     **state.get(sym, {}),
-                    'partial_tp_done': True,
-                    'direction': a['direction_str'],
+                    "partial_tp_done": True,
+                    "direction": a["direction_str"],
                 }
                 # 获取实际成交均价，回退到 mark price，最终回退到 entry
                 exit_price = order_result.price if order_result.price > 0 else 0.0
                 if exit_price <= 0:
                     pos_match = next((p for p in positions if p.symbol == sym), None)
                     if pos_match:
-                        raw = getattr(pos_match, 'raw', {}) or {}
-                        exit_price = float(raw.get('markPrice', 0) or 0)
+                        raw = getattr(pos_match, "raw", {}) or {}
+                        exit_price = float(raw.get("markPrice", 0) or 0)
                 if exit_price <= 0:
-                    exit_price = a['entry']
+                    exit_price = a["entry"]
                 # 写入 trade_records
                 record_partial_tp(
                     symbol=sym,
-                    direction=a['direction_str'],
-                    entry_price=a['entry'],
+                    direction=a["direction_str"],
+                    entry_price=a["entry"],
                     exit_price=exit_price,
-                    partial_qty=a['partial_qty'],
-                    strategy_tag=a['strategy_tag'],
-                    open_ms=a['open_ms'],
+                    partial_qty=a["partial_qty"],
+                    strategy_tag=a["strategy_tag"],
+                    open_ms=a["open_ms"],
                     closed_at=closed_at,
                     order_id=order_result.order_id,
                 )

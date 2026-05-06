@@ -83,6 +83,15 @@ class MemoryStore:
         )
     """
 
+    _CREATE_POSITION_OPEN_TIMES_TABLE_SQL = """
+        CREATE TABLE IF NOT EXISTS position_open_times (
+            symbol      TEXT NOT NULL,
+            direction   TEXT NOT NULL,
+            open_ms     REAL NOT NULL,
+            PRIMARY KEY (symbol, direction)
+        )
+    """
+
     def __init__(self, db_path: str = "data/memory_store.db") -> None:
         """
         初始化 MemoryStore，创建数据库连接并确保表结构存在。
@@ -107,6 +116,7 @@ class MemoryStore:
         cursor.execute(self._CREATE_REFLECTIONS_TABLE_SQL)
         cursor.execute(self._CREATE_REFLECTIONS_INDEX_SQL)
         cursor.execute(self._CREATE_TRADE_SYNC_KEYS_TABLE_SQL)
+        cursor.execute(self._CREATE_POSITION_OPEN_TIMES_TABLE_SQL)
         self._ensure_trade_records_strategy_tag(cursor)
         self._ensure_reflection_logs_strategy_tag(cursor)
         self._ensure_trade_records_close_reason(cursor)
@@ -239,6 +249,49 @@ class MemoryStore:
             (f"%:{symbol}:%", f"%:{order_id}:%"),
         )
         return [row[0] for row in cursor.fetchall()]
+
+    def record_position_open(self, symbol: str, direction: str, open_ms: float) -> None:
+        """
+        记录持仓开启时间，用于后续计算真实持仓时长。
+
+        参数:
+            symbol: 币种，如 BTCUSDT
+            direction: 方向，long 或 short
+            open_ms: 开仓时间戳（毫秒，UTC）
+        """
+        self._conn.execute(
+            "INSERT OR REPLACE INTO position_open_times (symbol, direction, open_ms) VALUES (?, ?, ?)",
+            (symbol, direction.lower(), open_ms),
+        )
+        self._conn.commit()
+
+    def get_position_open_time(self, symbol: str, direction: str) -> float | None:
+        """
+        获取指定币种和方向的持仓开启时间戳（毫秒）。
+
+        返回:
+            open_ms（毫秒，UTC），若不存在则返回 None
+        """
+        cursor = self._conn.execute(
+            "SELECT open_ms FROM position_open_times WHERE symbol = ? AND direction = ?",
+            (symbol, direction.lower()),
+        )
+        row = cursor.fetchone()
+        return row[0] if row else None
+
+    def remove_position_open_time(self, symbol: str, direction: str) -> None:
+        """
+        删除持仓开启时间记录（平仓后调用）。
+
+        参数:
+            symbol: 币种
+            direction: 方向，long 或 short
+        """
+        self._conn.execute(
+            "DELETE FROM position_open_times WHERE symbol = ? AND direction = ?",
+            (symbol, direction.lower()),
+        )
+        self._conn.commit()
 
     def get_recent_trades(self, limit: int = 50) -> List[TradeRecord]:
         """

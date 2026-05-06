@@ -9,6 +9,7 @@
 
 流水线：插针扫描 → Skill-3 策略制定 → Skill-4 执行 → Skill-5 进化
 """
+
 import argparse
 import json
 import logging
@@ -42,6 +43,7 @@ from src.infra.trade_sync import BinanceTradeSyncer
 from src.models.types import AccountState
 from src.skills.crypto_wick import LongTermWickSkill, ShortTermWickSkill
 from src.skills.skill3_strategy import Skill3Strategy
+from src.infra.circuit_breaker import CircuitBreaker
 from src.skills.skill4_execute import Skill4Execute
 from src.skills.skill5_evolve import Skill5Evolve
 
@@ -97,14 +99,16 @@ def make_account_provider(
     for p in fapi_client.get_positions():
         raw = p.raw or {}
         mark_price = safe_float(raw.get("markPrice"), p.entry_price)
-        positions.append({
-            "symbol": p.symbol,
-            "direction": "long" if p.position_amt > 0 else "short",
-            "quantity": abs(p.position_amt),
-            "entry_price": p.entry_price,
-            "current_price": mark_price if mark_price > 0 else p.entry_price,
-            "unrealized_pnl": p.unrealized_pnl,
-        })
+        positions.append(
+            {
+                "symbol": p.symbol,
+                "direction": "long" if p.position_amt > 0 else "short",
+                "quantity": abs(p.position_amt),
+                "entry_price": p.entry_price,
+                "current_price": mark_price if mark_price > 0 else p.entry_price,
+                "unrealized_pnl": p.unrealized_pnl,
+            }
+        )
         tracked_symbols.add(p.symbol)
     daily_realized_pnl = calculate_daily_realized_pnl(
         fapi_client,
@@ -165,7 +169,9 @@ def render_markdown(report: dict) -> str:
             "影线{ratio:.1f}x, 深{depth:.1f}%, 量{vol}, 费{funding}".format(
                 emoji=direction_emoji,
                 symbol=item.get("symbol", ""),
-                wick_type="下插针" if item.get("wick_type") == "lower_wick" else "上插针",
+                wick_type="下插针"
+                if item.get("wick_type") == "lower_wick"
+                else "上插针",
                 score=item.get("wick_score", 0),
                 ratio=safe_float(item.get("shadow_ratio")),
                 depth=safe_float(item.get("wick_depth_pct")),
@@ -176,25 +182,29 @@ def render_markdown(report: dict) -> str:
 
     # 插针模式跳过 Skill-2，直接展示自动生成的 ratings
     ratings = scan.get("ratings", [])
-    lines.extend([
-        "",
-        "自动评级（跳过 TradingAgents）:",
-        f"- 评级数量: {len(ratings)}",
-    ])
+    lines.extend(
+        [
+            "",
+            "自动评级（跳过 TradingAgents）:",
+            f"- 评级数量: {len(ratings)}",
+        ]
+    )
     for rating in ratings[:3]:
         lines.append(
             f"- {rating.get('symbol')}: {rating.get('rating_score')}/10, "
             f"信号 {rating.get('signal')}, 置信度 {rating.get('confidence', 0):.0f}%"
         )
 
-    lines.extend([
-        "",
-        "已触发/已执行交易:",
-        f"- 本轮开仓/成交: {decision['executed_count']}",
-        f"- 本轮风控拒绝: {decision['risk_blocked_count']}",
-        f"- 本轮执行失败: {decision['execution_failed_count']}",
-        f"- 服务端已平仓同步: {execution['closed_since_last_run_count']}",
-    ])
+    lines.extend(
+        [
+            "",
+            "已触发/已执行交易:",
+            f"- 本轮开仓/成交: {decision['executed_count']}",
+            f"- 本轮风控拒绝: {decision['risk_blocked_count']}",
+            f"- 本轮执行失败: {decision['execution_failed_count']}",
+            f"- 服务端已平仓同步: {execution['closed_since_last_run_count']}",
+        ]
+    )
     for item in execution["this_run"]:
         lines.append(
             f"- {item.get('symbol')} {item.get('direction')} → {item.get('status')} "
@@ -203,12 +213,16 @@ def render_markdown(report: dict) -> str:
         )
 
     lines.append("")
-    lines.extend(render_positions_markdown(report["positions"], max_detail=3, compact=True))
+    lines.extend(
+        render_positions_markdown(report["positions"], max_detail=3, compact=True)
+    )
     lines.append("")
     lines.extend(render_protection_markdown(report["protection_orders"], max_detail=3))
     lines.append("")
     lines.extend(render_account_markdown(account, risk))
-    warn_lines = render_warnings_markdown(report.get("warnings", []), report.get("errors", []))
+    warn_lines = render_warnings_markdown(
+        report.get("warnings", []), report.get("errors", [])
+    )
     if warn_lines:
         lines.append("")
         lines.extend(warn_lines)
@@ -244,13 +258,17 @@ def run_report(args: argparse.Namespace) -> dict:
 
         if args.mode == "1d":
             wick_skill = LongTermWickSkill(
-                state_store, load_schema("crypto_wick_input.json"),
-                load_schema("crypto_wick_output.json"), public_client
+                state_store,
+                load_schema("crypto_wick_input.json"),
+                load_schema("crypto_wick_output.json"),
+                public_client,
             )
         else:
             wick_skill = ShortTermWickSkill(
-                state_store, load_schema("crypto_wick_input.json"),
-                load_schema("crypto_wick_output.json"), public_client
+                state_store,
+                load_schema("crypto_wick_input.json"),
+                load_schema("crypto_wick_output.json"),
+                public_client,
             )
 
         scan_input: dict[str, Any] = {
@@ -304,9 +322,7 @@ def run_report(args: argparse.Namespace) -> dict:
             }
             s2_id = state_store.save("skill2_output", s2_compatible)
 
-            tracked_symbols.update(
-                rating.get("symbol", "") for rating in ratings
-            )
+            tracked_symbols.update(rating.get("symbol", "") for rating in ratings)
 
             # Skill-3 策略制定（插针专属参数）
             skill3 = Skill3Strategy(
@@ -320,12 +336,12 @@ def run_report(args: argparse.Namespace) -> dict:
                 risk_ratio=risk_ratio,
                 require_market_price=True,
                 # ── 插针策略专属参数 ──
-                max_hold_hours=12.0 if args.mode == "4h" else 24.0,
-                atr_stop_mult=1.0,          # 止损更紧（插针天然定义了止损位）
-                atr_tp_mult=2.5,            # 盈亏比 2.5:1
-                min_stop_pct=0.003,         # 最小止损 0.3%
-                max_stop_pct=0.03,          # 最大止损 3%（插针天然定义止损位，不需要大止损）
-                trailing_stop_ratio=0.6,    # 更激进的追踪止损
+                max_hold_hours=8.0 if args.mode == "4h" else 24.0,  # 4h策略75%触发=6h
+                atr_stop_mult=1.0,  # 止损更紧（插针天然定义了止损位）
+                atr_tp_mult=2.5,  # 盈亏比 2.5:1
+                min_stop_pct=0.003,  # 最小止损 0.3%
+                max_stop_pct=0.03,  # 最大止损 3%（插针天然定义止损位，不需要大止损）
+                trailing_stop_ratio=0.6,  # 更激进的追踪止损
                 trailing_activation_mult=0.8,
                 trailing_activation_mult_hv=1.2,
                 high_vol_tp_mult=3.0,
@@ -344,6 +360,9 @@ def run_report(args: argparse.Namespace) -> dict:
                 account_state_provider=account_provider,
                 poll_interval=30,
                 trading_rule_provider=trading_rule_provider,
+                circuit_breaker=CircuitBreaker(),
+                public_client=public_client,
+                memory_store=memory_store,
             )
             s4_input_id = state_store.save("skill4_input", {"input_state_id": s3_id})
             s4_id = skill4.execute(s4_input_id)
@@ -354,14 +373,18 @@ def run_report(args: argparse.Namespace) -> dict:
             )
 
             # 同步服务端已平仓交易
-            syncer = BinanceTradeSyncer(fapi_client, memory_store, risk_controller=risk_controller)
+            syncer = BinanceTradeSyncer(
+                fapi_client, memory_store, risk_controller=risk_controller
+            )
             sync_symbols = set(scan_symbols)
             sync_symbols.update(
                 r.get("symbol", "") for r in s4_data.get("execution_results", [])
             )
             synced_closed_count = syncer.sync_closed_trades(
                 symbols=sync_symbols,
-                metadata_by_symbol=_build_full_metadata(state_store, s4_data.get("execution_results", [])),
+                metadata_by_symbol=_build_full_metadata(
+                    state_store, s4_data.get("execution_results", [])
+                ),
             )
 
             # Skill-5 进化（完全复用）
@@ -464,8 +487,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-score", type=int, default=35)
     parser.add_argument("--max-candidates", type=int, default=15)
     parser.add_argument("--symbols", type=str, default="")
-    parser.add_argument("--direction", type=str, choices=["long", "short"], default="long",
-                        help="方向过滤：long=仅下插针做多（默认），short=仅上插针做空")
+    parser.add_argument(
+        "--direction",
+        type=str,
+        choices=["long", "short"],
+        default="long",
+        help="方向过滤：long=仅下插针做多（默认），short=仅上插针做空",
+    )
     parser.add_argument("--paper", action="store_true", help="强制模拟盘")
     parser.add_argument("--format", choices=["markdown", "json"], default="markdown")
     return parser.parse_args()

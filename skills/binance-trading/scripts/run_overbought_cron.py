@@ -5,6 +5,7 @@
 脚本直接执行超买扫描和交易流水线，并输出稳定结构的 JSON 或 Markdown。
 定时任务应调用本脚本，而不是让模型根据零散命令输出临场总结。
 """
+
 import argparse
 import json
 import logging
@@ -37,9 +38,14 @@ from src.infra.state_store import StateStore
 from src.infra.trade_sync import BinanceTradeSyncer
 from src.integrations.trading_agents_adapter import create_trading_agents_analyzer
 from src.models.types import AccountState
-from src.skills.crypto_overbought import LongTermOverboughtSkill, ShortTermOverboughtSkill, HourlyOverboughtSkill
+from src.skills.crypto_overbought import (
+    LongTermOverboughtSkill,
+    ShortTermOverboughtSkill,
+    HourlyOverboughtSkill,
+)
 from src.skills.skill2_analyze import Skill2Analyze, TradingAgentsModule
 from src.skills.skill3_strategy import Skill3Strategy
+from src.infra.circuit_breaker import CircuitBreaker
 from src.skills.skill4_execute import Skill4Execute
 from src.skills.skill5_evolve import Skill5Evolve
 
@@ -95,14 +101,16 @@ def make_account_provider(
     for p in fapi_client.get_positions():
         raw = p.raw or {}
         mark_price = safe_float(raw.get("markPrice"), p.entry_price)
-        positions.append({
-            "symbol": p.symbol,
-            "direction": "long" if p.position_amt > 0 else "short",
-            "quantity": abs(p.position_amt),
-            "entry_price": p.entry_price,
-            "current_price": mark_price if mark_price > 0 else p.entry_price,
-            "unrealized_pnl": p.unrealized_pnl,
-        })
+        positions.append(
+            {
+                "symbol": p.symbol,
+                "direction": "long" if p.position_amt > 0 else "short",
+                "quantity": abs(p.position_amt),
+                "entry_price": p.entry_price,
+                "current_price": mark_price if mark_price > 0 else p.entry_price,
+                "unrealized_pnl": p.unrealized_pnl,
+            }
+        )
         tracked_symbols.add(p.symbol)
     daily_realized_pnl = calculate_daily_realized_pnl(
         fapi_client,
@@ -171,30 +179,38 @@ def render_markdown(report: dict) -> str:
             )
         )
 
-    lines.extend([
-        "",
-        "分析评级:",
-        f"- 分析币种: {analysis['analyzed_count']}",
-        f"- 达标币种: {analysis['passed_count']}",
-        f"- 评级门槛: {analysis['rating_threshold']}",
-    ])
+    lines.extend(
+        [
+            "",
+            "分析评级:",
+            f"- 分析币种: {analysis['analyzed_count']}",
+            f"- 达标币种: {analysis['passed_count']}",
+            f"- 评级门槛: {analysis['rating_threshold']}",
+        ]
+    )
     display_ratings = analysis.get("all_ratings") or analysis["ratings"]
     for rating in display_ratings[:3]:
-        passed = "达标" if rating.get("rating_score", 0) >= analysis["rating_threshold"] else "未达标"
+        passed = (
+            "达标"
+            if rating.get("rating_score", 0) >= analysis["rating_threshold"]
+            else "未达标"
+        )
         lines.append(
             f"- {rating.get('symbol')}: {rating.get('rating_score')}/10, "
             f"信号 {rating.get('signal')}, 置信度 {rating.get('confidence', 0):.0f}%, "
             f"{passed}"
         )
 
-    lines.extend([
-        "",
-        "已触发/已执行交易:",
-        f"- 本轮开仓/成交: {decision['executed_count']}",
-        f"- 本轮风控拒绝: {decision['risk_blocked_count']}",
-        f"- 本轮执行失败: {decision['execution_failed_count']}",
-        f"- 服务端已平仓同步: {execution['closed_since_last_run_count']}",
-    ])
+    lines.extend(
+        [
+            "",
+            "已触发/已执行交易:",
+            f"- 本轮开仓/成交: {decision['executed_count']}",
+            f"- 本轮风控拒绝: {decision['risk_blocked_count']}",
+            f"- 本轮执行失败: {decision['execution_failed_count']}",
+            f"- 服务端已平仓同步: {execution['closed_since_last_run_count']}",
+        ]
+    )
     for item in execution["this_run"]:
         lines.append(
             f"- {item.get('symbol')} {item.get('direction')} → {item.get('status')} "
@@ -203,12 +219,16 @@ def render_markdown(report: dict) -> str:
         )
 
     lines.append("")
-    lines.extend(render_positions_markdown(report["positions"], max_detail=3, compact=True))
+    lines.extend(
+        render_positions_markdown(report["positions"], max_detail=3, compact=True)
+    )
     lines.append("")
     lines.extend(render_protection_markdown(report["protection_orders"], max_detail=3))
     lines.append("")
     lines.extend(render_account_markdown(account, risk))
-    warn_lines = render_warnings_markdown(report.get("warnings", []), report.get("errors", []))
+    warn_lines = render_warnings_markdown(
+        report.get("warnings", []), report.get("errors", [])
+    )
     if warn_lines:
         lines.append("")
         lines.extend(warn_lines)
@@ -245,18 +265,24 @@ def run_report(args: argparse.Namespace) -> dict:
 
         if args.mode == "1d":
             overbought_skill = LongTermOverboughtSkill(
-                state_store, load_schema("crypto_overbought_input.json"),
-                load_schema("crypto_overbought_output.json"), public_client
+                state_store,
+                load_schema("crypto_overbought_input.json"),
+                load_schema("crypto_overbought_output.json"),
+                public_client,
             )
         elif args.mode == "1h":
             overbought_skill = HourlyOverboughtSkill(
-                state_store, load_schema("crypto_overbought_input.json"),
-                load_schema("crypto_overbought_output.json"), public_client
+                state_store,
+                load_schema("crypto_overbought_input.json"),
+                load_schema("crypto_overbought_output.json"),
+                public_client,
             )
         else:
             overbought_skill = ShortTermOverboughtSkill(
-                state_store, load_schema("crypto_overbought_input.json"),
-                load_schema("crypto_overbought_output.json"), public_client
+                state_store,
+                load_schema("crypto_overbought_input.json"),
+                load_schema("crypto_overbought_output.json"),
+                public_client,
             )
 
         scan_input = {
@@ -319,8 +345,7 @@ def run_report(args: argparse.Namespace) -> dict:
 
             if s2_data.get("ratings"):
                 tracked_symbols.update(
-                    rating.get("symbol", "")
-                    for rating in s2_data.get("ratings", [])
+                    rating.get("symbol", "") for rating in s2_data.get("ratings", [])
                 )
                 skill3 = Skill3Strategy(
                     state_store=state_store,
@@ -343,18 +368,25 @@ def run_report(args: argparse.Namespace) -> dict:
                     #   做空持仓上限 10%（风险不对称，比做多更保守）
                     # 1d 模式：波段做空，atr_stop_mult=1.5，ATR ≤ 4.7% 可进场
                     #   盈亏比 2.3:1（atr_tp_mult=3.5 / atr_stop_mult=1.5）
-                    max_stop_pct=0.04 if args.mode == "1h" else (0.05 if args.mode == "4h" else 0.07),
-                    max_hold_hours=12.0 if args.mode == "1h" else 48.0,
+                    max_stop_pct=0.04
+                    if args.mode == "1h"
+                    else (0.05 if args.mode == "4h" else 0.07),
+                    max_hold_hours=4.0
+                    if args.mode == "1h"
+                    else 24.0,  # 1h策略75%触发=3h，时间衰减止盈真正生效
                     atr_stop_mult=1.5 if args.mode == "1h" else 1.2,
                     atr_tp_mult=3.0 if args.mode == "1h" else 3.5,
-                    trailing_stop_ratio=0.5 if args.mode == "1h" else 0.45,
-                    trailing_activation_mult=1.5 if args.mode == "1h" else 1.3,
-                    trailing_activation_mult_hv=2.0 if args.mode == "1h" else 1.8,
+                    # 4h做空收紧移动止损（做空亏损无限，必须更快锁利）
+                    trailing_stop_ratio=0.5 if args.mode == "1h" else 0.40,
+                    trailing_activation_mult=1.5 if args.mode == "1h" else 1.2,
+                    trailing_activation_mult_hv=2.0 if args.mode == "1h" else 1.5,
                     max_trades=2 if args.mode == "1h" else 3,
                     max_position_pct=6.0 if args.mode == "1h" else 10.0,
-                    max_margin_usdt=10.0 if args.mode == "1h" else None,
+                    max_margin_usdt=5.0 if args.mode in ("1h", "4h") else None,
                 )
-                s3_input_id = state_store.save("skill3_input", {"input_state_id": s2_id})
+                s3_input_id = state_store.save(
+                    "skill3_input", {"input_state_id": s2_id}
+                )
                 s3_id = skill3.execute(s3_input_id)
                 s3_data = state_store.load(s3_id)
 
@@ -368,8 +400,13 @@ def run_report(args: argparse.Namespace) -> dict:
                     poll_interval=30,
                     trading_rule_provider=trading_rule_provider,
                     use_market_order=True,
+                    circuit_breaker=CircuitBreaker(),
+                    public_client=public_client,
+                    memory_store=memory_store,
                 )
-                s4_input_id = state_store.save("skill4_input", {"input_state_id": s3_id})
+                s4_input_id = state_store.save(
+                    "skill4_input", {"input_state_id": s3_id}
+                )
                 s4_id = skill4.execute(s4_input_id)
                 s4_data = state_store.load(s4_id)
                 tracked_symbols.update(
@@ -377,7 +414,9 @@ def run_report(args: argparse.Namespace) -> dict:
                     for result in s4_data.get("execution_results", [])
                 )
 
-                syncer = BinanceTradeSyncer(fapi_client, memory_store, risk_controller=risk_controller)
+                syncer = BinanceTradeSyncer(
+                    fapi_client, memory_store, risk_controller=risk_controller
+                )
                 sync_symbols = set(scan_symbols)
                 sync_symbols.update(
                     r.get("symbol", "") for r in s4_data.get("execution_results", [])
@@ -390,7 +429,9 @@ def run_report(args: argparse.Namespace) -> dict:
                     log.warning(f"获取持仓列表失败，历史持仓可能漏同步: {_pos_exc}")
                 synced_closed_count = syncer.sync_closed_trades(
                     symbols=sync_symbols,
-                    metadata_by_symbol=_build_full_metadata(state_store, s4_data.get("execution_results", [])),
+                    metadata_by_symbol=_build_full_metadata(
+                        state_store, s4_data.get("execution_results", [])
+                    ),
                 )
 
                 skill5 = Skill5Evolve(
@@ -402,7 +443,9 @@ def run_report(args: argparse.Namespace) -> dict:
                     trade_syncer=None,
                     risk_controller=risk_controller,
                 )
-                s5_input_id = state_store.save("skill5_input", {"input_state_id": s4_id})
+                s5_input_id = state_store.save(
+                    "skill5_input", {"input_state_id": s4_id}
+                )
                 s5_id = skill5.execute(s5_input_id)
                 s5_data = state_store.load(s5_id)
 

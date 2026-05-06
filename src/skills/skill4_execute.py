@@ -26,6 +26,7 @@ from src.infra.exchange_rules import (
     normalize_order_price,
 )
 from src.infra.fees import calc_crypto_fee
+from src.infra.memory_store import MemoryStore
 from src.infra.risk_controller import RiskController
 from src.infra.state_store import StateStore
 from src.models.types import (
@@ -91,6 +92,7 @@ class Skill4Execute(BaseSkill):
         use_market_order: bool = False,
         circuit_breaker: Optional[CircuitBreaker] = None,
         public_client: Optional[Any] = None,
+        memory_store: Optional[MemoryStore] = None,
     ) -> None:
         """
         初始化 Skill-4。
@@ -119,6 +121,7 @@ class Skill4Execute(BaseSkill):
             circuit_breaker: 市场熔断器实例，不传则内部创建
             public_client: Binance 公开市场数据客户端（用于熔断器获取 BTC K 线），
                 需实现 get_klines 或 get_klines_cached 方法
+            memory_store: 长期记忆库（用于记录持仓开启时间，计算真实持仓时长）
         """
         super().__init__(state_store, input_schema, output_schema)
         self.name = "skill4_execute"
@@ -136,6 +139,7 @@ class Skill4Execute(BaseSkill):
         self._use_market_order = use_market_order
         self._circuit_breaker = circuit_breaker or CircuitBreaker()
         self._public_client = public_client
+        self._memory_store = memory_store
 
     def run(self, input_data: dict) -> dict:
         """
@@ -220,12 +224,11 @@ class Skill4Execute(BaseSkill):
         results: List[dict] = [None] * len(trade_plans)  # type: ignore[list-item]
         workers = min(self._max_concurrent_trades, len(trade_plans))
 
-        log.info(
-            f"[{self.name}] 并发执行 {len(trade_plans)} 笔计划，"
-            f"线程数={workers}"
-        )
+        log.info(f"[{self.name}] 并发执行 {len(trade_plans)} 笔计划，线程数={workers}")
 
-        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="skill4") as pool:
+        with ThreadPoolExecutor(
+            max_workers=workers, thread_name_prefix="skill4"
+        ) as pool:
             # 以 index 为 key 保留原始顺序
             future_to_idx = {
                 pool.submit(self._execute_single_trade, plan): idx
@@ -286,9 +289,10 @@ class Skill4Execute(BaseSkill):
         account = self._account_state_provider()
 
         # 优先使用 Skill-3 已按交易所规则规整的 quantity；兼容旧状态则回退到百分比计算。
-        quantity = plan.get("quantity") or (
-            account.total_balance * position_size_pct / 100
-        ) / entry_price
+        quantity = (
+            plan.get("quantity")
+            or (account.total_balance * position_size_pct / 100) / entry_price
+        )
         if quantity <= 0:
             return self._make_result(
                 symbol=symbol,
@@ -329,13 +333,13 @@ class Skill4Execute(BaseSkill):
             leverage=self._leverage,
         )
         validation = self._risk_controller.validate_order(
-            order_request, account, strategy_tag=strategy_tag,
+            order_request,
+            account,
+            strategy_tag=strategy_tag,
         )
 
         if not validation.passed:
-            log.warning(
-                f"[{self.name}] {symbol} 风控拒绝: {validation.reason}"
-            )
+            log.warning(f"[{self.name}] {symbol} 风控拒绝: {validation.reason}")
             return self._make_result(
                 symbol=symbol,
                 direction=direction_str,
@@ -351,7 +355,9 @@ class Skill4Execute(BaseSkill):
             or self._risk_controller.is_strategy_paper_mode(strategy_tag)
         )
         if is_paper:
-            log.info(f"[{self.name}] {symbol} Paper Mode（global={self._risk_controller.is_paper_mode()} strategy={self._risk_controller.is_strategy_paper_mode(strategy_tag)}），模拟下单")
+            log.info(
+                f"[{self.name}] {symbol} Paper Mode（global={self._risk_controller.is_paper_mode()} strategy={self._risk_controller.is_strategy_paper_mode(strategy_tag)}），模拟下单"
+            )
             return self._make_result(
                 symbol=symbol,
                 direction=direction_str,
@@ -381,9 +387,15 @@ class Skill4Execute(BaseSkill):
         try:
             existing_orders = self._binance_client.get_open_orders(symbol)
             for eo in existing_orders:
-                eo_dict = eo if isinstance(eo, dict) else (eo.raw if hasattr(eo, 'raw') else {})
-                if (str(eo_dict.get("side", "")).upper() == side
-                        and str(eo_dict.get("type", "")).upper() == "LIMIT"):
+                eo_dict = (
+                    eo
+                    if isinstance(eo, dict)
+                    else (eo.raw if hasattr(eo, "raw") else {})
+                )
+                if (
+                    str(eo_dict.get("side", "")).upper() == side
+                    and str(eo_dict.get("type", "")).upper() == "LIMIT"
+                ):
                     log.warning(
                         f"[{self.name}] {symbol} 已有同方向 LIMIT 挂单，跳过避免重复下单"
                     )
@@ -410,7 +422,9 @@ class Skill4Execute(BaseSkill):
 
         try:
             if self._use_market_order:
-                log.info(f"[{self.name}] {symbol} 使用市价单入场 side={side} qty={quantity}")
+                log.info(
+                    f"[{self.name}] {symbol} 使用市价单入场 side={side} qty={quantity}"
+                )
                 order_result = self._binance_client.place_market_order(
                     symbol=symbol,
                     side=side,
@@ -656,45 +670,74 @@ class Skill4Execute(BaseSkill):
                         f"[{self.name}] 🔴 BTC 4h跌幅 {cb.btc_4h_return_pct:.2f}%，触发熔断强平！"
                     )
                     self._cancel_algo_orders_safe(symbol)
-                    # 持久化 Paper Mode，防止下次 cron 继续开新仓
-                    self._risk_controller.enable_paper_mode("btc_circuit_breaker_paper_flag")
                     close_result = self._close_position(
-                        symbol, close_side, position_amt, "btc_circuit_breaker", start_time
+                        symbol,
+                        close_side,
+                        position_amt,
+                        "btc_circuit_breaker",
+                        start_time,
                     )
-                    # 验仓：确保持仓已关闭；若平仓失败，记录 CRITICAL 并重试一次
-                    if close_result.get("status") != OrderStatus.FILLED.value:
+                    if close_result.get("status") == OrderStatus.FILLED.value:
+                        self._risk_controller.enable_paper_mode(
+                            "btc_circuit_breaker_paper_flag"
+                        )
+                        log.warning(
+                            f"[{self.name}] 🔴 {symbol} 熔断强平成功，已切换 Paper Mode"
+                        )
+                    else:
                         log.critical(
                             f"[{self.name}] 🔴 {symbol} 熔断强平失败，尝试重试平仓..."
                         )
                         close_result = self._close_position(
-                            symbol, close_side, position_amt,
-                            "btc_circuit_breaker_retry", start_time
+                            symbol,
+                            close_side,
+                            position_amt,
+                            "btc_circuit_breaker_retry",
+                            start_time,
                         )
-                        if close_result.get("status") != OrderStatus.FILLED.value:
+                        if close_result.get("status") == OrderStatus.FILLED.value:
+                            self._risk_controller.enable_paper_mode(
+                                "btc_circuit_breaker_paper_flag"
+                            )
+                            log.warning(
+                                f"[{self.name}] 🔴 {symbol} 熔断强平重试成功，已切换 Paper Mode"
+                            )
+                        else:
                             log.critical(
                                 f"[{self.name}] 🔴🔴 {symbol} 重试平仓仍失败，"
-                                f"持仓可能仍在！手动介入！status={close_result.get('status')}"
+                                f"持仓可能仍在！下次 cron 继续尝试平仓，不切换 Paper Mode！status={close_result.get('status')}"
                             )
                     return close_result
                 if cb.level >= CircuitLevel.REDUCE:
                     reduce_qty = position_amt * cb.reduce_ratio
                     normed_reduce = normalize_order_quantity(
-                        symbol=symbol, quantity=reduce_qty, price=current_price,
-                        rule=self._trading_rule_provider() if self._trading_rule_provider else None,
+                        symbol=symbol,
+                        quantity=reduce_qty,
+                        price=current_price,
+                        rule=self._trading_rule_provider()
+                        if self._trading_rule_provider
+                        else None,
                     )
                     if normed_reduce and normed_reduce > 0:
                         log.warning(
                             f"[{self.name}] 🟡 BTC 4h跌幅 {cb.btc_4h_return_pct:.2f}%，"
-                            f"熔断减仓 {normed_reduce} ({cb.reduce_ratio*100:.0f}%)！"
+                            f"熔断减仓 {normed_reduce} ({cb.reduce_ratio * 100:.0f}%)！"
                         )
-                        self._close_position(symbol, close_side, normed_reduce, "btc_circuit_reduce", start_time)
+                        self._close_position(
+                            symbol,
+                            close_side,
+                            normed_reduce,
+                            "btc_circuit_reduce",
+                            start_time,
+                        )
                         # 重新查询持仓量
                         updated_pos = self._binance_client.get_position_risk(symbol)
                         position_amt = abs(updated_pos.position_amt)
                         if position_amt <= 0:
                             return self._make_monitor_result(
                                 status=OrderStatus.FILLED.value,
-                                close_price=current_price, fee=0.0,
+                                close_price=current_price,
+                                fee=0.0,
                                 reason=f"btc_circuit_reduce_{cb.level.name}",
                                 start_time=start_time,
                             )
@@ -706,7 +749,7 @@ class Skill4Execute(BaseSkill):
                     new_sl = stop_loss_price * (1 + cb.tighten_ratio)
                 log.warning(
                     f"[{self.name}] 🟡 BTC 4h跌幅 {cb.btc_4h_return_pct:.2f}%，"
-                    f"收紧止损 {stop_loss_price:.6f} → {new_sl:.6f} ({cb.tighten_ratio*100:.0f}%)"
+                    f"收紧止损 {stop_loss_price:.6f} → {new_sl:.6f} ({cb.tighten_ratio * 100:.0f}%)"
                 )
                 stop_loss_price = new_sl
 
@@ -728,6 +771,11 @@ class Skill4Execute(BaseSkill):
             # 入场成交检测：首次观测到持仓后挂服务端止损/止盈单
             if position_amt > 0 and not position_opened:
                 position_opened = True
+                open_ms = time.time() * 1000
+                if self._memory_store is not None:
+                    self._memory_store.record_position_open(
+                        symbol, direction.value, open_ms
+                    )
                 # 挂保护单前先清理已有同方向保护条件单，避免 -4130 冲突
                 self._cancel_conflicting_protection_orders(symbol, close_side)
                 server_sl_tp_placed = self._place_server_sl_tp(
@@ -890,7 +938,7 @@ class Skill4Execute(BaseSkill):
                         log.info(
                             f"[{self.name}] {symbol} 止盈下调 step {tp_decay_step}→{new_tp_step}: "
                             f"{current_tp_price:.8g} → {new_tp:.8g} "
-                            f"(已持仓 {elapsed/3600:.1f}h/{max_hold_hours}h)"
+                            f"(已持仓 {elapsed / 3600:.1f}h/{max_hold_hours}h)"
                         )
                         current_tp_price = new_tp
                         tp_decay_step = new_tp_step
@@ -899,8 +947,7 @@ class Skill4Execute(BaseSkill):
             # 需求 4.7：超时检查
             if elapsed >= max_hold_seconds:
                 log.info(
-                    f"[{self.name}] {symbol} 持仓超时: "
-                    f"已持有 {elapsed / 3600:.2f} 小时"
+                    f"[{self.name}] {symbol} 持仓超时: 已持有 {elapsed / 3600:.2f} 小时"
                 )
                 if not position_opened:
                     self._cancel_entry_order(symbol)
@@ -920,9 +967,7 @@ class Skill4Execute(BaseSkill):
             # 日亏损检查（需求 4.11）
             account = self._account_state_provider()
             if self._risk_controller.check_daily_loss(account):
-                log.warning(
-                    f"[{self.name}] 监控中日亏损触及阈值，执行降级并平仓"
-                )
+                log.warning(f"[{self.name}] 监控中日亏损触及阈值，执行降级并平仓")
                 self._risk_controller.execute_degradation(
                     account, binance_client=self._binance_client
                 )
@@ -978,7 +1023,11 @@ class Skill4Execute(BaseSkill):
         参数:
             confirm_timeout_override: 覆盖默认超时时间（秒）；市价单传入较小值加速确认。
         """
-        timeout = confirm_timeout_override if confirm_timeout_override is not None else self._entry_confirm_timeout
+        timeout = (
+            confirm_timeout_override
+            if confirm_timeout_override is not None
+            else self._entry_confirm_timeout
+        )
         start_time = time.monotonic()
         initial_position_amt = pre_order_position_amt
 
@@ -997,8 +1046,7 @@ class Skill4Execute(BaseSkill):
                     # 如果持仓量没变（入场单未成交），绝不动已有保护单。
                     was_flat = initial_position_amt <= 0
                     position_increased = (
-                        not was_flat
-                        and position_amt > initial_position_amt * 1.001
+                        not was_flat and position_amt > initial_position_amt * 1.001
                     )
 
                     if was_flat or position_increased:
@@ -1030,7 +1078,8 @@ class Skill4Execute(BaseSkill):
                                 ),
                                 "reason": (
                                     "protection_failed_closed"
-                                    if close_result.get("status") == OrderStatus.FILLED.value
+                                    if close_result.get("status")
+                                    == OrderStatus.FILLED.value
                                     else "protection_failed_close_failed"
                                 ),
                                 "entry_price": pos_risk.entry_price,
@@ -1156,12 +1205,20 @@ class Skill4Execute(BaseSkill):
 
         if direction == TradeDirection.LONG:
             active = trailing_active or current_price >= activation_price
-            best = max(best_price or current_price, current_price) if active else best_price
+            best = (
+                max(best_price or current_price, current_price)
+                if active
+                else best_price
+            )
             trail_price = best * (1 - trail_pct / 100) if active else 0.0
             triggered = active and current_price <= trail_price
         else:
             active = trailing_active or current_price <= activation_price
-            best = min(best_price or current_price, current_price) if active else best_price
+            best = (
+                min(best_price or current_price, current_price)
+                if active
+                else best_price
+            )
             trail_price = best * (1 + trail_pct / 100) if active else 0.0
             triggered = active and current_price >= trail_price
 
@@ -1187,9 +1244,9 @@ class Skill4Execute(BaseSkill):
         计算止损上移目标价和新阶段编号。
 
         阶梯规则（做多方向，做空对称）：
-          step 0→1：浮盈 ≥ 1.0×sl_dist → 止损移到入场价（保本）
-          step 1→2：浮盈 ≥ 1.5×sl_dist → 止损移到入场价 + 0.5×sl_dist（锁住半个止损距离）
-          step 2→3：浮盈 ≥ 2.0×sl_dist → 止损移到入场价 + 1.0×sl_dist（锁住一个止损距离）
+          step 0→1：浮盈 ≥ 1.3×sl_dist → 止损移到入场价（保本）
+          step 1→2：浮盈 ≥ 1.8×sl_dist → 止损移到入场价 + 0.5×sl_dist（锁住半个止损距离）
+          step 2→3：浮盈 ≥ 2.3×sl_dist → 止损移到入场价 + 1.0×sl_dist（锁住一个止损距离）
 
         安全校验：新止损价必须比当前止损价更优（做多时更高，做空时更低），
         防止因入场价异常导致止损倒退。
@@ -1206,22 +1263,22 @@ class Skill4Execute(BaseSkill):
         if direction == TradeDirection.LONG:
             profit = current_price - entry_price
             # 从最高阶梯往下检查，直接跳到当前浮盈对应的最高阶梯
-            if sl_step < 3 and profit >= sl_dist * 2.0:
+            if sl_step < 3 and profit >= sl_dist * 2.3:
                 candidate_sl, candidate_step = entry_price + sl_dist * 1.0, 3
-            elif sl_step < 2 and profit >= sl_dist * 1.5:
+            elif sl_step < 2 and profit >= sl_dist * 1.8:
                 candidate_sl, candidate_step = entry_price + sl_dist * 0.5, 2
-            elif sl_step < 1 and profit >= sl_dist * 1.0:
+            elif sl_step < 1 and profit >= sl_dist * 1.3:
                 candidate_sl, candidate_step = entry_price, 1
             # 安全校验：新止损价必须高于当前止损价（做多方向只能上移）
             if candidate_sl is not None and candidate_sl <= current_sl_price:
                 return None, sl_step
         else:
             profit = entry_price - current_price
-            if sl_step < 3 and profit >= sl_dist * 2.0:
+            if sl_step < 3 and profit >= sl_dist * 2.3:
                 candidate_sl, candidate_step = entry_price - sl_dist * 1.0, 3
-            elif sl_step < 2 and profit >= sl_dist * 1.5:
+            elif sl_step < 2 and profit >= sl_dist * 1.8:
                 candidate_sl, candidate_step = entry_price - sl_dist * 0.5, 2
-            elif sl_step < 1 and profit >= sl_dist * 1.0:
+            elif sl_step < 1 and profit >= sl_dist * 1.3:
                 candidate_sl, candidate_step = entry_price, 1
             # 安全校验：新止损价必须低于当前止损价（做空方向只能下移）
             if candidate_sl is not None and candidate_sl >= current_sl_price:
@@ -1273,12 +1330,16 @@ class Skill4Execute(BaseSkill):
                     except Exception as exc:
                         log.warning(f"[{self.name}] {symbol} 撤旧止损单失败: {exc}")
         except Exception as exc:
-            log.warning(f"[{self.name}] {symbol} 获取条件单列表失败，跳过止损上移: {exc}")
+            log.warning(
+                f"[{self.name}] {symbol} 获取条件单列表失败，跳过止损上移: {exc}"
+            )
             return False
 
         new_sl_price_norm = self._normalize_price_for_exchange(symbol, new_sl_price)
         if new_sl_price_norm is None:
-            log.warning(f"[{self.name}] {symbol} 止损上移价格规整失败，尝试恢复原止损单")
+            log.warning(
+                f"[{self.name}] {symbol} 止损上移价格规整失败，尝试恢复原止损单"
+            )
             self._try_restore_sl(symbol, close_side, quantity, fallback_sl_price)
             return False
         try:
@@ -1291,7 +1352,9 @@ class Skill4Execute(BaseSkill):
             )
             return True
         except Exception as exc:
-            log.warning(f"[{self.name}] {symbol} 止损上移挂单失败: {exc}，尝试恢复原止损单")
+            log.warning(
+                f"[{self.name}] {symbol} 止损上移挂单失败: {exc}，尝试恢复原止损单"
+            )
             if cancelled:
                 self._try_restore_sl(symbol, close_side, quantity, fallback_sl_price)
             return False
@@ -1313,11 +1376,7 @@ class Skill4Execute(BaseSkill):
         if str(order.get("side", "")).upper() != close_side:
             return False
 
-        raw_type = (
-            order.get("type")
-            or order.get("origType")
-            or order.get("orderType")
-        )
+        raw_type = order.get("type") or order.get("origType") or order.get("orderType")
         if raw_type:
             return str(raw_type).upper() == "STOP_MARKET"
 
@@ -1329,9 +1388,9 @@ class Skill4Execute(BaseSkill):
         if trigger <= 0:
             return False
         if direction == TradeDirection.LONG:
-            return trigger < entry_price   # 做多止损在入场价下方
+            return trigger < entry_price  # 做多止损在入场价下方
         else:
-            return trigger > entry_price   # 做空止损在入场价上方
+            return trigger > entry_price  # 做空止损在入场价上方
 
     def _try_restore_sl(
         self,
@@ -1462,7 +1521,9 @@ class Skill4Execute(BaseSkill):
         try:
             orders = self._binance_client.get_open_algo_orders(symbol)
             for o in orders:
-                if not self._is_take_profit_order(o, close_side, entry_price, direction):
+                if not self._is_take_profit_order(
+                    o, close_side, entry_price, direction
+                ):
                     continue
                 algo_id = o.get("algoId", "")
                 if algo_id:
@@ -1473,12 +1534,16 @@ class Skill4Execute(BaseSkill):
                     except Exception as exc:
                         log.warning(f"[{self.name}] {symbol} 撤旧止盈单失败: {exc}")
         except Exception as exc:
-            log.warning(f"[{self.name}] {symbol} 获取条件单列表失败，跳过止盈下调: {exc}")
+            log.warning(
+                f"[{self.name}] {symbol} 获取条件单列表失败，跳过止盈下调: {exc}"
+            )
             return False
 
         new_tp_price_norm = self._normalize_price_for_exchange(symbol, new_tp_price)
         if new_tp_price_norm is None:
-            log.warning(f"[{self.name}] {symbol} 止盈下调价格规整失败，尝试恢复原止盈单")
+            log.warning(
+                f"[{self.name}] {symbol} 止盈下调价格规整失败，尝试恢复原止盈单"
+            )
             self._try_restore_tp(symbol, close_side, quantity, fallback_tp_price)
             return False
         try:
@@ -1491,7 +1556,9 @@ class Skill4Execute(BaseSkill):
             )
             return True
         except Exception as exc:
-            log.warning(f"[{self.name}] {symbol} 止盈下调挂单失败: {exc}，尝试恢复原止盈单")
+            log.warning(
+                f"[{self.name}] {symbol} 止盈下调挂单失败: {exc}，尝试恢复原止盈单"
+            )
             self._try_restore_tp(symbol, close_side, quantity, fallback_tp_price)
             return False
 
@@ -1512,11 +1579,7 @@ class Skill4Execute(BaseSkill):
         if str(order.get("side", "")).upper() != close_side:
             return False
 
-        raw_type = (
-            order.get("type")
-            or order.get("origType")
-            or order.get("orderType")
-        )
+        raw_type = order.get("type") or order.get("origType") or order.get("orderType")
         if raw_type:
             return str(raw_type).upper() == "TAKE_PROFIT_MARKET"
 
@@ -1526,9 +1589,9 @@ class Skill4Execute(BaseSkill):
         if trigger <= 0:
             return False
         if direction == TradeDirection.LONG:
-            return trigger > entry_price   # 做多止盈在入场价上方
+            return trigger > entry_price  # 做多止盈在入场价上方
         else:
-            return trigger < entry_price   # 做空止盈在入场价下方
+            return trigger < entry_price  # 做空止盈在入场价下方
 
     def _try_restore_tp(
         self,
@@ -1558,8 +1621,7 @@ class Skill4Execute(BaseSkill):
             log.info(f"[{self.name}] {symbol} 已恢复原止盈单: {fallback_norm}")
         except Exception as exc:
             log.warning(
-                f"[{self.name}] {symbol} 恢复原止盈单失败: {exc}，"
-                f"本地轮询继续保护。"
+                f"[{self.name}] {symbol} 恢复原止盈单失败: {exc}，本地轮询继续保护。"
             )
 
     def _close_position(
@@ -1833,7 +1895,9 @@ class Skill4Execute(BaseSkill):
             if quantity <= 0 or entry_price <= 0 or current_price <= 0:
                 continue
 
-            direction = TradeDirection.LONG if position_amt > 0 else TradeDirection.SHORT
+            direction = (
+                TradeDirection.LONG if position_amt > 0 else TradeDirection.SHORT
+            )
             close_side = "SELL" if direction == TradeDirection.LONG else "BUY"
 
             self._ensure_symbol_leverage(symbol)
@@ -1850,10 +1914,13 @@ class Skill4Execute(BaseSkill):
                 )
                 # 查找该仓位的真实策略标签，避免跨策略冷却期漏拦
                 real_strategy_tag = self._risk_controller._get_position_strategy_tag(
-                    symbol, direction.value,
+                    symbol,
+                    direction.value,
                 )
                 self._risk_controller.record_stop_loss(
-                    symbol, direction.value, strategy_tag=real_strategy_tag,
+                    symbol,
+                    direction.value,
+                    strategy_tag=real_strategy_tag,
                 )
                 self._cancel_algo_orders_safe(symbol)
                 self._close_position(
@@ -1868,7 +1935,11 @@ class Skill4Execute(BaseSkill):
                 )
                 self._cancel_algo_orders_safe(symbol)
                 self._close_position(
-                    symbol, close_side, quantity, "existing_take_profit", time.monotonic()
+                    symbol,
+                    close_side,
+                    quantity,
+                    "existing_take_profit",
+                    time.monotonic(),
                 )
                 continue
 
@@ -1880,10 +1951,14 @@ class Skill4Execute(BaseSkill):
 
             # 统计已有的 SL/TP 保护单数量（不含 Trailing Stop）
             sl_count = self._count_algo_orders_by_type(
-                algo_orders, close_side, "STOP_MARKET",
+                algo_orders,
+                close_side,
+                "STOP_MARKET",
             )
             tp_count = self._count_algo_orders_by_type(
-                algo_orders, close_side, "TAKE_PROFIT_MARKET",
+                algo_orders,
+                close_side,
+                "TAKE_PROFIT_MARKET",
             )
 
             # 核心逻辑：只要 SL 和 TP 各有至少一张，就认为保护完整，不动它。
@@ -1937,7 +2012,8 @@ class Skill4Execute(BaseSkill):
         此方法仅撤销历史残留的 trailing stop 单，不再补挂或重挂。
         """
         trailing_orders = [
-            o for o in algo_orders
+            o
+            for o in algo_orders
             if (
                 str(o.get("side", "")).upper() == close_side
                 and (
@@ -2088,62 +2164,51 @@ class Skill4Execute(BaseSkill):
         """统计 SL + TP 保护单数量（不含 Trailing Stop，它是额外保护层）。"""
         count = 0
         for order in orders:
-            if (
-                str(order.get("side", "")).upper() == side
-                and self._looks_like_sl_tp_order(order)
-            ):
+            if str(
+                order.get("side", "")
+            ).upper() == side and self._looks_like_sl_tp_order(order):
                 count += 1
         return count
 
     def _count_algo_orders_by_type(
-        self, orders: list, side: str, order_type: str,
+        self,
+        orders: list,
+        side: str,
+        order_type: str,
     ) -> int:
         """统计指定方向和类型的条件单数量（不校验触发价）。"""
         count = 0
         for order in orders:
-            if (
-                str(order.get("side", "")).upper() == side
-                and self._algo_order_type_matches(order, order_type)
-            ):
+            if str(
+                order.get("side", "")
+            ).upper() == side and self._algo_order_type_matches(order, order_type):
                 count += 1
         return count
 
     @staticmethod
     def _algo_order_type_matches(order: dict, expected_type: str) -> bool:
-        raw_type = (
-            order.get("type")
-            or order.get("origType")
-            or order.get("orderType")
-        )
+        raw_type = order.get("type") or order.get("origType") or order.get("orderType")
         if raw_type:
             return str(raw_type).upper() == expected_type
 
         # Binance Algo Service open-order responses may omit STOP_MARKET /
         # TAKE_PROFIT_MARKET and only expose algoType plus triggerPrice.
-        return (
-            str(order.get("algoType", "")).upper() == "CONDITIONAL"
-            and bool(order.get("triggerPrice") or order.get("stopPrice"))
+        return str(order.get("algoType", "")).upper() == "CONDITIONAL" and bool(
+            order.get("triggerPrice") or order.get("stopPrice")
         )
 
     @staticmethod
     def _looks_like_protection_algo_order(order: dict) -> bool:
         # 包含 TRAILING_STOP_MARKET，以便孤儿单清理也能覆盖移动止损残留单
         protection_types = {"STOP_MARKET", "TAKE_PROFIT_MARKET", "TRAILING_STOP_MARKET"}
-        raw_type = (
-            order.get("type")
-            or order.get("origType")
-            or order.get("orderType")
-        )
+        raw_type = order.get("type") or order.get("origType") or order.get("orderType")
         if raw_type:
             return str(raw_type).upper() in protection_types
 
-        return (
-            str(order.get("algoType", "")).upper() == "CONDITIONAL"
-            and bool(
-                order.get("triggerPrice")
-                or order.get("stopPrice")
-                or order.get("callbackRate")  # TRAILING_STOP_MARKET 标识字段
-            )
+        return str(order.get("algoType", "")).upper() == "CONDITIONAL" and bool(
+            order.get("triggerPrice")
+            or order.get("stopPrice")
+            or order.get("callbackRate")  # TRAILING_STOP_MARKET 标识字段
         )
 
     @staticmethod
@@ -2154,11 +2219,7 @@ class Skill4Execute(BaseSkill):
         SL/TP 完整性判断，防止"SL+TP+Trail=3 != 2"触发误撤。
         """
         sl_tp_types = {"STOP_MARKET", "TAKE_PROFIT_MARKET"}
-        raw_type = (
-            order.get("type")
-            or order.get("origType")
-            or order.get("orderType")
-        )
+        raw_type = order.get("type") or order.get("origType") or order.get("orderType")
         if raw_type:
             return str(raw_type).upper() in sl_tp_types
 
@@ -2167,9 +2228,8 @@ class Skill4Execute(BaseSkill):
         if order.get("callbackRate"):
             return False
 
-        return (
-            str(order.get("algoType", "")).upper() == "CONDITIONAL"
-            and bool(order.get("triggerPrice") or order.get("stopPrice"))
+        return str(order.get("algoType", "")).upper() == "CONDITIONAL" and bool(
+            order.get("triggerPrice") or order.get("stopPrice")
         )
 
     @staticmethod
@@ -2198,9 +2258,7 @@ class Skill4Execute(BaseSkill):
             return True
 
         raw_quantity = (
-            order.get("quantity")
-            or order.get("origQty")
-            or order.get("origQuantity")
+            order.get("quantity") or order.get("origQty") or order.get("origQuantity")
         )
         if raw_quantity in (None, ""):
             return True
@@ -2331,7 +2389,8 @@ class Skill4Execute(BaseSkill):
             return
 
         conflicting = [
-            o for o in algo_orders
+            o
+            for o in algo_orders
             if (
                 str(o.get("side", "")).upper() == close_side.upper()
                 and self._looks_like_protection_algo_order(o)
@@ -2355,7 +2414,10 @@ class Skill4Execute(BaseSkill):
             log.warning(f"[{self.name}] {symbol} 清理 Algo 条件单失败: {exc}")
 
     def _cancel_sl_tp_orders_only(
-        self, symbol: str, close_side: str, algo_orders: list,
+        self,
+        symbol: str,
+        close_side: str,
+        algo_orders: list,
     ) -> None:
         """只撤销 SL/TP 条件单，保留 Trailing Stop。
 
@@ -2371,7 +2433,8 @@ class Skill4Execute(BaseSkill):
             if algo_id:
                 try:
                     self._binance_client.cancel_algo_order(
-                        symbol=symbol, algo_id=int(algo_id),
+                        symbol=symbol,
+                        algo_id=int(algo_id),
                     )
                     log.info(
                         f"[{self.name}] {symbol} 已撤销 SL/TP 条件单 algoId={algo_id}"
@@ -2458,9 +2521,14 @@ class Skill4Execute(BaseSkill):
             result["strategy_tag"] = strategy_tag
         # 从 reason 推导 close_reason，供 skill5 写入 trade_records
         _KNOWN_CLOSE_REASONS = {
-            "stop_loss", "take_profit", "timeout", "partial_tp",
-            "trailing_stop", "external_close",
-            "existing_stop_loss", "existing_take_profit",
+            "stop_loss",
+            "take_profit",
+            "timeout",
+            "partial_tp",
+            "trailing_stop",
+            "external_close",
+            "existing_stop_loss",
+            "existing_take_profit",
         }
         result["close_reason"] = reason if reason in _KNOWN_CLOSE_REASONS else "unknown"
         return result

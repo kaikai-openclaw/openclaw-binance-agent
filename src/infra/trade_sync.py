@@ -97,6 +97,17 @@ class BinanceTradeSyncer:
                                 "close_reason", "server_close"
                             ),
                         }
+                closed_at_ms = int(closed_order.closed_at.timestamp() * 1000)
+                direction_str = "long" if closed_order.side == "SELL" else "short"
+                open_ms = self._memory_store.get_position_open_time(
+                    closed_order.symbol, direction_str
+                )
+                if open_ms is not None and open_ms > 0:
+                    hold_hours = max(0.0, (closed_at_ms - open_ms) / 3600000.0)
+                    metadata["hold_duration_hours"] = hold_hours
+                    self._memory_store.remove_position_open_time(
+                        closed_order.symbol, direction_str
+                    )
                 record = self._to_trade_record(closed_order, metadata)
                 # ── 去重：检查是否已被 partial_tp.py 或之前的同步写入 ──
                 # partial_tp.py 用 partial_tp 前缀，trade_sync 用 binance_user_order 前缀
@@ -110,9 +121,6 @@ class BinanceTradeSyncer:
                         closed_order.order_id,
                     )
                     continue
-                # 用 orderId + 成交时间戳（ms）组合作为幂等键，
-                # 防止 Binance 跨时间复用同一 orderId 导致漏记。
-                closed_at_ms = int(closed_order.closed_at.timestamp() * 1000)
                 sync_key = (
                     f"binance_user_order:{closed_order.symbol}:"
                     f"{closed_order.order_id}:{closed_at_ms}"

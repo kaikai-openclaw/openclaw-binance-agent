@@ -298,6 +298,7 @@ def main():
             trading_rule_provider=trading_rule_provider,
             circuit_breaker=CircuitBreaker(),
             public_client=public_client,
+            memory_store=memory_store,
         )
         s4_input_id = state_store.save("skill4_input", {"input_state_id": s3_id})
         s4_id = skill4.execute(s4_input_id)

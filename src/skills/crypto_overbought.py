@@ -495,8 +495,10 @@ class _CryptoOverboughtBase(BaseSkill):
                 )
                 result["momentum_penalty"] = momentum_penalty
 
-                # ── 1h RSI 先行信号 ──────────────────────────────────────
-                # 1h RSI 比 4h RSI 领先 1-3h，1h 已超买说明盘中已有做空压力
+                # ── 1h RSI 先行信号（增强版：加入趋势方向）───────────────
+                # 做空方向：RSI趋势比绝对值更重要
+                # RSI在超买区继续上升 = 空头被轧风险极高
+                # RSI在超买区开始下降 = 反弹信号，做空更安全
                 try:
                     klines_1h = self._fetch_klines(symbol, "1h", 20)
                     if klines_1h:
@@ -506,31 +508,70 @@ class _CryptoOverboughtBase(BaseSkill):
                             if current_price > 0
                             else None
                         )
+                        # 计算RSI趋势：用前一个周期的RSI比较
+                        rsi_1h_previous = (
+                            calc_rsi(closes_1h[:-2], RSI_PERIOD)
+                            if len(closes_1h) >= 3 and current_price > 0
+                            else None
+                        )
+                        rsi_1h_trend = (
+                            (rsi_1h_raw - rsi_1h_previous)
+                            if rsi_1h_raw is not None and rsi_1h_previous is not None
+                            else None
+                        )
                         result["rsi_1h"] = (
                             round(rsi_1h_raw, 1) if rsi_1h_raw is not None else None
                         )
+                        result["rsi_1h_trend"] = (
+                            round(rsi_1h_trend, 2) if rsi_1h_trend is not None else None
+                        )
                         # 1h RSI 先行信号：1h 已超买说明盘中已有做空压力
                         # 做空方向：1h RSI 越高 = 短期反弹风险越大 = 做空越危险
-                        # RSI 75-80：超买确认，做空压力积聚，加分
-                        # RSI 80-90：超买严重，短期反弹风险高，少加分
-                        # RSI > 90：极端超买，轧空风险极高，减分
+                        # RSI 75-80：超买确认，做空压力积聚
+                        # RSI 80-90：超买严重，短期反弹风险高
+                        # RSI > 90：极端超买，轧空风险极高
+                        # RSI趋势：上升=加剧危险，下降=缓解风险
                         if rsi_1h_raw is not None:
+                            base_bonus = 0
                             if 75 <= rsi_1h_raw < 80:
-                                result["overbought_score"] += 5
-                                result["rsi_1h_bonus"] = 5
+                                base_bonus = 5
                             elif 80 <= rsi_1h_raw < 90:
-                                result["overbought_score"] += 3
-                                result["rsi_1h_bonus"] = 3
+                                base_bonus = 3
                             elif rsi_1h_raw >= 90:
-                                result["overbought_score"] -= 5
-                                result["rsi_1h_bonus"] = -5
+                                base_bonus = -5
+                            # 根据RSI趋势调整：做空方向与超跌相反
+                            # RSI继续上升 → 加剧轧空风险 → 减少加分或加重扣分
+                            # RSI开始下降 → 反弹可能 → 增加加分或减少扣分
+                            if base_bonus > 0 and rsi_1h_trend is not None:
+                                if rsi_1h_trend > 2:
+                                    # RSI快速上升：轧空风险加剧，减少加分
+                                    final_bonus = base_bonus - 2
+                                elif rsi_1h_trend > 0:
+                                    # RSI缓慢上升：保持原分
+                                    final_bonus = base_bonus
+                                else:
+                                    # RSI开始下降：反弹信号，增加加分
+                                    final_bonus = base_bonus + 2
+                            elif base_bonus < 0 and rsi_1h_trend is not None:
+                                # RSI在极端区继续上升：加重扣分
+                                if rsi_1h_trend > 2:
+                                    final_bonus = base_bonus - 2
+                                elif rsi_1h_trend > 0:
+                                    final_bonus = base_bonus
+                                else:
+                                    # RSI下降：缓解，减分减少
+                                    final_bonus = base_bonus + 2
                             else:
-                                result["rsi_1h_bonus"] = 0
+                                final_bonus = base_bonus
+                            result["overbought_score"] += final_bonus
+                            result["rsi_1h_bonus"] = final_bonus
                     else:
                         result["rsi_1h"] = None
+                        result["rsi_1h_trend"] = None
                         result["rsi_1h_bonus"] = 0
                 except Exception:
                     result["rsi_1h"] = None
+                    result["rsi_1h_trend"] = None
                     result["rsi_1h_bonus"] = 0
 
                 # ── 周期进度检测 ──────────────────────────────────────────
@@ -645,6 +686,7 @@ class _CryptoOverboughtBase(BaseSkill):
                         ),
                         "momentum_penalty": result.get("momentum_penalty", 0),
                         "rsi_1h": result.get("rsi_1h"),
+                        "rsi_1h_trend": result.get("rsi_1h_trend"),
                         "rsi_1h_bonus": result.get("rsi_1h_bonus", 0),
                         "hour_candles_in_4h": result.get("hour_candles_in_4h", 0),
                         "elapsed_ratio": result.get("elapsed_ratio", 1.0),

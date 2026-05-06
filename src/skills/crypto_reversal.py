@@ -317,7 +317,7 @@ class _CryptoReversalBase(BaseSkill):
 
         closes = [float(k[4]) for k in klines]
         last_close = closes[-1]
-        lookback = 12
+        lookback = 6
         recent_return_pct = (
             (last_close - closes[-lookback]) / closes[-lookback] * 100
             if len(closes) > lookback and closes[-lookback] > 0

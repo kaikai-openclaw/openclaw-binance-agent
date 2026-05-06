@@ -60,6 +60,7 @@ class Skill5Evolve(BaseSkill):
         fee_market: str = "crypto",
         fee_order_type: str = "taker",
         fee_vip_discount: float = 0.0,
+        public_client: Optional[Any] = None,
     ) -> None:
         """
         初始化 Skill-5。
@@ -73,6 +74,8 @@ class Skill5Evolve(BaseSkill):
             trade_syncer: 可选的 Binance 服务端平仓成交同步器
             fee_market / fee_order_type / fee_vip_discount: P0-4 费率建模参数，
                 用于计算净胜率/净盈亏；不改动原始 pnl_amount 存储（真实性要求）
+            public_client: Binance 公开市场数据客户端（用于 Paper Mode 恢复时检查 BTC 市场稳定），
+                需实现 get_klines 或 get_klines_cached 方法
         """
         super().__init__(state_store, input_schema, output_schema)
         self.name = "skill5_evolve"
@@ -83,6 +86,7 @@ class Skill5Evolve(BaseSkill):
         self._fee_market = fee_market
         self._fee_order_type = fee_order_type
         self._fee_vip_discount = fee_vip_discount
+        self._public_client = public_client
 
     def run(self, input_data: dict) -> dict:
         """
@@ -111,21 +115,16 @@ class Skill5Evolve(BaseSkill):
         if input_state_id:
             try:
                 upstream_data = self.state_store.load(input_state_id)
-                execution_results = upstream_data.get(
-                    "execution_results", []
-                )
+                execution_results = upstream_data.get("execution_results", [])
             except Exception as exc:
-                log.warning(
-                    f"[{self.name}] 读取上游数据失败: {exc}"
-                )
+                log.warning(f"[{self.name}] 读取上游数据失败: {exc}")
 
         # 步骤 2：构建持仓展示数据（需求 5.2）
         positions_display = self._build_positions_display(account)
 
         # 计算未实现盈亏总额
         unrealized_pnl = sum(
-            p.get("unrealized_pnl", 0.0)
-            for p in (account.positions or [])
+            p.get("unrealized_pnl", 0.0) for p in (account.positions or [])
         )
 
         # 步骤 3：提取平仓交易数据存入 Memory_Store（需求 5.3）
@@ -136,9 +135,7 @@ class Skill5Evolve(BaseSkill):
         evolution = self._compute_evolution()
 
         # 生成 Markdown 表格（需求 5.2）
-        markdown = self._generate_markdown(
-            account, positions_display, evolution
-        )
+        markdown = self._generate_markdown(account, positions_display, evolution)
         log.info(f"[{self.name}] Markdown 报告:\n{markdown}")
 
         output = {
@@ -163,9 +160,7 @@ class Skill5Evolve(BaseSkill):
 
         return output
 
-    def _build_positions_display(
-        self, account: AccountState
-    ) -> List[dict]:
+    def _build_positions_display(self, account: AccountState) -> List[dict]:
         """
         构建持仓展示数据，计算每笔持仓的盈亏比例。
 
@@ -188,20 +183,20 @@ class Skill5Evolve(BaseSkill):
             # 计算盈亏比例（需求 5.2）
             if entry_price > 0 and current_price > 0:
                 direction = TradeDirection(direction_str)
-                pnl_ratio = calculate_pnl_ratio(
-                    entry_price, current_price, direction
-                )
+                pnl_ratio = calculate_pnl_ratio(entry_price, current_price, direction)
             else:
                 pnl_ratio = 0.0
 
-            positions_display.append({
-                "symbol": symbol,
-                "direction": direction_str,
-                "quantity": quantity,
-                "entry_price": entry_price,
-                "current_price": current_price,
-                "pnl_ratio": round(pnl_ratio, 4),
-            })
+            positions_display.append(
+                {
+                    "symbol": symbol,
+                    "direction": direction_str,
+                    "quantity": quantity,
+                    "entry_price": entry_price,
+                    "current_price": current_price,
+                    "pnl_ratio": round(pnl_ratio, 4),
+                }
+            )
 
         return positions_display
 
@@ -233,9 +228,7 @@ class Skill5Evolve(BaseSkill):
                 log.warning(f"[{self.name}] 加载 strategy_tag 缓存失败: {exc}")
         return self._strategy_tag_cache.get(symbol, "")
 
-    def _record_closed_trades(
-        self, execution_results: List[dict]
-    ) -> None:
+    def _record_closed_trades(self, execution_results: List[dict]) -> None:
         """
         提取平仓交易数据存入 Memory_Store。
 
@@ -301,14 +294,9 @@ class Skill5Evolve(BaseSkill):
 
             try:
                 self._memory_store.record_trade(trade_record)
-                log.info(
-                    f"[{self.name}] 记录交易: {symbol} "
-                    f"pnl={pnl_amount}"
-                )
+                log.info(f"[{self.name}] 记录交易: {symbol} pnl={pnl_amount}")
             except Exception as exc:
-                log.error(
-                    f"[{self.name}] 记录交易失败: {exc}"
-                )
+                log.error(f"[{self.name}] 记录交易失败: {exc}")
 
     def _sync_server_closed_trades(
         self,
@@ -354,15 +342,29 @@ class Skill5Evolve(BaseSkill):
         if not symbols:
             return
 
+        # ── Step 1: 同步 pipeline 本轮产生的平仓 ───────────────
+        if symbols:
+            try:
+                synced = self._trade_syncer.sync_closed_trades(
+                    symbols=symbols,
+                    metadata_by_symbol=metadata_by_symbol,
+                )
+                if synced:
+                    log.info(f"[{self.name}] 已同步 {synced} 笔 Binance 服务端平仓成交")
+            except Exception as exc:
+                log.warning(f"[{self.name}] 同步 Binance 服务端成交失败: {exc}")
+
+        # ── Step 2: 兜底扫收（捕捉跨运行周期被强平的币种）─────────
+        # 即使 symbols 为空也执行：主动从账户持仓和历史交易记录
+        # 发现候选币种，用更长窗口（7天）扫收已实现盈亏成交。
+        # 能避免 DEXEUSDT/COMPUSDT 这类在 pipeline 运行间隔期
+        # 被强平、下一轮扫描又不再出现的币种漏记。
         try:
-            synced = self._trade_syncer.sync_closed_trades(
-                symbols=symbols,
-                metadata_by_symbol=metadata_by_symbol,
-            )
-            if synced:
-                log.info(f"[{self.name}] 已同步 {synced} 笔 Binance 服务端平仓成交")
+            swept = self._trade_syncer.sync_all_candidates()
+            if swept:
+                log.info(f"[{self.name}] 兜底扫收完成，新增同步 {swept} 笔")
         except Exception as exc:
-            log.warning(f"[{self.name}] 同步 Binance 服务端成交失败: {exc}")
+            log.warning(f"[{self.name}] 兜底扫收失败: {exc}")
 
     def _compute_evolution(self) -> dict:
         """
@@ -410,8 +412,7 @@ class Skill5Evolve(BaseSkill):
         # 全局不足 20 笔时跳过（与 compute_evolution_adjustment 保持一致）
         if trade_count < 20:
             log.info(
-                f"[{self.name}] 交易记录不足 20 笔 "
-                f"({trade_count} 笔)，跳过进化计算"
+                f"[{self.name}] 交易记录不足 20 笔 ({trade_count} 笔)，跳过进化计算"
             )
             return {
                 "win_rate": 0.0,
@@ -421,8 +422,7 @@ class Skill5Evolve(BaseSkill):
                 "trade_count": trade_count,
                 "adjustment_applied": False,
                 "adjustment_detail": (
-                    f"交易记录不足 20 笔（当前 {trade_count} 笔），"
-                    "使用默认策略参数"
+                    f"交易记录不足 20 笔（当前 {trade_count} 笔），使用默认策略参数"
                 ),
                 "current_rating_threshold": DEFAULT_RATING_THRESHOLD,
                 "current_risk_ratio": DEFAULT_RISK_RATIO,
@@ -458,24 +458,28 @@ class Skill5Evolve(BaseSkill):
                 wins = sum(1 for t in recent_paper if t.pnl_amount > 0)
                 total_pnl = sum(t.pnl_amount for t in recent_paper)
                 paper_win_rate = wins / len(recent_paper) * 100
-                if paper_win_rate >= 60.0 and total_pnl > 0:
+                btc_stable = self._is_btc_market_stable()
+                if paper_win_rate >= 60.0 and total_pnl > 0 and btc_stable:
                     log.info(
                         f"[{self.name}] 全局模拟盘近期 5 笔胜率 {paper_win_rate}%，"
-                        f"净利为正，自动解除全局模拟盘"
+                        f"净利为正，BTC 市场稳定，自动解除全局模拟盘"
                     )
                     self._risk_controller.disable_paper_mode(
                         reason="auto_recovery_global"
                     )
                     recovery_suggested = True
+                elif paper_win_rate >= 60.0 and total_pnl > 0 and not btc_stable:
+                    log.info(
+                        f"[{self.name}] 全局模拟盘近期 5 笔胜率 {paper_win_rate}%，"
+                        f"净利为正，但 BTC 市场仍不稳定（跌幅 > 8%），暂不恢复实盘"
+                    )
 
         # 取全局最新反思日志的参数作为兼容输出
         latest = self._memory_store.get_latest_reflection(strategy_tag="")
         current_threshold = (
             latest.suggested_rating_threshold if latest else DEFAULT_RATING_THRESHOLD
         )
-        current_risk = (
-            latest.suggested_risk_ratio if latest else DEFAULT_RISK_RATIO
-        )
+        current_risk = latest.suggested_risk_ratio if latest else DEFAULT_RISK_RATIO
 
         return {
             "win_rate": round(global_stats.win_rate, 2),
@@ -484,7 +488,9 @@ class Skill5Evolve(BaseSkill):
             "net_avg_pnl_amount": round(net_avg_pnl, 4),
             "trade_count": trade_count,
             "adjustment_applied": any_adjustment,
-            "adjustment_detail": "; ".join(all_details) if all_details else "各策略参数维持不变",
+            "adjustment_detail": "; ".join(all_details)
+            if all_details
+            else "各策略参数维持不变",
             "current_rating_threshold": current_threshold,
             "current_risk_ratio": current_risk,
             "strategy_stats": strategy_stats,
@@ -565,7 +571,9 @@ class Skill5Evolve(BaseSkill):
             "adjustment_applied": adjustment_applied,
             "adjustment_detail": adjustment_detail,
             "current_rating_threshold": (
-                reflection.suggested_rating_threshold if reflection else current_threshold
+                reflection.suggested_rating_threshold
+                if reflection
+                else current_threshold
             ),
             "current_risk_ratio": (
                 reflection.suggested_risk_ratio if reflection else current_risk
@@ -586,9 +594,7 @@ class Skill5Evolve(BaseSkill):
             for strategy_tag, stats in stats_by_strategy.items()
         }
 
-    def _compute_net_stats(
-        self, trades: List[TradeRecord]
-    ) -> tuple[float, float]:
+    def _compute_net_stats(self, trades: List[TradeRecord]) -> tuple[float, float]:
         """
         基于 fees 模块扣除手续费和滑点，计算净胜率和净均盈亏。
 
@@ -664,12 +670,14 @@ class Skill5Evolve(BaseSkill):
         ]
 
         if positions:
-            lines.extend([
-                "## 持仓明细",
-                "",
-                "| 币种 | 方向 | 数量 | 入场价 | 当前价 | 盈亏比例 |",
-                "|------|------|------|--------|--------|----------|",
-            ])
+            lines.extend(
+                [
+                    "## 持仓明细",
+                    "",
+                    "| 币种 | 方向 | 数量 | 入场价 | 当前价 | 盈亏比例 |",
+                    "|------|------|------|--------|--------|----------|",
+                ]
+            )
             for p in positions:
                 pnl_str = f"{p['pnl_ratio']:+.2f}%"
                 lines.append(
@@ -681,23 +689,73 @@ class Skill5Evolve(BaseSkill):
         else:
             lines.extend(["## 持仓明细", "", "当前无持仓。", ""])
 
-        lines.extend([
-            "## 策略进化",
-            "",
-            f"- 交易笔数: {evolution['trade_count']}",
-            f"- 胜率（毛）: {evolution['win_rate']:.1f}%",
-            f"- 胜率（净）: {evolution.get('net_win_rate', 0.0):.1f}%",
-            f"- 平均盈亏比: {evolution['avg_pnl_ratio']:.4f}",
-            f"- 平均净盈亏金额: {evolution.get('net_avg_pnl_amount', 0.0):.4f}",
-            f"- 参数调整: {'是' if evolution['adjustment_applied'] else '否'}",
-        ])
+        lines.extend(
+            [
+                "## 策略进化",
+                "",
+                f"- 交易笔数: {evolution['trade_count']}",
+                f"- 胜率（毛）: {evolution['win_rate']:.1f}%",
+                f"- 胜率（净）: {evolution.get('net_win_rate', 0.0):.1f}%",
+                f"- 平均盈亏比: {evolution['avg_pnl_ratio']:.4f}",
+                f"- 平均净盈亏金额: {evolution.get('net_avg_pnl_amount', 0.0):.4f}",
+                f"- 参数调整: {'是' if evolution['adjustment_applied'] else '否'}",
+            ]
+        )
 
         if evolution.get("recovery_suggested"):
-            lines.append("- 实盘恢复: 模拟盘表现达标（近期 5 笔胜率 >= 60% 且净利为正），系统已自动恢复实盘交易 🟢")
-
-        if evolution.get("adjustment_detail"):
             lines.append(
-                f"- 调整详情: {evolution['adjustment_detail']}"
+                "- 实盘恢复: 模拟盘表现达标（近期 5 笔胜率 >= 60% 且净利为正），系统已自动恢复实盘交易 🟢"
             )
 
+        if evolution.get("adjustment_detail"):
+            lines.append(f"- 调整详情: {evolution['adjustment_detail']}")
+
         return "\n".join(lines)
+
+    def _is_btc_market_stable(self) -> bool:
+        """
+        检查 BTC 市场是否稳定（未处于熔断 Level 3 状态）。
+
+        通过检查 BTCUSDT 最近 6 根 4h K 线（24h）的回报率，
+        如果跌幅超过 8% 则认为市场不稳定，不建议恢复实盘。
+
+        Returns:
+            True 如果 BTC 市场稳定（4h 回报率 > -8%），否则 False。
+        """
+        if self._public_client is None:
+            log.warning(
+                "[%s] _is_btc_market_stable: 无 public_client，跳过 BTC 市场检查",
+                self.name,
+            )
+            return True
+
+        try:
+            klines = self._public_client.get_klines("BTCUSDT", "4h", 6)
+            if not klines or len(klines) < 6:
+                log.warning(
+                    "[%s] _is_btc_market_stable: BTC K 线不足，跳过检查", self.name
+                )
+                return True
+
+            current_price = float(klines[-1][4])
+            past_price = float(klines[-6][4])
+            if past_price <= 0:
+                log.warning(
+                    "[%s] _is_btc_market_stable: BTC 过去价格异常，跳过检查", self.name
+                )
+                return True
+
+            btc_4h_return = (current_price - past_price) / past_price
+            log.debug(
+                "[%s] _is_btc_market_stable: BTC 当前价 %.2f, 24h 前价格 %.2f, 回报率 %.2f%%",
+                self.name,
+                current_price,
+                past_price,
+                btc_4h_return * 100,
+            )
+            return btc_4h_return >= -0.08
+        except Exception as exc:
+            log.warning(
+                "[%s] _is_btc_market_stable: 检查失败: %s，跳过检查", self.name, exc
+            )
+            return True

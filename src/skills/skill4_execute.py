@@ -705,7 +705,10 @@ class Skill4Execute(BaseSkill):
                         else:
                             log.critical(
                                 f"[{self.name}] 🔴🔴 {symbol} 重试平仓仍失败，"
-                                f"持仓可能仍在！下次 cron 继续尝试平仓，不切换 Paper Mode！status={close_result.get('status')}"
+                                f"持仓可能仍在！BTC 已触发熔断强平条件，仍切换 Paper Mode 防止继续开仓！status={close_result.get('status')}"
+                            )
+                            self._risk_controller.enable_paper_mode(
+                                "btc_circuit_breaker_paper_flag"
                             )
                     return close_result
                 if cb.level >= CircuitLevel.REDUCE:

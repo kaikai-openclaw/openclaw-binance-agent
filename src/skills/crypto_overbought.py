@@ -345,13 +345,12 @@ class _CryptoOverboughtBase(BaseSkill):
 
         closes = [float(k[4]) for k in klines]
         last_close = closes[-1]
-        lookback = 12
+        lookback = 6
         recent_return_pct = (
             (last_close - closes[-lookback]) / closes[-lookback] * 100
             if len(closes) > lookback and closes[-lookback] > 0
             else 0.0
         )
-        # BTC 短期暴跌 > 8% → 阻断做空（追跌风险高）
         if recent_return_pct <= -8.0:
             return {
                 "status": "blocked",

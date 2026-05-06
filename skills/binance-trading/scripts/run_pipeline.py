@@ -296,7 +296,7 @@ def main():
             account_state_provider=account_provider,
             poll_interval=30,
             trading_rule_provider=trading_rule_provider,
-            circuit_breaker=CircuitBreaker(),
+            circuit_breaker=CircuitBreaker(db_path=DB_DIR),
             public_client=public_client,
             memory_store=memory_store,
         )

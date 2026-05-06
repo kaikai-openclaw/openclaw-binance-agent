@@ -390,7 +390,7 @@ def run_report(args: argparse.Namespace) -> dict:
                     poll_interval=30,
                     trading_rule_provider=trading_rule_provider,
                     use_market_order=True,
-                    circuit_breaker=CircuitBreaker(),
+                    circuit_breaker=CircuitBreaker(db_path=DB_DIR),
                     public_client=public_client,
                     memory_store=memory_store,
                 )

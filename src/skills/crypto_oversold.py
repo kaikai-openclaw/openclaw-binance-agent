@@ -490,6 +490,7 @@ class _CryptoOversoldBase(BaseSkill):
                 lows = [float(k[3]) for k in klines]
                 volumes = [float(k[5]) for k in klines]
                 opens = [float(k[1]) for k in klines]
+                current_price = float(item.get("lastPrice", 0))
 
                 # ── 支撑位检测 ──────────────────────────────────────────────
                 # 查找近20根K线的局部低点作为支撑位参考
@@ -561,7 +562,6 @@ class _CryptoOversoldBase(BaseSkill):
                 # ── 实时价格组合分析 ──────────────────────────────────────
                 # 在已关闭 K 线形态判断基础上，叠加当前实时价格变动
                 # 判断：4h收盘后价格是否继续大跌（接飞刀风险）或已大幅反弹（踏空风险）
-                current_price = float(item.get("lastPrice", 0))
                 last_closed_close = closes[-1]
                 price_change_since_close_pct = (
                     (current_price - last_closed_close) / last_closed_close * 100

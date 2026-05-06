@@ -187,9 +187,7 @@ LT_W_KDJ_CROSS = 8  # KDJ 低位金叉
 LT_W_SHADOW = 7  # 长下影线
 
 DEFAULT_MIN_QUOTE_VOLUME = 10_000_000
-DEFAULT_MIN_REVERSAL_SCORE = (
-    65  # 收紧：60→65（1h策略57笔亏损，4h策略27笔盈利，问题在信号质量而非数量）
-)
+DEFAULT_MIN_REVERSAL_SCORE = 55  # 回测优化最优值：胜率60.3%，均收益+0.91%
 DEFAULT_MAX_CANDIDATES = 10
 
 # 反转策略黑名单：反复亏损币种（亏损≥2笔 or 合计亏损过大）直接排除，不再反向追
@@ -772,9 +770,9 @@ class ShortTermReversalSkill(_CryptoReversalBase):
         self.name = "crypto_reversal_4h"
 
     def run(self, input_data: dict) -> dict:
-        # 4h 门槛：65（收紧自默认值的 60）
+        # 4h 门槛：55（回测优化最优值）
         if "min_reversal_score" not in input_data:
-            input_data = {**input_data, "min_reversal_score": 65}
+            input_data = {**input_data, "min_reversal_score": 55}
         return self._run_scan(
             input_data,
             interval=ST_INTERVAL,

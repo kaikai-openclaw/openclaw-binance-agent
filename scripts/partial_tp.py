@@ -349,8 +349,9 @@ try:
         pnl_pct = profit / entry * 100
         ratio = profit / sl_dist
 
-        # 触发比例：浮盈达到 1.0 倍止损距离即触发（所有策略统一）
-        trigger_ratio = 1.0
+        # 触发比例：浮盈达到 1.5 倍止损距离即触发（所有策略统一）
+        # 原 1.0 倍太早，现改为 1.5 倍（配合 TS activation_mult 2.0，让价格先走更远）
+        trigger_ratio = 1.5
 
         if ratio < trigger_ratio:
             # 未触发，不记录 skipped（避免每5分钟刷屏）

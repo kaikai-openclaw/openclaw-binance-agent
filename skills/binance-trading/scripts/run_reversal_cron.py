@@ -75,6 +75,7 @@ logging.basicConfig(
     format="%(asctime)s [%(name)s] %(levelname)s %(message)s",
 )
 log = logging.getLogger("reversal_cron")
+logging.getLogger().handlers[0].stream = sys.stderr
 
 DB_DIR = os.path.join(PROJECT_ROOT, "data")
 
@@ -303,6 +304,8 @@ def run_report(args: argparse.Namespace) -> dict:
         rating_threshold, risk_ratio = memory_store.get_evolved_params(
             strategy_tag=strategy_tag,
         )
+        # 强制将评级门槛提到 6，减少低质量交易（2026-05-07）
+        rating_threshold = max(rating_threshold, 6)
         # 1h 反转信号噪音大，用小仓位 + 宽止损策略
         # 单笔持仓上限 6%，2 笔最多 12% 总敞口
         if args.mode == "1h":
@@ -358,20 +361,24 @@ def run_report(args: argparse.Namespace) -> dict:
                     # ── 趋势反转策略参数 ──
                     # 1h 模式：小仓位 + 宽止损，12h 持仓
                     #   止损 1.5× ATR（给 1h 噪音留呼吸空间，0.8× 太紧会被频繁扫掉）
+                    # 4h 模式：max_stop_pct=10%，atr_stop_mult=1.5（2026-05-07）
+                    #   ATR ≤ 6.67%：原生止损 ≤ 10%，自然进场
+                    #   ATR 6.67%~10%：clip 到 10%，盈亏比收窄但可接受
+                    #   ATR > 10%：被过滤（波动过大，强行截断止损风险高）
                     # 4h 模式收紧止盈参数（基于历史数据优化）：
                     #   - atr_tp_mult: 3.6→4.0（止盈目标更宽，partial_tp有更多利润可锁）
                     #   - trailing_stop_ratio: 0.4→0.35（更紧的移动止损，盈利见财就收）
-                    #   - trailing_activation_mult: 1.3→1.2（更早激活移动止损）
-                    #   - trailing_activation_mult_hv: 1.8→1.6（高波动也提前激活）
-                    max_stop_pct=0.04 if args.mode == "1h" else 0.05,
-                    atr_stop_mult=1.5 if args.mode == "1h" else 1.2,
+                    #   - trailing_activation_mult: 1.2→2.0（更晚激活，让价格先走更远再追踪）
+                    #   - trailing_activation_mult_hv: 1.6→2.5（高波动延迟激活，保护中等行情不被过早震出）
+                    max_stop_pct=0.04 if args.mode == "1h" else 0.10,
+                    atr_stop_mult=1.5,  # 1h 和 4h 均用 1.5，1h 用 0.5% 仓位管控风险
                     atr_tp_mult=3.0 if args.mode == "1h" else 4.0,
                     trailing_stop_ratio=0.5 if args.mode == "1h" else 0.35,
-                    trailing_activation_mult=1.5 if args.mode == "1h" else 1.2,
-                    trailing_activation_mult_hv=2.0 if args.mode == "1h" else 1.6,
+                    trailing_activation_mult=1.5 if args.mode == "1h" else 2.0,
+                    trailing_activation_mult_hv=2.0 if args.mode == "1h" else 2.5,
                     high_vol_tp_mult=3.5 if args.mode == "1h" else 4.0,
                     max_trades=2 if args.mode == "1h" else 3,
-                    max_position_pct=6.0 if args.mode == "1h" else 20.0,
+                    max_position_pct=6.0 if args.mode == "1h" else 18.0,
                     max_margin_usdt=10.0 if args.mode == "1h" else None,
                 )
                 s3_input_id = state_store.save(

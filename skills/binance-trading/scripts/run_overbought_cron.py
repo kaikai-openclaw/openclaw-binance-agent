@@ -75,6 +75,7 @@ logging.basicConfig(
     format="%(asctime)s [%(name)s] %(levelname)s %(message)s",
 )
 log = logging.getLogger("overbought_cron")
+logging.getLogger().handlers[0].stream = sys.stderr
 
 DB_DIR = os.path.join(PROJECT_ROOT, "data")
 

@@ -42,6 +42,7 @@ from src.infra.exchange_rules import (
     normalize_order_quantity,
 )
 from src.infra.risk_controller import RiskController
+from src.infra.rate_limiter import RateLimiter
 
 logging.basicConfig(
     level=logging.INFO,
@@ -575,8 +576,14 @@ def run_report(
     actions_results: list[dict] = []
 
     try:
-        public_client = BinancePublicClient()
-        fapi_client = BinanceFapiClient()
+        api_key = os.environ.get("BINANCE_API_KEY", "")
+        api_secret = os.environ.get("BINANCE_API_SECRET", "")
+        if not api_key or not api_secret:
+            raise RuntimeError("缺少 BINANCE_API_KEY 或 BINANCE_API_SECRET 环境变量")
+
+        rate_limiter = RateLimiter()
+        public_client = BinancePublicClient(rate_limiter=rate_limiter)
+        fapi_client = BinanceFapiClient(api_key, api_secret, rate_limiter=rate_limiter)
         trading_rule_provider = LazyBinanceTradingRuleProvider(public_client)
         risk_controller = RiskController(db_path=DB_DIR)
         cb = CircuitBreaker(db_path=DB_DIR)

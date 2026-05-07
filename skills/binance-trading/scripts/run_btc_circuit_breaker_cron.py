@@ -586,7 +586,9 @@ def run_report(
         public_client = BinancePublicClient(rate_limiter=rate_limiter)
         fapi_client = BinanceFapiClient(api_key, api_secret, rate_limiter=rate_limiter)
         trading_rule_provider = LazyBinanceTradingRuleProvider(public_client)
-        risk_controller = RiskController(db_path=DB_DIR)
+        risk_controller = RiskController(
+            db_path=os.path.join(DB_DIR, "trading_state.db")
+        )
         cb = CircuitBreaker(db_path=DB_DIR)
 
         paper_mode_before = risk_controller.is_paper_mode()

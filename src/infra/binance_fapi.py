@@ -24,11 +24,13 @@ log = logging.getLogger(__name__)
 
 class IPBannedError(Exception):
     """当 Binance 返回 HTTP 418（IP 被封禁）时抛出。"""
+
     pass
 
 
 class MaxRetryExceededError(Exception):
     """当 API 请求重试次数耗尽后抛出。"""
+
     pass
 
 
@@ -75,10 +77,20 @@ def _extract_response_detail(response) -> str:
 # 返回值数据类型（轻量 dict 封装）
 # ============================================================
 
+
 class OrderResult:
     """下单结果（普通订单 + Algo 条件单通用）。"""
-    def __init__(self, order_id: str, symbol: str, side: str, price: float,
-                 quantity: float, status: str, raw: Optional[dict] = None):
+
+    def __init__(
+        self,
+        order_id: str,
+        symbol: str,
+        side: str,
+        price: float,
+        quantity: float,
+        status: str,
+        raw: Optional[dict] = None,
+    ):
         self.order_id = order_id
         self.symbol = symbol
         self.side = side
@@ -90,8 +102,16 @@ class OrderResult:
 
 class PositionInfo:
     """持仓信息。"""
-    def __init__(self, symbol: str, position_amt: float, entry_price: float,
-                 unrealized_pnl: float, leverage: int, raw: Optional[dict] = None):
+
+    def __init__(
+        self,
+        symbol: str,
+        position_amt: float,
+        entry_price: float,
+        unrealized_pnl: float,
+        leverage: int,
+        raw: Optional[dict] = None,
+    ):
         self.symbol = symbol
         self.position_amt = position_amt
         self.entry_price = entry_price
@@ -102,8 +122,14 @@ class PositionInfo:
 
 class AccountInfo:
     """账户信息。"""
-    def __init__(self, total_balance: float, available_balance: float,
-                 total_unrealized_pnl: float, raw: Optional[dict] = None):
+
+    def __init__(
+        self,
+        total_balance: float,
+        available_balance: float,
+        total_unrealized_pnl: float,
+        raw: Optional[dict] = None,
+    ):
         self.total_balance = total_balance
         self.available_balance = available_balance
         self.total_unrealized_pnl = total_unrealized_pnl
@@ -112,10 +138,18 @@ class AccountInfo:
 
 class PositionRisk:
     """持仓风险信息。"""
-    def __init__(self, symbol: str, position_amt: float, entry_price: float,
-                 mark_price: float, unrealized_pnl: float,
-                 liquidation_price: float, leverage: int,
-                 raw: Optional[dict] = None):
+
+    def __init__(
+        self,
+        symbol: str,
+        position_amt: float,
+        entry_price: float,
+        mark_price: float,
+        unrealized_pnl: float,
+        liquidation_price: float,
+        leverage: int,
+        raw: Optional[dict] = None,
+    ):
         self.symbol = symbol
         self.position_amt = position_amt
         self.entry_price = entry_price
@@ -129,6 +163,7 @@ class PositionRisk:
 # ============================================================
 # BinanceFapiClient 主类
 # ============================================================
+
 
 class BinanceFapiClient:
     """
@@ -158,9 +193,11 @@ class BinanceFapiClient:
         self.base_url = base_url.rstrip("/")
         self.rate_limiter = rate_limiter or GLOBAL_RATE_LIMITER
         self._session = requests.Session()
-        self._session.headers.update({
-            "X-MBX-APIKEY": self.api_key,
-        })
+        self._session.headers.update(
+            {
+                "X-MBX-APIKEY": self.api_key,
+            }
+        )
         # 代理配置：支持 HTTP/SOCKS5 代理
         # 优先使用传入参数，其次读取环境变量 HTTPS_PROXY
         _proxy = proxy or os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
@@ -192,7 +229,9 @@ class BinanceFapiClient:
         signed_params["signature"] = signature
         return signed_params
 
-    def _request_with_retry(self, method: str, path: str, params: Optional[dict] = None) -> dict:
+    def _request_with_retry(
+        self, method: str, path: str, params: Optional[dict] = None
+    ) -> dict:
         """
         带指数退避重试的 HTTP 请求。
 
@@ -260,7 +299,10 @@ class BinanceFapiClient:
             except IPBannedError:
                 raise  # 不重试，直接抛出
 
-            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+            except (
+                requests.exceptions.Timeout,
+                requests.exceptions.ConnectionError,
+            ) as e:
                 # 标记网络故障（线程安全）
                 with self._network_lock:
                     self._network_was_down = True
@@ -269,7 +311,9 @@ class BinanceFapiClient:
                 # 安全措施：POST 请求（下单）超时后不自动重试，
                 # 因为订单可能已在 Binance 侧成功，重试会导致重复下单。
                 # 由调用方（Skill-4）通过查询挂单/持仓来判断是否需要重新下单。
-                if method.upper() == "POST" and isinstance(e, requests.exceptions.Timeout):
+                if method.upper() == "POST" and isinstance(
+                    e, requests.exceptions.Timeout
+                ):
                     log.error(
                         f"POST 请求 {path} 超时，不自动重试以避免重复下单。"
                         f"请通过查询接口确认订单状态。"
@@ -288,7 +332,9 @@ class BinanceFapiClient:
                 backoff = calculate_backoff(attempt)
                 detail = str(e)
                 last_error_detail = detail
-                status_code = e.response.status_code if e.response is not None else "unknown"
+                status_code = (
+                    e.response.status_code if e.response is not None else "unknown"
+                )
                 log.warning(
                     f"请求 {path} HTTP 错误（{status_code}），"
                     f"详情={detail}，"
@@ -320,8 +366,9 @@ class BinanceFapiClient:
         }
         return self._request_with_retry("POST", "/fapi/v1/leverage", params)
 
-    def place_limit_order(self, symbol: str, side: str, price: float,
-                          quantity: float) -> OrderResult:
+    def place_limit_order(
+        self, symbol: str, side: str, price: float, quantity: float
+    ) -> OrderResult:
         """
         提交限价订单。
 
@@ -350,8 +397,9 @@ class BinanceFapiClient:
             raw=data,
         )
 
-    def place_market_order(self, symbol: str, side: str,
-                           quantity: float) -> OrderResult:
+    def place_market_order(
+        self, symbol: str, side: str, quantity: float, reduce_only: bool = False
+    ) -> OrderResult:
         """
         提交市价订单（用于止损/止盈平仓）。
 
@@ -359,6 +407,7 @@ class BinanceFapiClient:
             symbol: 交易对符号
             side: 买卖方向
             quantity: 下单数量
+            reduce_only: 是否只减仓（避免意外开仓）
         """
         params = {
             "symbol": symbol,
@@ -366,6 +415,8 @@ class BinanceFapiClient:
             "type": "MARKET",
             "quantity": format_decimal_param(quantity),
         }
+        if reduce_only:
+            params["reduceOnly"] = "true"
         data = self._request_with_retry("POST", "/fapi/v1/order", params)
         return OrderResult(
             order_id=str(data.get("orderId", "")),
@@ -377,9 +428,14 @@ class BinanceFapiClient:
             raw=data,
         )
 
-    def place_stop_market_order(self, symbol: str, side: str,
-                                quantity: float, stop_price: float,
-                                close_position: bool = False) -> OrderResult:
+    def place_stop_market_order(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        stop_price: float,
+        close_position: bool = False,
+    ) -> OrderResult:
         """
         提交止损市价单（STOP_MARKET）。触及 stop_price 后以市价成交。
 
@@ -415,9 +471,14 @@ class BinanceFapiClient:
             raw=data,
         )
 
-    def place_take_profit_market_order(self, symbol: str, side: str,
-                                       quantity: float, stop_price: float,
-                                       close_position: bool = False) -> OrderResult:
+    def place_take_profit_market_order(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        stop_price: float,
+        close_position: bool = False,
+    ) -> OrderResult:
         """
         提交止盈市价单（TAKE_PROFIT_MARKET）。触及 stop_price 后以市价成交。
 
@@ -453,9 +514,9 @@ class BinanceFapiClient:
             raw=data,
         )
 
-    def place_stop_limit_order(self, symbol: str, side: str,
-                               quantity: float, price: float,
-                               stop_price: float) -> OrderResult:
+    def place_stop_limit_order(
+        self, symbol: str, side: str, quantity: float, price: float, stop_price: float
+    ) -> OrderResult:
         """
         提交止损限价单（STOP）。触及 stop_price 后以 price 挂限价单。
 
@@ -490,9 +551,9 @@ class BinanceFapiClient:
             raw=data,
         )
 
-    def place_take_profit_limit_order(self, symbol: str, side: str,
-                                      quantity: float, price: float,
-                                      stop_price: float) -> OrderResult:
+    def place_take_profit_limit_order(
+        self, symbol: str, side: str, quantity: float, price: float, stop_price: float
+    ) -> OrderResult:
         """
         提交止盈限价单（TAKE_PROFIT）。触及 stop_price 后以 price 挂限价单。
 
@@ -577,9 +638,14 @@ class BinanceFapiClient:
             raw=data,
         )
 
-    def place_oco_stop_take_profit(self, symbol: str, side: str,
-                                   quantity: float, stop_price: float,
-                                   take_profit_price: float) -> List[OrderResult]:
+    def place_oco_stop_take_profit(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        stop_price: float,
+        take_profit_price: float,
+    ) -> List[OrderResult]:
         """
         一次性挂止损 + 止盈两张市价条件单（模拟 OCO）。
 
@@ -597,7 +663,9 @@ class BinanceFapiClient:
             [止损单 OrderResult, 止盈单 OrderResult]
         """
         sl = self.place_stop_market_order(symbol, side, quantity, stop_price)
-        tp = self.place_take_profit_market_order(symbol, side, quantity, take_profit_price)
+        tp = self.place_take_profit_market_order(
+            symbol, side, quantity, take_profit_price
+        )
         return [sl, tp]
 
     def get_positions(self) -> List[PositionInfo]:
@@ -607,14 +675,16 @@ class BinanceFapiClient:
         for item in data:
             amt = float(item.get("positionAmt", 0))
             if amt != 0:
-                positions.append(PositionInfo(
-                    symbol=item.get("symbol", ""),
-                    position_amt=amt,
-                    entry_price=float(item.get("entryPrice", 0)),
-                    unrealized_pnl=float(item.get("unRealizedProfit", 0)),
-                    leverage=int(item.get("leverage", 1)),
-                    raw=item,
-                ))
+                positions.append(
+                    PositionInfo(
+                        symbol=item.get("symbol", ""),
+                        position_amt=amt,
+                        entry_price=float(item.get("entryPrice", 0)),
+                        unrealized_pnl=float(item.get("unRealizedProfit", 0)),
+                        leverage=int(item.get("leverage", 1)),
+                        raw=item,
+                    )
+                )
         return positions
 
     def get_account_info(self) -> AccountInfo:

@@ -581,6 +581,7 @@ def run_report(
         if not api_key or not api_secret:
             raise RuntimeError("缺少 BINANCE_API_KEY 或 BINANCE_API_SECRET 环境变量")
 
+        os.makedirs(DB_DIR, exist_ok=True)
         rate_limiter = RateLimiter()
         public_client = BinancePublicClient(rate_limiter=rate_limiter)
         fapi_client = BinanceFapiClient(api_key, api_secret, rate_limiter=rate_limiter)

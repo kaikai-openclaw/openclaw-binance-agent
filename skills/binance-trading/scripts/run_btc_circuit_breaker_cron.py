@@ -69,29 +69,70 @@ def _calc_ema(closes: list, period: int) -> Optional[float]:
 
 
 LAST_LEVEL_FILE = os.path.join(DB_DIR, "circuit_breaker_last_level.json")
+LAST_LEVEL_LOCK = os.path.join(DB_DIR, "circuit_breaker_last_level.lock")
 
 
 def _load_last_triggered_level() -> int:
-    """加载上次触发的级别"""
-    path = Path(LAST_LEVEL_FILE)
-    if path.exists():
-        try:
-            data = json.loads(path.read_text())
-            return data.get("level", 0)
-        except Exception:
+    """加载上次触发的级别（线程安全）"""
+    lock_path = Path(LAST_LEVEL_LOCK)
+    level_path = Path(LAST_LEVEL_FILE)
+    acquired = False
+    try:
+        for _ in range(10):
+            try:
+                lock_fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                acquired = True
+                break
+            except FileExistsError:
+                time.sleep(0.1)
+        if not acquired:
+            log.warning("[btc_circuit] 获取级别文件锁超时，使用默认级别0")
             return 0
-    return 0
+        if level_path.exists():
+            try:
+                data = json.loads(level_path.read_text())
+                return data.get("level", 0)
+            except Exception:
+                return 0
+        return 0
+    finally:
+        if acquired:
+            os.close(lock_fd)
+            try:
+                lock_path.unlink()
+            except Exception:
+                pass
 
 
 def _save_last_triggered_level(level: int) -> None:
-    """保存触发的级别"""
+    """保存触发的级别（原子写入）"""
+    lock_path = Path(LAST_LEVEL_LOCK)
+    level_path = Path(LAST_LEVEL_FILE)
+    acquired = False
+    tmp_path = level_path.with_suffix(".tmp")
     try:
+        for _ in range(10):
+            try:
+                lock_fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                acquired = True
+                break
+            except FileExistsError:
+                time.sleep(0.1)
+        if not acquired:
+            log.warning("[btc_circuit] 获取级别文件锁超时，跳过保存")
+            return
         Path(DB_DIR).mkdir(parents=True, exist_ok=True)
-        Path(LAST_LEVEL_FILE).write_text(
-            json.dumps({"level": level, "timestamp": time.time()})
-        )
+        tmp_path.write_text(json.dumps({"level": level, "timestamp": time.time()}))
+        tmp_path.replace(level_path)
     except Exception as exc:
         log.warning("[btc_circuit] 保存触发级别失败: %s", exc)
+    finally:
+        if acquired:
+            os.close(lock_fd)
+            try:
+                lock_path.unlink()
+            except Exception:
+                pass
 
 
 def _tighten_stop_loss(
@@ -102,8 +143,8 @@ def _tighten_stop_loss(
     """
     收紧所有持仓的止损价。
 
-    通过设置新的 STOP_MARKET 订单来实现止损收紧。
-    注意：这会为每个持仓增加一个额外的止损单，由 Skill4 后续清理旧单。
+    使用 close_position=True 确保止损单触发时立即平仓，
+    避免旧止损单与新止损单冲突导致数量不匹配。
 
     Args:
         fapi_client: Binance 客户端
@@ -114,6 +155,9 @@ def _tighten_stop_loss(
         操作结果列表。
     """
     results = []
+    if tighten_ratio <= 0:
+        return results
+
     try:
         positions = fapi_client.get_positions()
         for pos in positions:
@@ -121,7 +165,7 @@ def _tighten_stop_loss(
                 continue
 
             direction = "LONG" if pos.position_amt > 0 else "SHORT"
-            current_price = pos.mark_price or pos.entry_price
+            current_price = float(pos.raw.get("markPrice", 0)) or pos.entry_price
             if not current_price or current_price <= 0:
                 log.warning(
                     "[btc_circuit] 收紧止损: %s 持仓价格异常 %.4f，跳过",
@@ -137,31 +181,20 @@ def _tighten_stop_loss(
                 new_sl = current_price * (1 + tighten_ratio)
                 side = "BUY"
 
-            raw_qty = abs(pos.position_amt)
-            rule = trading_rule_provider.get_rule(pos.symbol)
-            if rule:
-                normalized_qty = normalize_order_quantity(
-                    symbol=pos.symbol,
-                    quantity=raw_qty,
-                    price=new_sl,
-                    rule=rule,
-                )
-            else:
-                normalized_qty = raw_qty
-
-            if not normalized_qty or normalized_qty <= 0:
+            min_stop_distance = current_price * 0.005
+            if abs(current_price - new_sl) < min_stop_distance:
                 log.warning(
-                    "[btc_circuit] 收紧止损数量规范化失败: %s qty=%.4f",
+                    "[btc_circuit] 收紧止损: %s 止损距离太近 %.4f < %.4f，跳过",
                     pos.symbol,
-                    raw_qty,
+                    abs(current_price - new_sl),
+                    min_stop_distance,
                 )
                 continue
 
             log.info(
-                "[btc_circuit] 设置止损: %s %s %.4f @ %s (收紧 %.0f%%)",
+                "[btc_circuit] 设置止损: %s %s @ %s (收紧 %.0f%%, close_position=True)",
                 direction,
                 pos.symbol,
-                normalized_qty,
                 f"{new_sl:.6f}",
                 tighten_ratio * 100,
             )
@@ -170,9 +203,9 @@ def _tighten_stop_loss(
                 result = fapi_client.place_stop_market_order(
                     symbol=pos.symbol,
                     side=side,
-                    quantity=normalized_qty,
+                    quantity=0,
                     stop_price=new_sl,
-                    close_position=False,
+                    close_position=True,
                 )
                 results.append(
                     {
@@ -181,7 +214,7 @@ def _tighten_stop_loss(
                         "status": "success",
                         "order_id": result.order_id,
                         "new_sl": new_sl,
-                        "qty": normalized_qty,
+                        "qty": "close_position",
                     }
                 )
             except Exception as exc:
@@ -231,7 +264,7 @@ def _reduce_positions(
                 continue
 
             direction = "LONG" if pos.position_amt > 0 else "SHORT"
-            current_price = pos.mark_price or pos.entry_price
+            current_price = float(pos.raw.get("markPrice", 0)) or pos.entry_price
             if not current_price or current_price <= 0:
                 log.warning(
                     "[btc_circuit] 减仓: %s 持仓价格异常 %.4f，跳过",
@@ -324,7 +357,7 @@ def _close_all_positions(
                 continue
 
             direction = "LONG" if pos.position_amt > 0 else "SHORT"
-            current_price = pos.mark_price or pos.entry_price
+            current_price = float(pos.raw.get("markPrice", 0)) or pos.entry_price
             if not current_price or current_price <= 0:
                 log.warning(
                     "[btc_circuit] 全平: %s 持仓价格异常 %.4f，跳过",
@@ -587,34 +620,56 @@ def run_report(
                         _save_last_triggered_level(current_level)
 
                     elif current_level >= CircuitLevel.REDUCE.value:
+                        tighten_r = check_result["tighten_ratio"]
+                        reduce_r = check_result["reduce_ratio"]
                         log.warning(
-                            "[btc_circuit] 🟠 Level %d 触发，执行减仓50%%",
+                            "[btc_circuit] 🟠 Level %d 触发，减仓%.0f%% + 收紧止损%.0f%%",
                             current_level,
+                            reduce_r * 100,
+                            tighten_r * 100,
                         )
                         reduce_results = _reduce_positions(
                             fapi_client,
                             trading_rule_provider,
-                            check_result["reduce_ratio"],
-                        )
-                        actions_results.extend(reduce_results)
-                        action_taken = f"REDUCE 50% ({len(reduce_results)} 持仓)"
-                        _save_last_triggered_level(current_level)
-
-                    elif current_level >= CircuitLevel.TIGHTEN.value:
-                        log.warning(
-                            "[btc_circuit] 🟡 Level %d 触发，收紧止损%.0f%%",
-                            current_level,
-                            check_result["tighten_ratio"] * 100,
+                            reduce_r,
                         )
                         tighten_results = _tighten_stop_loss(
                             fapi_client,
                             trading_rule_provider,
-                            check_result["tighten_ratio"],
+                            tighten_r,
                         )
+                        actions_results.extend(reduce_results)
                         actions_results.extend(tighten_results)
                         action_taken = (
-                            f"TIGHTEN {check_result['tighten_ratio'] * 100:.0f}% "
-                            f"({len(tighten_results)} 持仓)"
+                            f"REDUCE {reduce_r * 100:.0f}% + TIGHTEN {tighten_r * 100:.0f}% "
+                            f"(减仓{len(reduce_results)}持仓, 止损{len(tighten_results)}持仓)"
+                        )
+                        _save_last_triggered_level(current_level)
+
+                    elif current_level >= CircuitLevel.TIGHTEN.value:
+                        tighten_r = check_result["tighten_ratio"]
+                        reduce_r = check_result["reduce_ratio"]
+                        log.warning(
+                            "[btc_circuit] 🟡 Level %d 触发，减仓%.0f%% + 收紧止损%.0f%%",
+                            current_level,
+                            reduce_r * 100,
+                            tighten_r * 100,
+                        )
+                        reduce_results = _reduce_positions(
+                            fapi_client,
+                            trading_rule_provider,
+                            reduce_r,
+                        )
+                        tighten_results = _tighten_stop_loss(
+                            fapi_client,
+                            trading_rule_provider,
+                            tighten_r,
+                        )
+                        actions_results.extend(reduce_results)
+                        actions_results.extend(tighten_results)
+                        action_taken = (
+                            f"TIGHTEN {tighten_r * 100:.0f}% + REDUCE {reduce_r * 100:.0f}% "
+                            f"(减仓{len(reduce_results)}持仓, 止损{len(tighten_results)}持仓)"
                         )
                         _save_last_triggered_level(current_level)
 
@@ -802,7 +857,7 @@ def render_markdown(report: dict) -> str:
         for a in actions:
             status_icon = "✅" if a.get("status") == "success" else "❌"
             if a.get("action") == "tighten_sl":
-                detail = f"新止损: {a.get('new_sl', 0):.4f} @ {a.get('qty', 0):.4f}"
+                detail = f"新止损: {a.get('new_sl', 0):.4f} ({a.get('qty', '-')})"
             elif a.get("action") == "reduce":
                 detail = f"数量: {a.get('qty', 0):.4f} ({a.get('ratio', 0) * 100:.0f}%)"
             elif a.get("action") == "close":

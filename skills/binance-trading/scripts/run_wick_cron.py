@@ -149,9 +149,8 @@ def render_markdown(report: dict) -> str:
     risk = report["risk"]
     rejected = report.get("rejected_symbols", [])
     new_positions = report.get("new_positions", [])
-    existing_positions = [
-        pos for pos in report["positions"] if pos not in new_positions
-    ]
+    all_positions = report.get("positions", [])
+    existing_positions = [pos for pos in all_positions if pos not in new_positions]
     lines = [
         f"🪡 *插针交易报告* ({report['mode']})",
         "",

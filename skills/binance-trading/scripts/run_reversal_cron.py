@@ -62,6 +62,7 @@ from report_utils import (
     metadata_by_symbol as _metadata_by_symbol,
     build_full_metadata as _build_full_metadata,
     protection_warnings as _protection_warnings,
+    STRATEGY_TAG_MAP,
     render_positions_markdown,
     render_protection_markdown,
     render_account_markdown,
@@ -298,7 +299,12 @@ def run_report(args: argparse.Namespace) -> dict:
             ]
         scan_data = reversal_skill.run(scan_input)
         scan_symbols = [c["symbol"] for c in scan_data.get("candidates", [])]
-        source_map = {symbol: f"趋势反转{args.mode}" for symbol in scan_symbols}
+        reversal_tag = STRATEGY_TAG_MAP.get(
+            f"crypto_reversal_{args.mode}", ("📌", "未知")
+        )
+        source_map = {
+            symbol: f"{reversal_tag[0]}{reversal_tag[1]}" for symbol in scan_symbols
+        }
 
         strategy_tag = f"crypto_reversal_{args.mode}"
         rating_threshold, risk_ratio = memory_store.get_evolved_params(

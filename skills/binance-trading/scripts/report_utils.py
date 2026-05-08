@@ -4,6 +4,7 @@
 所有 cron 脚本和 check_account.py 共享的账户信息构建、持仓快照、
 保护单报告、策略来源映射等函数统一在此维护，确保输出格式一致。
 """
+
 import json
 import logging
 from typing import Any, Optional
@@ -15,30 +16,31 @@ log = logging.getLogger(__name__)
 # strategy_tag → (emoji, 中文标签)
 STRATEGY_TAG_MAP: dict[str, tuple[str, str]] = {
     # 新格式（按 K 线周期命名）
-    "crypto_oversold_4h":      ("🌀", "超跌4h"),
-    "crypto_oversold_1d":      ("🌀", "超跌1d"),
-    "crypto_reversal_1h":      ("🔄", "反转1h"),
-    "crypto_reversal_4h":      ("🔄", "反转4h"),
-    "crypto_reversal_1d":      ("🔄", "反转1d"),
-    "crypto_overbought_1h":    ("📉", "做空1h"),
-    "crypto_overbought_4h":    ("📉", "做空4h"),
-    "crypto_overbought_1d":    ("📉", "做空1d"),
-    "crypto_wick_4h":          ("🪡", "插针4h"),
-    "crypto_wick_1d":          ("🪡", "插针1d"),
-    "crypto_generic":          ("⚙️", "通用"),
+    "crypto_oversold_4h": ("🌀", "超跌4h"),
+    "crypto_oversold_1d": ("🌀", "超跌1d"),
+    "crypto_reversal_1h": ("🔄", "反转1h"),
+    "crypto_reversal_4h": ("🔄", "反转4h"),
+    "crypto_reversal_1d": ("🔄", "反转1d"),
+    "crypto_overbought_1h": ("📉", "做空1h"),
+    "crypto_overbought_4h": ("📉", "做空4h"),
+    "crypto_overbought_1d": ("📉", "做空1d"),
+    "crypto_wick_4h": ("🪡", "插针4h"),
+    "crypto_wick_1d": ("🪡", "插针1d"),
+    "crypto_generic": ("⚙️", "通用"),
     # 旧格式兼容（历史记录）
-    "crypto_oversold_short":   ("🌀", "超跌4h"),
-    "crypto_oversold_long":    ("🌀", "超跌1d"),
-    "crypto_reversal_short":   ("🔄", "反转4h"),
-    "crypto_reversal_long":    ("🔄", "反转1d"),
+    "crypto_oversold_short": ("🌀", "超跌4h"),
+    "crypto_oversold_long": ("🌀", "超跌1d"),
+    "crypto_reversal_short": ("🔄", "反转4h"),
+    "crypto_reversal_long": ("🔄", "反转1d"),
     "crypto_overbought_short": ("📉", "做空4h"),
-    "crypto_overbought_long":  ("📉", "做空1d"),
-    "crypto_wick_short":       ("🪡", "插针4h"),
-    "crypto_wick_long":        ("🪡", "插针1d"),
+    "crypto_overbought_long": ("📉", "做空1d"),
+    "crypto_wick_short": ("🪡", "插针4h"),
+    "crypto_wick_long": ("🪡", "插针1d"),
 }
 
 
 # ── 安全类型转换 ──────────────────────────────────────────
+
 
 def safe_float(value: Any, default: float = 0.0) -> float:
     try:
@@ -63,6 +65,7 @@ def fmt_optional(value: Any, suffix: str = "") -> str:
 
 
 # ── 策略来源映射 ──────────────────────────────────────────
+
 
 def build_symbol_source_map(store) -> dict[str, tuple[str, str]]:
     """从 StateStore skill4_execute 执行结果中，构建 symbol → (emoji, label) 映射。
@@ -111,6 +114,7 @@ def tag_symbol_or_default(symbol: str, source_map: dict) -> str:
 
 # ── 持仓快照构建 ──────────────────────────────────────────
 
+
 def build_position_snapshots(
     total_balance: float,
     positions: list[Any],
@@ -151,30 +155,33 @@ def build_position_snapshots(
         else:
             price_change_pct = 0.0
 
-        snapshots.append({
-            "symbol": symbol,
-            "source": source_map.get(symbol, "手动/未知"),
-            "direction": direction,
-            "quantity": abs(amount),
-            "entry_price": entry,
-            "mark_price": mark,
-            "price_change_pct": round(price_change_pct, 4),
-            "unrealized_pnl": unrealized,
-            "notional_value": notional,
-            "initial_margin": margin,
-            "margin_pct_of_equity": round(
-                margin / total_balance * 100, 4
-            ) if total_balance > 0 else 0.0,
-            "leverage": round(leverage, 4),
-            "roi_on_margin_pct": round(
-                unrealized / margin * 100, 4
-            ) if margin > 0 else 0.0,
-            "liquidation_price": safe_float(raw.get("liquidationPrice")),
-        })
+        snapshots.append(
+            {
+                "symbol": symbol,
+                "source": source_map.get(symbol, "手动/未知"),
+                "direction": direction,
+                "quantity": abs(amount),
+                "entry_price": entry,
+                "mark_price": mark,
+                "price_change_pct": round(price_change_pct, 4),
+                "unrealized_pnl": unrealized,
+                "notional_value": notional,
+                "initial_margin": margin,
+                "margin_pct_of_equity": round(margin / total_balance * 100, 4)
+                if total_balance > 0
+                else 0.0,
+                "leverage": round(leverage, 4),
+                "roi_on_margin_pct": round(unrealized / margin * 100, 4)
+                if margin > 0
+                else 0.0,
+                "liquidation_price": safe_float(raw.get("liquidationPrice")),
+            }
+        )
     return sorted(snapshots, key=lambda p: p["initial_margin"], reverse=True)
 
 
 # ── 保护单报告 ────────────────────────────────────────────
+
 
 def classify_protection_label(side: str, trigger: float, entry: float) -> str:
     """根据方向和触发价判断保护单类型（止损/止盈/条件单）。"""
@@ -227,41 +234,54 @@ def build_protection_report(
             health[symbol]["has_take_profit"] = True
             health[symbol]["take_profit_count"] += 1
 
-        orders.append({
-            "symbol": symbol,
-            "type": order_type,
-            "label": label,
-            "side": side,
-            "trigger_price": trigger,
-            "entry_price": entry,
-            "distance_from_entry_pct": round(
-                (trigger - entry) / entry * 100, 4
-            ) if entry > 0 and trigger > 0 else 0.0,
-            "quantity": order.get("quantity", ""),
-            "close_position": str(order.get("closePosition", "")).lower() == "true"
-            or order.get("closePosition") is True,
-            "algo_id": str(order.get("algoId", order.get("orderId", ""))),
-        })
+        orders.append(
+            {
+                "symbol": symbol,
+                "type": order_type,
+                "label": label,
+                "side": side,
+                "trigger_price": trigger,
+                "entry_price": entry,
+                "distance_from_entry_pct": round((trigger - entry) / entry * 100, 4)
+                if entry > 0 and trigger > 0
+                else 0.0,
+                "quantity": order.get("quantity", ""),
+                "close_position": str(order.get("closePosition", "")).lower() == "true"
+                or order.get("closePosition") is True,
+                "algo_id": str(order.get("algoId", order.get("orderId", ""))),
+            }
+        )
 
     for item in health.values():
         duplicate_count = max(item["stop_loss_count"] - 1, 0) + max(
             item["take_profit_count"] - 1, 0
         )
         item["duplicate_protection_orders"] = duplicate_count
-        if not item["has_position"] and (item["has_stop_loss"] or item["has_take_profit"]):
+        if not item["has_position"] and (
+            item["has_stop_loss"] or item["has_take_profit"]
+        ):
             item["status"] = "warning"
-        elif not item["has_stop_loss"] or not item["has_take_profit"] or duplicate_count > 0:
+        elif (
+            not item["has_stop_loss"]
+            or not item["has_take_profit"]
+            or duplicate_count > 0
+        ):
             item["status"] = "warning"
 
     return {
-        "orders": sorted(orders, key=lambda o: (o["symbol"], o["label"], o["trigger_price"])),
+        "orders": sorted(
+            orders, key=lambda o: (o["symbol"], o["label"], o["trigger_price"])
+        ),
         "health": dict(sorted(health.items())),
     }
 
 
 # ── 账户摘要 ──────────────────────────────────────────────
 
-def build_account_summary(account: Any, positions: list[dict], paper_mode: bool) -> dict:
+
+def build_account_summary(
+    account: Any, positions: list[dict], paper_mode: bool
+) -> dict:
     """构建标准化账户摘要字典。"""
     total_balance = safe_float(getattr(account, "total_balance", 0))
     total_margin = sum(p["initial_margin"] for p in positions)
@@ -283,15 +303,16 @@ def build_account_summary(account: Any, positions: list[dict], paper_mode: bool)
         "daily_loss_pct": round(daily_loss_pct, 4),
         "position_count": len(positions),
         "total_position_margin": round(total_margin, 8),
-        "total_position_margin_pct": round(
-            total_margin / total_balance * 100, 4
-        ) if total_balance > 0 else 0.0,
+        "total_position_margin_pct": round(total_margin / total_balance * 100, 4)
+        if total_balance > 0
+        else 0.0,
         "total_notional_value": round(total_notional, 8),
         "paper_mode": paper_mode,
     }
 
 
 # ── 交易决策摘要 ──────────────────────────────────────────
+
 
 def build_decision(
     ratings: list[dict],
@@ -301,7 +322,9 @@ def build_decision(
 ) -> dict:
     """构建交易决策摘要。"""
     executed_count = sum(
-        1 for r in execution_results if r.get("status") in {"open", "filled", "paper_trade"}
+        1
+        for r in execution_results
+        if r.get("status") in {"open", "filled", "paper_trade"}
     )
     rejected_count = sum(
         1 for r in execution_results if r.get("status") == "rejected_by_risk"
@@ -333,6 +356,7 @@ def build_decision(
 
 # ── 辅助函数 ──────────────────────────────────────────────
 
+
 def metadata_by_symbol(execution_results: list[dict]) -> dict[str, dict[str, Any]]:
     """从 skill4 执行结果提取 symbol → metadata 映射，供 trade_syncer 使用。"""
     metadata: dict[str, dict[str, Any]] = {}
@@ -349,7 +373,9 @@ def metadata_by_symbol(execution_results: list[dict]) -> dict[str, dict[str, Any
     return metadata
 
 
-def build_full_metadata(store, current_execution_results: list[dict]) -> dict[str, dict[str, Any]]:
+def build_full_metadata(
+    store, current_execution_results: list[dict]
+) -> dict[str, dict[str, Any]]:
     """构建完整的 symbol → metadata 映射，供 trade_syncer 使用。
 
     优先级：本轮 execution_results > StateStore 历史 skill4 记录。
@@ -374,8 +400,12 @@ def build_full_metadata(store, current_execution_results: list[dict]) -> dict[st
                     if sym and tag and tag not in ("unknown", "crypto_generic"):
                         full[sym] = {
                             "rating_score": int(e.get("rating_score") or 6),
-                            "position_size_pct": float(e.get("position_size_pct") or 0.0),
-                            "hold_duration_hours": float(e.get("hold_duration_hours") or 0.0),
+                            "position_size_pct": float(
+                                e.get("position_size_pct") or 0.0
+                            ),
+                            "hold_duration_hours": float(
+                                e.get("hold_duration_hours") or 0.0
+                            ),
                             "strategy_tag": tag,
                         }
     except Exception as exc:
@@ -417,6 +447,7 @@ def protection_warnings(protection: dict) -> list[str]:
 
 # ── 统一 Markdown 渲染：持仓 + 保护单 + 账户 ─────────────
 
+
 def render_positions_markdown(
     positions: list[dict],
     source_map: Optional[dict] = None,
@@ -434,7 +465,7 @@ def render_positions_markdown(
     rest_positions = positions[max_detail:]
 
     for pos in detail_positions:
-        tag = tag_symbol_or_default(pos["symbol"], source_map)
+        tag = pos.get("source", "📌未知") or "📌未知"
         d = "🟢" if pos["direction"] == "long" else "🔴"
         pnl = pos["unrealized_pnl"]
         roi = pos["roi_on_margin_pct"]
@@ -449,7 +480,9 @@ def render_positions_markdown(
     if rest_positions:
         rest_pnl = sum(p["unrealized_pnl"] for p in rest_positions)
         symbols = ", ".join(p["symbol"] for p in rest_positions)
-        lines.append(f"➕ 其余 {len(rest_positions)} 笔: 浮盈亏 {rest_pnl:+.2f} ({symbols})")
+        lines.append(
+            f"➕ 其余 {len(rest_positions)} 笔: 浮盈亏 {rest_pnl:+.2f} ({symbols})"
+        )
 
     return lines
 
@@ -497,12 +530,16 @@ def render_account_markdown(account: dict, risk: Optional[dict] = None) -> list[
     if risk:
         status = risk.get("risk_status", "normal")
         status_icon = "🟡" if status == "paper_mode" else "🟢"
-        lines.append(f"{status_icon} 风控: SL上限{risk['single_trade_margin_limit_pct']}% | 单币{risk['single_symbol_position_limit_pct']}% | 日损{risk['daily_loss_stop_pct']}%")
+        lines.append(
+            f"{status_icon} 风控: SL上限{risk['single_trade_margin_limit_pct']}% | 单币{risk['single_symbol_position_limit_pct']}% | 日损{risk['daily_loss_stop_pct']}%"
+        )
 
     return lines
 
 
-def render_warnings_markdown(warnings: list[str], errors: list[str], max_items: int = 3) -> list[str]:
+def render_warnings_markdown(
+    warnings: list[str], errors: list[str], max_items: int = 3
+) -> list[str]:
     """渲染异常与注意事项。"""
     if not warnings and not errors:
         return []

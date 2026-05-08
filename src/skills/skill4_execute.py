@@ -1661,6 +1661,7 @@ class Skill4Execute(BaseSkill):
                 symbol=symbol,
                 side=side,
                 quantity=quantity,
+                reduce_only=True,
             )
             # 以平仓名义金额计算真实手续费（taker 市价单）
             close_notional = quantity * result.price if result.price > 0 else 0.0

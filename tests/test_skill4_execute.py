@@ -59,8 +59,8 @@ def test_trailing_stop_triggers_after_activation_for_long():
     assert state["triggered"] is True
 
 
-
 # ── 加载 Schema ──────────────────────────────────────────
+
 
 def _load_schema(name: str) -> dict:
     path = os.path.join("config", "schemas", name)
@@ -73,6 +73,7 @@ OUTPUT_SCHEMA = _load_schema("skill4_output.json")
 
 
 # ── 辅助函数 ──────────────────────────────────────────────
+
 
 def _make_account(
     total_balance: float = 10000.0,
@@ -163,6 +164,7 @@ def _make_position_risk(
 
 # ── Fixtures ──────────────────────────────────────────────
 
+
 @pytest.fixture
 def state_store(tmp_path):
     db_path = os.path.join(str(tmp_path), "test_state.db")
@@ -238,6 +240,7 @@ def _make_skill(
 # 1. 正常执行流程
 # ══════════════════════════════════════════════════════════
 
+
 class TestNormalExecution:
     """测试正常执行流程。"""
 
@@ -256,9 +259,7 @@ class TestNormalExecution:
         upstream = _make_upstream_data([_make_trade_plan()])
         state_id = state_store.save("skill3_strategy", upstream)
 
-        skill = _make_skill(
-            state_store, mock_binance, mock_risk_controller
-        )
+        skill = _make_skill(state_store, mock_binance, mock_risk_controller)
         result = skill.run({"input_state_id": state_id})
 
         assert len(result["execution_results"]) == 1
@@ -346,6 +347,7 @@ class TestNormalExecution:
             symbol="BTCUSDT",
             side="SELL",
             quantity=10.0,
+            reduce_only=True,
         )
 
     def test_non_blocking_mode_cancels_unfilled_entry(
@@ -392,17 +394,13 @@ class TestNormalExecution:
         upstream = _make_upstream_data([plan])
         state_id = state_store.save("skill3_strategy", upstream)
 
-        skill = _make_skill(
-            state_store, mock_binance, mock_risk_controller
-        )
+        skill = _make_skill(state_store, mock_binance, mock_risk_controller)
         result = skill.run({"input_state_id": state_id})
 
         assert result["execution_results"][0]["status"] == "filled"
         assert result["execution_results"][0]["direction"] == "short"
 
-    def test_state_id_is_uuid(
-        self, state_store, mock_binance, mock_risk_controller
-    ):
+    def test_state_id_is_uuid(self, state_store, mock_binance, mock_risk_controller):
         """输出的 state_id 应为有效 UUID。"""
         mock_binance.get_position_risk.return_value = _make_position_risk(
             mark_price=110.0
@@ -411,20 +409,14 @@ class TestNormalExecution:
         upstream = _make_upstream_data([_make_trade_plan()])
         state_id = state_store.save("skill3_strategy", upstream)
 
-        skill = _make_skill(
-            state_store, mock_binance, mock_risk_controller
-        )
+        skill = _make_skill(state_store, mock_binance, mock_risk_controller)
         result = skill.run({"input_state_id": state_id})
 
         uuid.UUID(result["state_id"], version=4)
 
-    def test_skill_name(
-        self, state_store, mock_binance, mock_risk_controller
-    ):
+    def test_skill_name(self, state_store, mock_binance, mock_risk_controller):
         """Skill 名称应为 skill4_execute。"""
-        skill = _make_skill(
-            state_store, mock_binance, mock_risk_controller
-        )
+        skill = _make_skill(state_store, mock_binance, mock_risk_controller)
         assert skill.name == "skill4_execute"
 
 
@@ -432,12 +424,11 @@ class TestNormalExecution:
 # 2. 风控拒绝
 # ══════════════════════════════════════════════════════════
 
+
 class TestRiskRejection:
     """测试风控拒绝场景。"""
 
-    def test_risk_rejected_order(
-        self, state_store, mock_binance, mock_risk_controller
-    ):
+    def test_risk_rejected_order(self, state_store, mock_binance, mock_risk_controller):
         """风控拒绝的订单应标记为 rejected_by_risk。"""
         mock_risk_controller.validate_order.return_value = ValidationResult(
             passed=False, reason="单笔保证金超限"
@@ -446,18 +437,14 @@ class TestRiskRejection:
         upstream = _make_upstream_data([_make_trade_plan()])
         state_id = state_store.save("skill3_strategy", upstream)
 
-        skill = _make_skill(
-            state_store, mock_binance, mock_risk_controller
-        )
+        skill = _make_skill(state_store, mock_binance, mock_risk_controller)
         result = skill.run({"input_state_id": state_id})
 
         assert result["execution_results"][0]["status"] == "rejected_by_risk"
         # 不应调用下单接口
         mock_binance.place_limit_order.assert_not_called()
 
-    def test_cooldown_rejection(
-        self, state_store, mock_binance, mock_risk_controller
-    ):
+    def test_cooldown_rejection(self, state_store, mock_binance, mock_risk_controller):
         """止损冷却期内的订单应被拒绝。"""
         mock_risk_controller.validate_order.return_value = ValidationResult(
             passed=False, reason="止损冷却期内禁止同方向开仓"
@@ -466,9 +453,7 @@ class TestRiskRejection:
         upstream = _make_upstream_data([_make_trade_plan()])
         state_id = state_store.save("skill3_strategy", upstream)
 
-        skill = _make_skill(
-            state_store, mock_binance, mock_risk_controller
-        )
+        skill = _make_skill(state_store, mock_binance, mock_risk_controller)
         result = skill.run({"input_state_id": state_id})
 
         assert result["execution_results"][0]["status"] == "rejected_by_risk"
@@ -478,21 +463,18 @@ class TestRiskRejection:
 # 3. Paper Mode
 # ══════════════════════════════════════════════════════════
 
+
 class TestPaperMode:
     """测试 Paper Mode 场景。"""
 
-    def test_paper_mode_order(
-        self, state_store, mock_binance, mock_risk_controller
-    ):
+    def test_paper_mode_order(self, state_store, mock_binance, mock_risk_controller):
         """Paper Mode 下订单应标记为 paper_trade。"""
         mock_risk_controller.is_paper_mode.return_value = True
 
         upstream = _make_upstream_data([_make_trade_plan()])
         state_id = state_store.save("skill3_strategy", upstream)
 
-        skill = _make_skill(
-            state_store, mock_binance, mock_risk_controller
-        )
+        skill = _make_skill(state_store, mock_binance, mock_risk_controller)
         result = skill.run({"input_state_id": state_id})
 
         assert result["execution_results"][0]["status"] == "paper_trade"
@@ -509,9 +491,7 @@ class TestPaperMode:
         upstream = _make_upstream_data([_make_trade_plan()])
         state_id = state_store.save("skill3_strategy", upstream)
 
-        skill = _make_skill(
-            state_store, mock_binance, mock_risk_controller
-        )
+        skill = _make_skill(state_store, mock_binance, mock_risk_controller)
         result = skill.run({"input_state_id": state_id})
 
         assert result["execution_results"][0]["order_id"].startswith("paper_")
@@ -525,9 +505,7 @@ class TestPaperMode:
         upstream = _make_upstream_data([_make_trade_plan()])
         state_id = state_store.save("skill3_strategy", upstream)
 
-        skill = _make_skill(
-            state_store, mock_binance, mock_risk_controller
-        )
+        skill = _make_skill(state_store, mock_binance, mock_risk_controller)
         result = skill.run({"input_state_id": state_id})
 
         r = result["execution_results"][0]
@@ -591,12 +569,11 @@ class TestPaperMode:
 # 4. 止损触发
 # ══════════════════════════════════════════════════════════
 
+
 class TestStopLoss:
     """测试止损触发场景。"""
 
-    def test_long_stop_loss(
-        self, state_store, mock_binance, mock_risk_controller
-    ):
+    def test_long_stop_loss(self, state_store, mock_binance, mock_risk_controller):
         """做多持仓价格跌至止损价应触发平仓。"""
         # 当前价 95 < 止损价 97
         mock_binance.get_position_risk.return_value = _make_position_risk(
@@ -610,9 +587,7 @@ class TestStopLoss:
         upstream = _make_upstream_data([plan])
         state_id = state_store.save("skill3_strategy", upstream)
 
-        skill = _make_skill(
-            state_store, mock_binance, mock_risk_controller
-        )
+        skill = _make_skill(state_store, mock_binance, mock_risk_controller)
         result = skill.run({"input_state_id": state_id})
 
         assert result["execution_results"][0]["status"] == "filled"
@@ -623,9 +598,7 @@ class TestStopLoss:
             "BTCUSDT", "long", strategy_tag="unknown"
         )
 
-    def test_short_stop_loss(
-        self, state_store, mock_binance, mock_risk_controller
-    ):
+    def test_short_stop_loss(self, state_store, mock_binance, mock_risk_controller):
         """做空持仓价格涨至止损价应触发平仓。"""
         # 当前价 105 > 止损价 103
         mock_binance.get_position_risk.return_value = _make_position_risk(
@@ -643,9 +616,7 @@ class TestStopLoss:
         upstream = _make_upstream_data([plan])
         state_id = state_store.save("skill3_strategy", upstream)
 
-        skill = _make_skill(
-            state_store, mock_binance, mock_risk_controller
-        )
+        skill = _make_skill(state_store, mock_binance, mock_risk_controller)
         result = skill.run({"input_state_id": state_id})
 
         assert result["execution_results"][0]["status"] == "filled"
@@ -658,12 +629,11 @@ class TestStopLoss:
 # 5. 止盈触发
 # ══════════════════════════════════════════════════════════
 
+
 class TestTakeProfit:
     """测试止盈触发场景。"""
 
-    def test_long_take_profit(
-        self, state_store, mock_binance, mock_risk_controller
-    ):
+    def test_long_take_profit(self, state_store, mock_binance, mock_risk_controller):
         """做多持仓价格涨至止盈价应触发平仓。"""
         mock_binance.get_position_risk.return_value = _make_position_risk(
             mark_price=110.0, position_amt=10.0
@@ -676,18 +646,14 @@ class TestTakeProfit:
         upstream = _make_upstream_data([plan])
         state_id = state_store.save("skill3_strategy", upstream)
 
-        skill = _make_skill(
-            state_store, mock_binance, mock_risk_controller
-        )
+        skill = _make_skill(state_store, mock_binance, mock_risk_controller)
         result = skill.run({"input_state_id": state_id})
 
         assert result["execution_results"][0]["status"] == "filled"
         # 止盈不应记录止损事件
         mock_risk_controller.record_stop_loss.assert_not_called()
 
-    def test_short_take_profit(
-        self, state_store, mock_binance, mock_risk_controller
-    ):
+    def test_short_take_profit(self, state_store, mock_binance, mock_risk_controller):
         """做空持仓价格跌至止盈价应触发平仓。"""
         mock_binance.get_position_risk.return_value = _make_position_risk(
             mark_price=90.0, position_amt=-10.0
@@ -704,9 +670,7 @@ class TestTakeProfit:
         upstream = _make_upstream_data([plan])
         state_id = state_store.save("skill3_strategy", upstream)
 
-        skill = _make_skill(
-            state_store, mock_binance, mock_risk_controller
-        )
+        skill = _make_skill(state_store, mock_binance, mock_risk_controller)
         result = skill.run({"input_state_id": state_id})
 
         assert result["execution_results"][0]["status"] == "filled"
@@ -716,12 +680,11 @@ class TestTakeProfit:
 # 6. 超时平仓
 # ══════════════════════════════════════════════════════════
 
+
 class TestTimeout:
     """测试超时平仓场景。"""
 
-    def test_timeout_close(
-        self, state_store, mock_binance, mock_risk_controller
-    ):
+    def test_timeout_close(self, state_store, mock_binance, mock_risk_controller):
         """持仓超时应触发市价平仓。"""
         # 价格在止损和止盈之间，不触发止损/止盈
         mock_binance.get_position_risk.return_value = _make_position_risk(
@@ -737,7 +700,9 @@ class TestTimeout:
         state_id = state_store.save("skill3_strategy", upstream)
 
         skill = _make_skill(
-            state_store, mock_binance, mock_risk_controller,
+            state_store,
+            mock_binance,
+            mock_risk_controller,
             poll_interval=0,
         )
         result = skill.run({"input_state_id": state_id})
@@ -749,6 +714,7 @@ class TestTimeout:
 # ══════════════════════════════════════════════════════════
 # 7. 日亏损降级
 # ══════════════════════════════════════════════════════════
+
 
 class TestDailyLossDegradation:
     """测试日亏损降级场景。"""
@@ -765,9 +731,7 @@ class TestDailyLossDegradation:
         upstream = _make_upstream_data([_make_trade_plan()])
         state_id = state_store.save("skill3_strategy", upstream)
 
-        skill = _make_skill(
-            state_store, mock_binance, mock_risk_controller
-        )
+        skill = _make_skill(state_store, mock_binance, mock_risk_controller)
         result = skill.run({"input_state_id": state_id})
 
         # 应执行降级
@@ -781,21 +745,18 @@ class TestDailyLossDegradation:
 # 8. 下单异常
 # ══════════════════════════════════════════════════════════
 
+
 class TestOrderFailure:
     """测试下单异常场景。"""
 
-    def test_order_exception(
-        self, state_store, mock_binance, mock_risk_controller
-    ):
+    def test_order_exception(self, state_store, mock_binance, mock_risk_controller):
         """下单抛出异常应标记为 execution_failed。"""
         mock_binance.place_limit_order.side_effect = Exception("网络超时")
 
         upstream = _make_upstream_data([_make_trade_plan()])
         state_id = state_store.save("skill3_strategy", upstream)
 
-        skill = _make_skill(
-            state_store, mock_binance, mock_risk_controller
-        )
+        skill = _make_skill(state_store, mock_binance, mock_risk_controller)
         result = skill.run({"input_state_id": state_id})
 
         assert result["execution_results"][0]["status"] == "execution_failed"
@@ -812,9 +773,7 @@ class TestOrderFailure:
         upstream = _make_upstream_data([_make_trade_plan()])
         state_id = state_store.save("skill3_strategy", upstream)
 
-        skill = _make_skill(
-            state_store, mock_binance, mock_risk_controller
-        )
+        skill = _make_skill(state_store, mock_binance, mock_risk_controller)
         result = skill.run({"input_state_id": state_id})
 
         assert result["execution_results"][0]["status"] == "execution_failed"
@@ -824,19 +783,16 @@ class TestOrderFailure:
 # 9. 空交易计划
 # ══════════════════════════════════════════════════════════
 
+
 class TestEmptyPlans:
     """测试空交易计划场景。"""
 
-    def test_empty_trade_plans(
-        self, state_store, mock_binance, mock_risk_controller
-    ):
+    def test_empty_trade_plans(self, state_store, mock_binance, mock_risk_controller):
         """空交易计划应返回空执行结果。"""
         upstream = _make_upstream_data([])
         state_id = state_store.save("skill3_strategy", upstream)
 
-        skill = _make_skill(
-            state_store, mock_binance, mock_risk_controller
-        )
+        skill = _make_skill(state_store, mock_binance, mock_risk_controller)
         result = skill.run({"input_state_id": state_id})
 
         assert result["execution_results"] == []
@@ -872,12 +828,14 @@ class TestEmptyPlans:
     ):
         """当前仍有持仓的币种，其保护条件单不应被孤儿清理逻辑撤销。"""
         account = _make_account(
-            positions=[{
-                "symbol": "BTCUSDT",
-                "direction": "long",
-                "quantity": 0.001,
-                "entry_price": 76750.0,
-            }]
+            positions=[
+                {
+                    "symbol": "BTCUSDT",
+                    "direction": "long",
+                    "quantity": 0.001,
+                    "entry_price": 76750.0,
+                }
+            ]
         )
         mock_binance.get_position_risk.return_value = _make_position_risk(
             symbol="BTCUSDT",
@@ -919,12 +877,14 @@ class TestEmptyPlans:
     ):
         """没有本轮交易计划时，也应为已有实盘持仓补挂 SL/TP。"""
         account = _make_account(
-            positions=[{
-                "symbol": "BTCUSDT",
-                "direction": "long",
-                "quantity": 0.001,
-                "entry_price": 76750.0,
-            }]
+            positions=[
+                {
+                    "symbol": "BTCUSDT",
+                    "direction": "long",
+                    "quantity": 0.001,
+                    "entry_price": 76750.0,
+                }
+            ]
         )
         mock_binance.get_position_risk.return_value = _make_position_risk(
             symbol="BTCUSDT",
@@ -951,7 +911,7 @@ class TestEmptyPlans:
             symbol="BTCUSDT",
             side="SELL",
             quantity=0.001,
-            stop_price=71377.5,   # 76750 × (1 - 7%，max_stop_pct)
+            stop_price=71377.5,  # 76750 × (1 - 7%，max_stop_pct)
             close_position=True,
         )
         tp_call = mock_binance.place_take_profit_market_order.call_args
@@ -967,12 +927,14 @@ class TestEmptyPlans:
     ):
         """已有 SL/TP 条件单时不应重复补挂。"""
         account = _make_account(
-            positions=[{
-                "symbol": "BTCUSDT",
-                "direction": "long",
-                "quantity": 0.001,
-                "entry_price": 76750.0,
-            }]
+            positions=[
+                {
+                    "symbol": "BTCUSDT",
+                    "direction": "long",
+                    "quantity": 0.001,
+                    "entry_price": 76750.0,
+                }
+            ]
         )
         mock_binance.get_position_risk.return_value = _make_position_risk(
             symbol="BTCUSDT",
@@ -1007,12 +969,14 @@ class TestEmptyPlans:
     ):
         """Binance Algo Service 省略 type 字段时，也不应重复补挂。"""
         account = _make_account(
-            positions=[{
-                "symbol": "BTCUSDT",
-                "direction": "long",
-                "quantity": 0.001,
-                "entry_price": 76750.0,
-            }]
+            positions=[
+                {
+                    "symbol": "BTCUSDT",
+                    "direction": "long",
+                    "quantity": 0.001,
+                    "entry_price": 76750.0,
+                }
+            ]
         )
         mock_binance.get_position_risk.return_value = _make_position_risk(
             symbol="BTCUSDT",
@@ -1064,12 +1028,14 @@ class TestEmptyPlans:
     ):
         """同一保护价出现多张 Algo 条件单时，只要 SL+TP 各≥1 就不撤销重挂。"""
         account = _make_account(
-            positions=[{
-                "symbol": "BTCUSDT",
-                "direction": "long",
-                "quantity": 0.001,
-                "entry_price": 76750.0,
-            }]
+            positions=[
+                {
+                    "symbol": "BTCUSDT",
+                    "direction": "long",
+                    "quantity": 0.001,
+                    "entry_price": 76750.0,
+                }
+            ]
         )
         mock_binance.get_position_risk.return_value = _make_position_risk(
             symbol="BTCUSDT",
@@ -1122,12 +1088,14 @@ class TestEmptyPlans:
     ):
         """已有保护单触发价和固定 3%/6% 不同，但 SL+TP 各≥1 就不撤销重挂。"""
         account = _make_account(
-            positions=[{
-                "symbol": "BTCUSDT",
-                "direction": "long",
-                "quantity": 0.001,
-                "entry_price": 76750.0,
-            }]
+            positions=[
+                {
+                    "symbol": "BTCUSDT",
+                    "direction": "long",
+                    "quantity": 0.001,
+                    "entry_price": 76750.0,
+                }
+            ]
         )
         mock_binance.get_position_risk.return_value = _make_position_risk(
             symbol="BTCUSDT",
@@ -1136,7 +1104,12 @@ class TestEmptyPlans:
             mark_price=76500.0,
         )
         mock_binance.get_open_algo_orders.return_value = [
-            {"type": "STOP_MARKET", "side": "SELL", "triggerPrice": "70000", "algoId": "111"},
+            {
+                "type": "STOP_MARKET",
+                "side": "SELL",
+                "triggerPrice": "70000",
+                "algoId": "111",
+            },
             {
                 "type": "TAKE_PROFIT_MARKET",
                 "side": "SELL",
@@ -1166,12 +1139,11 @@ class TestEmptyPlans:
 # 10. 多笔交易混合场景
 # ══════════════════════════════════════════════════════════
 
+
 class TestMultipleTrades:
     """测试多笔交易混合场景。"""
 
-    def test_mixed_results(
-        self, state_store, mock_binance, mock_risk_controller
-    ):
+    def test_mixed_results(self, state_store, mock_binance, mock_risk_controller):
         """多笔交易应各自独立执行并返回结果。"""
         # 第一笔通过风控，第二笔被拒绝
         mock_risk_controller.validate_order.side_effect = [
@@ -1181,9 +1153,7 @@ class TestMultipleTrades:
         mock_binance.get_position_risk.return_value = _make_position_risk(
             mark_price=110.0
         )
-        mock_binance.place_market_order.return_value = _make_order_result(
-            price=110.0
-        )
+        mock_binance.place_market_order.return_value = _make_order_result(price=110.0)
 
         plans = [
             _make_trade_plan(symbol="BTCUSDT"),
@@ -1192,9 +1162,7 @@ class TestMultipleTrades:
         upstream = _make_upstream_data(plans)
         state_id = state_store.save("skill3_strategy", upstream)
 
-        skill = _make_skill(
-            state_store, mock_binance, mock_risk_controller
-        )
+        skill = _make_skill(state_store, mock_binance, mock_risk_controller)
         result = skill.run({"input_state_id": state_id})
 
         assert len(result["execution_results"]) == 2
@@ -1205,6 +1173,7 @@ class TestMultipleTrades:
 # ══════════════════════════════════════════════════════════
 # 11. 持仓已被外部平仓
 # ══════════════════════════════════════════════════════════
+
 
 class TestExternalClose:
     """测试持仓被外部平仓的场景。"""
@@ -1221,9 +1190,7 @@ class TestExternalClose:
         upstream = _make_upstream_data([_make_trade_plan()])
         state_id = state_store.save("skill3_strategy", upstream)
 
-        skill = _make_skill(
-            state_store, mock_binance, mock_risk_controller
-        )
+        skill = _make_skill(state_store, mock_binance, mock_risk_controller)
         result = skill.run({"input_state_id": state_id})
 
         assert result["execution_results"][0]["status"] == "execution_failed"
@@ -1242,9 +1209,7 @@ class TestExternalClose:
         upstream = _make_upstream_data([_make_trade_plan()])
         state_id = state_store.save("skill3_strategy", upstream)
 
-        skill = _make_skill(
-            state_store, mock_binance, mock_risk_controller
-        )
+        skill = _make_skill(state_store, mock_binance, mock_risk_controller)
         result = skill.run({"input_state_id": state_id})
 
         assert result["execution_results"][0]["status"] == "filled"
@@ -1254,6 +1219,7 @@ class TestExternalClose:
 # ══════════════════════════════════════════════════════════
 # 12. 服务端止损/止盈条件单管理
 # ══════════════════════════════════════════════════════════
+
 
 class TestServerSideSlTp:
     """测试服务端止损/止盈条件单的挂载与清理。"""
@@ -1278,13 +1244,19 @@ class TestServerSideSlTp:
 
         # 应挂止损单，数量 = 实际持仓 10.0
         mock_binance.place_stop_market_order.assert_called_once_with(
-            symbol="BTCUSDT", side="SELL", quantity=10.0, stop_price=97.0,
-            close_position=True
+            symbol="BTCUSDT",
+            side="SELL",
+            quantity=10.0,
+            stop_price=97.0,
+            close_position=True,
         )
         # 应挂止盈单
         mock_binance.place_take_profit_market_order.assert_called_once_with(
-            symbol="BTCUSDT", side="SELL", quantity=10.0, stop_price=106.0,
-            close_position=True
+            symbol="BTCUSDT",
+            side="SELL",
+            quantity=10.0,
+            stop_price=106.0,
+            close_position=True,
         )
 
     def test_sl_tp_uses_actual_position_amt(
@@ -1309,7 +1281,10 @@ class TestServerSideSlTp:
         # 数量应为 8.5 而非计划中的计算值
         mock_binance.place_stop_market_order.assert_called_once()
         call_args = mock_binance.place_stop_market_order.call_args
-        assert call_args.kwargs.get("quantity") == 8.5 or call_args[1].get("quantity") == 8.5
+        assert (
+            call_args.kwargs.get("quantity") == 8.5
+            or call_args[1].get("quantity") == 8.5
+        )
 
     def test_sl_tp_trigger_prices_are_rounded_by_tick_size(
         self, state_store, mock_binance, mock_risk_controller
@@ -1323,7 +1298,9 @@ class TestServerSideSlTp:
             tick_size=Decimal("0.0000100"),
         )
         mock_binance.get_position_risk.side_effect = [
-            _make_position_risk(symbol="ZKPUSDT", mark_price=0.095, position_amt=0.0, entry_price=0.0),
+            _make_position_risk(
+                symbol="ZKPUSDT", mark_price=0.095, position_amt=0.0, entry_price=0.0
+            ),
             _make_position_risk(
                 symbol="ZKPUSDT",
                 mark_price=0.095,
@@ -1407,7 +1384,9 @@ class TestServerSideSlTp:
     ):
         """服务端条件单挂载失败不应阻断交易执行，本地轮询兜底。"""
         mock_binance.place_stop_market_order.side_effect = Exception("Algo API 异常")
-        mock_binance.place_take_profit_market_order.side_effect = Exception("Algo API 异常")
+        mock_binance.place_take_profit_market_order.side_effect = Exception(
+            "Algo API 异常"
+        )
         mock_binance.get_position_risk.return_value = _make_position_risk(
             mark_price=110.0, position_amt=10.0
         )
@@ -1466,10 +1445,16 @@ class TestServerSideSlTp:
         skill.run({"input_state_id": state_id})
 
         mock_binance.place_stop_market_order.assert_called_once_with(
-            symbol="BTCUSDT", side="BUY", quantity=10.0, stop_price=103.0,
-            close_position=True
+            symbol="BTCUSDT",
+            side="BUY",
+            quantity=10.0,
+            stop_price=103.0,
+            close_position=True,
         )
         mock_binance.place_take_profit_market_order.assert_called_once_with(
-            symbol="BTCUSDT", side="BUY", quantity=10.0, stop_price=94.0,
-            close_position=True
+            symbol="BTCUSDT",
+            side="BUY",
+            quantity=10.0,
+            stop_price=94.0,
+            close_position=True,
         )

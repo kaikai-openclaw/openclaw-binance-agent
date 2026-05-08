@@ -719,7 +719,13 @@ class BinanceFapiClient:
         if end_time is not None:
             params["endTime"] = end_time
         data = self._request_with_retry("GET", "/fapi/v1/userTrades", params)
-        return data if isinstance(data, list) else []
+        if not isinstance(data, list):
+            log.warning(
+                f"get_user_trades 返回类型异常: symbol={symbol}, "
+                f"type={type(data).__name__}，已过滤"
+            )
+            return []
+        return data
 
     def cancel_all_orders(self, symbol: Optional[str] = None) -> int:
         """

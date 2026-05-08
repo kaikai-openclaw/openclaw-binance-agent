@@ -49,6 +49,7 @@ from src.skills.skill1_collect import (
     EMA_FAST,
     EMA_SLOW,
     ATR_PERIOD,
+    ATR_PERIOD_FILTER,
 )
 
 log = logging.getLogger(__name__)
@@ -199,8 +200,10 @@ class Skill1ACollect(BaseSkill):
                 returns_map[symbol] = calc_returns(closes)
 
                 atr_val = calc_atr(highs, lows, closes, ATR_PERIOD)
+                atr_filter_val = calc_atr(highs, lows, closes, ATR_PERIOD_FILTER)
                 last_close = closes[-1]
                 atr_pct = round(atr_val / last_close * 100, 2) if (atr_val and last_close > 0) else None
+                atr_filter_pct = round(atr_filter_val / last_close * 100, 2) if (atr_filter_val and last_close > 0) else None
 
                 scored.append({
                     "symbol": symbol,
@@ -224,6 +227,7 @@ class Skill1ACollect(BaseSkill):
                     "ema_bullish": result["ema_bullish"],
                     "macd_bullish": result["macd_bullish"],
                     "atr_pct": atr_pct,
+                    "atr_filter_pct": atr_filter_pct,
                     "collected_at": datetime.now(timezone.utc).isoformat(),
                 })
             except Exception as exc:

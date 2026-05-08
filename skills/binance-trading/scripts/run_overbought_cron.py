@@ -151,6 +151,11 @@ def render_markdown(report: dict) -> str:
     execution = report["triggered_trades"]
     account = report["account"]
     risk = report["risk"]
+    rejected = report.get("rejected_symbols", [])
+    new_positions = report.get("new_positions", [])
+    existing_positions = [
+        pos for pos in report["positions"] if pos not in new_positions
+    ]
     lines = [
         f"📉 *超买做空报告* ({report['mode']})",
         "",
@@ -219,10 +224,30 @@ def render_markdown(report: dict) -> str:
             f"原因 {item.get('reason', '')}"
         )
 
-    lines.append("")
-    lines.extend(
-        render_positions_markdown(report["positions"], max_detail=3, compact=True)
-    )
+    if rejected:
+        lines.extend(["", "⚠️ *筛选通过但未开仓*:"])
+        for item in rejected:
+            lines.append(
+                f"- {item.get('symbol')}: 评分 {item.get('rating_score', 0)}/10, "
+                f"信号 {item.get('signal', '')}, 拒绝原因: {item.get('reason', '未知')}"
+            )
+
+    if new_positions:
+        lines.append("")
+        lines.extend(
+            render_positions_markdown(
+                new_positions, max_detail=3, compact=True, header="🆕 *本轮新开仓*"
+            )
+        )
+
+    if existing_positions:
+        lines.append("")
+        lines.extend(
+            render_positions_markdown(
+                existing_positions, max_detail=3, compact=True, header="📈 *持仓明细*"
+            )
+        )
+
     lines.append("")
     lines.extend(render_protection_markdown(report["protection_orders"], max_detail=3))
     lines.append("")
@@ -505,11 +530,20 @@ def run_report(args: argparse.Namespace) -> dict:
             },
             "decision": decision,
             "trade_plans": s3_data.get("trade_plans", []),
+            "rejected_symbols": s3_data.get("rejected_symbols", []),
             "triggered_trades": {
                 "this_run": s4_data.get("execution_results", []),
                 "closed_since_last_run_count": synced_closed_count,
             },
             "positions": positions,
+            "new_positions": [
+                pos
+                for pos in positions
+                if pos.get("symbol")
+                in {r.get("symbol", "") for r in s4_data.get("execution_results", [])}
+            ]
+            if s4_data.get("execution_results")
+            else [],
             "protection_orders": protection,
             "account": account_summary,
             "risk": {

@@ -161,6 +161,9 @@ class Skill2Analyze(BaseSkill):
         upstream_data = self.state_store.load(input_state_id)
         candidates = upstream_data.get("candidates", [])
 
+        # 透传 strategy_tag：如果上游数据带了 strategy_tag 且候选本身没有，则补到每个候选
+        upstream_strategy_tag = upstream_data.get("strategy_tag") or input_data.get("strategy_tag") or "crypto_reversal_4h"
+
         log.info(
             f"[{self.name}] 读取到 {len(candidates)} 个候选币种，"
             f"input_state_id={input_state_id}"
@@ -225,9 +228,8 @@ class Skill2Analyze(BaseSkill):
                     atr_pct = candidate.get("atr_pct")
                     if atr_pct is not None:
                         rating["atr_pct"] = atr_pct
-                    strategy_tag = candidate.get("strategy_tag")
-                    if strategy_tag:
-                        rating["strategy_tag"] = strategy_tag
+                    strategy_tag = candidate.get("strategy_tag") or upstream_strategy_tag
+                    rating["strategy_tag"] = strategy_tag
                     # 透传扫描层预期方向，供 Skill3 在 hold 时使用
                     signal_direction = candidate.get("signal_direction")
                     if signal_direction:

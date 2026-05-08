@@ -38,6 +38,7 @@ from src.skills.skill5_evolve import Skill5Evolve
 
 # ── 加载 Schema ──────────────────────────────────────────
 
+
 def _load_schema(name: str) -> dict:
     path = os.path.join("config", "schemas", name)
     with open(path) as f:
@@ -49,6 +50,7 @@ OUTPUT_SCHEMA = _load_schema("skill5_output.json")
 
 
 # ── 辅助函数 ──────────────────────────────────────────────
+
 
 def _make_account(
     total_balance: float = 10000.0,
@@ -134,6 +136,7 @@ def _make_trade_record(
 
 # ── Fixtures ──────────────────────────────────────────────
 
+
 @pytest.fixture
 def state_store(tmp_path):
     db_path = os.path.join(str(tmp_path), "test_state.db")
@@ -174,17 +177,19 @@ def _make_skill(
 # 1. 正常执行流程
 # ══════════════════════════════════════════════════════════
 
+
 class TestNormalExecution:
     """测试正常执行流程。"""
 
-    def test_basic_execution_with_positions(
-        self, state_store, memory_store
-    ):
+    def test_basic_execution_with_positions(self, state_store, memory_store):
         """有持仓时应正确构建展示数据。"""
         positions = [
             _make_position(
-                symbol="BTCUSDT", direction="long",
-                quantity=1.0, entry_price=100.0, current_price=110.0,
+                symbol="BTCUSDT",
+                direction="long",
+                quantity=1.0,
+                entry_price=100.0,
+                current_price=110.0,
             ),
         ]
         account = _make_account(positions=positions)
@@ -251,9 +256,7 @@ class TestNormalExecution:
         assert kwargs["metadata_by_symbol"]["BTCUSDT"]["rating_score"] == 8
         assert kwargs["metadata_by_symbol"]["BTCUSDT"]["position_size_pct"] == 12.0
 
-    def test_sync_symbols_include_current_positions(
-        self, state_store, memory_store
-    ):
+    def test_sync_symbols_include_current_positions(self, state_store, memory_store):
         """没有本轮执行结果时，也应尝试同步当前持仓币种。"""
         account = _make_account(positions=[_make_position(symbol="ETHUSDT")])
         trade_syncer = MagicMock()
@@ -275,12 +278,11 @@ class TestNormalExecution:
 # 2. 交易记录不足 20 笔 → 跳过进化
 # ══════════════════════════════════════════════════════════
 
+
 class TestInsufficientTrades:
     """测试交易记录不足 20 笔的场景（需求 5.7）。"""
 
-    def test_less_than_20_trades_skips_evolution(
-        self, state_store, memory_store
-    ):
+    def test_less_than_20_trades_skips_evolution(self, state_store, memory_store):
         """不足 20 笔交易时应跳过进化计算。"""
         # 插入 5 笔交易
         for _ in range(5):
@@ -293,9 +295,7 @@ class TestInsufficientTrades:
         assert result["evolution"]["trade_count"] == 5
         assert "不足 20 笔" in result["evolution"]["adjustment_detail"]
 
-    def test_zero_trades_skips_evolution(
-        self, state_store, memory_store
-    ):
+    def test_zero_trades_skips_evolution(self, state_store, memory_store):
         """零笔交易时应跳过进化计算。"""
         skill = _make_skill(state_store, memory_store)
         result = skill.run({})
@@ -309,12 +309,11 @@ class TestInsufficientTrades:
 # 3. 胜率低于 38% → 调优建议（需连续两轮确认）
 # ══════════════════════════════════════════════════════════
 
+
 class TestLowWinRate:
     """测试胜率低于 38% 时的调优逻辑（需求 5.5, 5.6）。"""
 
-    def test_low_win_rate_triggers_adjustment(
-        self, state_store, memory_store
-    ):
+    def test_low_win_rate_triggers_adjustment(self, state_store, memory_store):
         """胜率低于 38% 且连续两轮确认后应触发参数调整。"""
         # 插入 20 笔交易：4 笔盈利，16 笔亏损 → 胜率 20%
         for i in range(20):
@@ -324,15 +323,18 @@ class TestLowWinRate:
         # 先写入一条上轮同向反思日志（模拟连续确认）
         from src.models.types import ReflectionLog
         from datetime import datetime, timezone
-        memory_store.save_reflection(ReflectionLog(
-            created_at=datetime.now(timezone.utc),
-            win_rate=25.0,
-            avg_pnl_ratio=-1.0,
-            suggested_rating_threshold=6,
-            suggested_risk_ratio=0.02,
-            reasoning="上轮低胜率",
-            strategy_tag="unknown",
-        ))
+
+        memory_store.save_reflection(
+            ReflectionLog(
+                created_at=datetime.now(timezone.utc),
+                win_rate=25.0,
+                avg_pnl_ratio=-1.0,
+                suggested_rating_threshold=6,
+                suggested_risk_ratio=0.02,
+                reasoning="上轮低胜率",
+                strategy_tag="unknown",
+            )
+        )
 
         skill = _make_skill(state_store, memory_store)
         result = skill.run({})
@@ -341,9 +343,7 @@ class TestLowWinRate:
         assert result["evolution"]["trade_count"] == 20
         assert result["evolution"]["win_rate"] == 20.0
 
-    def test_adjustment_saves_reflection(
-        self, state_store, memory_store
-    ):
+    def test_adjustment_saves_reflection(self, state_store, memory_store):
         """调优时应保存反思日志到 Memory_Store。"""
         for i in range(20):
             pnl = 10.0 if i < 4 else -5.0
@@ -352,15 +352,18 @@ class TestLowWinRate:
         # 写入上轮同向反思日志
         from src.models.types import ReflectionLog
         from datetime import datetime, timezone
-        memory_store.save_reflection(ReflectionLog(
-            created_at=datetime.now(timezone.utc),
-            win_rate=25.0,
-            avg_pnl_ratio=-1.0,
-            suggested_rating_threshold=6,
-            suggested_risk_ratio=0.02,
-            reasoning="上轮低胜率",
-            strategy_tag="unknown",
-        ))
+
+        memory_store.save_reflection(
+            ReflectionLog(
+                created_at=datetime.now(timezone.utc),
+                win_rate=25.0,
+                avg_pnl_ratio=-1.0,
+                suggested_rating_threshold=6,
+                suggested_risk_ratio=0.02,
+                reasoning="上轮低胜率",
+                strategy_tag="unknown",
+            )
+        )
 
         skill = _make_skill(state_store, memory_store)
         skill.run({})
@@ -374,12 +377,11 @@ class TestLowWinRate:
 # 4. 胜率正常 → 维持默认参数
 # ══════════════════════════════════════════════════════════
 
+
 class TestNormalWinRate:
     """测试胜率正常时维持默认参数（需求 5.4）。"""
 
-    def test_normal_win_rate_no_adjustment(
-        self, state_store, memory_store
-    ):
+    def test_normal_win_rate_no_adjustment(self, state_store, memory_store):
         """胜率在 38%-62% 死区内时不应触发参数调整。"""
         # 插入 20 笔交易：10 笔盈利，10 笔亏损 → 胜率 50%
         for i in range(20):
@@ -398,6 +400,7 @@ class TestNormalWinRate:
 # 5. 空持仓列表
 # ══════════════════════════════════════════════════════════
 
+
 class TestEmptyPositions:
     """测试空持仓列表场景。"""
 
@@ -415,6 +418,7 @@ class TestEmptyPositions:
 # 6. Paper Mode 标记
 # ══════════════════════════════════════════════════════════
 
+
 class TestPaperMode:
     """测试 Paper Mode 标记。"""
 
@@ -430,6 +434,7 @@ class TestPaperMode:
 # ══════════════════════════════════════════════════════════
 # 7. 无上游 state_id（定时触发）
 # ══════════════════════════════════════════════════════════
+
 
 class TestNoUpstreamStateId:
     """测试无上游 state_id 的场景。"""
@@ -448,6 +453,7 @@ class TestNoUpstreamStateId:
 # ══════════════════════════════════════════════════════════
 # 8. 平仓交易数据提取
 # ══════════════════════════════════════════════════════════
+
 
 class TestClosedTradeRecording:
     """测试平仓交易数据提取存入 Memory_Store（需求 5.3）。"""
@@ -470,9 +476,7 @@ class TestClosedTradeRecording:
         assert len(trades) == 1
         assert trades[0].symbol == "BTCUSDT"
 
-    def test_rejected_trade_not_recorded(
-        self, state_store, memory_store
-    ):
+    def test_rejected_trade_not_recorded(self, state_store, memory_store):
         """被风控拒绝的交易不应被记录。"""
         upstream = {
             "state_id": str(uuid.uuid4()),
@@ -511,6 +515,7 @@ class TestClosedTradeRecording:
 # 9. Markdown 表格生成
 # ══════════════════════════════════════════════════════════
 
+
 class TestMarkdownGeneration:
     """测试 Markdown 表格生成（需求 5.2）。"""
 
@@ -518,20 +523,35 @@ class TestMarkdownGeneration:
         """有持仓时 Markdown 应包含持仓明细表格。"""
         positions = [
             _make_position(
-                symbol="BTCUSDT", direction="long",
-                quantity=1.0, entry_price=100.0, current_price=110.0,
+                symbol="BTCUSDT",
+                direction="long",
+                quantity=1.0,
+                entry_price=100.0,
+                current_price=110.0,
             ),
         ]
         account = _make_account(positions=positions)
 
         md = Skill5Evolve._generate_markdown(
             account,
-            [{"symbol": "BTCUSDT", "direction": "long",
-              "quantity": 1.0, "entry_price": 100.0,
-              "current_price": 110.0, "pnl_ratio": 10.0}],
-            {"win_rate": 60.0, "avg_pnl_ratio": 5.0,
-             "trade_count": 10, "adjustment_applied": False,
-             "adjustment_detail": ""},
+            [
+                {
+                    "symbol": "BTCUSDT",
+                    "direction": "long",
+                    "quantity": 1.0,
+                    "entry_price": 100.0,
+                    "current_price": 110.0,
+                    "pnl_ratio": 10.0,
+                }
+            ],
+            {
+                "win_rate": 60.0,
+                "avg_pnl_ratio": 5.0,
+                "trade_count": 10,
+                "adjustment_applied": False,
+                "adjustment_detail": "",
+            },
+            [],
         )
 
         assert "账户状态概览" in md
@@ -544,10 +564,16 @@ class TestMarkdownGeneration:
         account = _make_account()
 
         md = Skill5Evolve._generate_markdown(
-            account, [],
-            {"win_rate": 0.0, "avg_pnl_ratio": 0.0,
-             "trade_count": 0, "adjustment_applied": False,
-             "adjustment_detail": ""},
+            account,
+            [],
+            {
+                "win_rate": 0.0,
+                "avg_pnl_ratio": 0.0,
+                "trade_count": 0,
+                "adjustment_applied": False,
+                "adjustment_detail": "",
+            },
+            [],
         )
 
         assert "当前无持仓" in md
@@ -557,18 +583,84 @@ class TestMarkdownGeneration:
         account = _make_account(is_paper_mode=True)
 
         md = Skill5Evolve._generate_markdown(
-            account, [],
-            {"win_rate": 0.0, "avg_pnl_ratio": 0.0,
-             "trade_count": 0, "adjustment_applied": False,
-             "adjustment_detail": ""},
+            account,
+            [],
+            {
+                "win_rate": 0.0,
+                "avg_pnl_ratio": 0.0,
+                "trade_count": 0,
+                "adjustment_applied": False,
+                "adjustment_detail": "",
+            },
+            [],
         )
 
         assert "模拟盘" in md
+
+    def test_markdown_with_executed_trades(self, state_store, memory_store):
+        """有成交时 Markdown 应展示本轮新开仓。"""
+        account = _make_account()
+        execution_results = [
+            {
+                "symbol": "BTCUSDT",
+                "direction": "long",
+                "status": "filled",
+                "executed_price": 100.0,
+                "executed_quantity": 1.0,
+                "pnl_amount": 0.0,
+                "fee": 0.1,
+                "close_reason": "开仓",
+            }
+        ]
+        md = Skill5Evolve._generate_markdown(
+            account,
+            [],
+            {
+                "win_rate": 0.0,
+                "avg_pnl_ratio": 0.0,
+                "trade_count": 0,
+                "adjustment_applied": False,
+                "adjustment_detail": "",
+            },
+            execution_results,
+        )
+        assert "本轮新开仓" in md
+        assert "BTCUSDT" in md
+        assert "100.0000" in md
+
+    def test_markdown_with_rejected_trades(self, state_store, memory_store):
+        """有风控拒绝时 Markdown 应展示本轮风控拒绝。"""
+        account = _make_account()
+        execution_results = [
+            {
+                "symbol": "ETHUSDT",
+                "direction": "short",
+                "status": "rejected_by_risk",
+                "reason": "保证金不足",
+                "planned_quantity": 5.0,
+            }
+        ]
+        md = Skill5Evolve._generate_markdown(
+            account,
+            [],
+            {
+                "win_rate": 0.0,
+                "avg_pnl_ratio": 0.0,
+                "trade_count": 0,
+                "adjustment_applied": False,
+                "adjustment_detail": "",
+            },
+            execution_results,
+        )
+        assert "本轮风控拒绝" in md
+        assert "ETHUSDT" in md
+        assert "保证金不足" in md
 
 
 # ══════════════════════════════════════════════════════════
 # 10. 盈亏比例计算
 # ══════════════════════════════════════════════════════════
+
 
 class TestPnlRatioCalculation:
     """测试持仓盈亏比例计算（需求 5.2）。"""

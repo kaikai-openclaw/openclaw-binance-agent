@@ -38,12 +38,14 @@ class RiskController:
     """
 
     # 硬编码常量（不可配置）
-    MAX_SINGLE_MARGIN_RATIO = 0.35    # 单笔保证金 <= 总资金 35%
+    # 注意：以下常量与 SOUL.md / MEMORY.md 保持严格一致，修改前必须先更新文档。
+    # 单笔保证金 <= 总资金 20%（SOUL.md 红线，P0）
+    MAX_SINGLE_MARGIN_RATIO = 0.20
     MAX_SINGLE_COIN_RATIO = 0.40      # 单币累计持仓 <= 总资金 40%
     DAILY_LOSS_THRESHOLD = 0.05       # 日亏损阈值 5%
     STOP_LOSS_COOLDOWN_HOURS = 24     # 止损后同方向冷却期（小时）
     MAX_TOTAL_EXPOSURE_RATIO = 4.0    # 全账户总持仓名义价值 <= 总资金 × 4x（P0）
-    MAX_OPEN_POSITIONS = 20           # 同时持仓数量上限（P0，全账户总共）
+    MAX_OPEN_POSITIONS = 30           # 同时持仓数量上限（P0，全账户总共）
 
     _CREATE_COOLDOWN_TABLE_SQL = """
         CREATE TABLE IF NOT EXISTS stop_loss_cooldowns (
@@ -65,6 +67,16 @@ class RiskController:
             key        TEXT PRIMARY KEY,
             value      TEXT NOT NULL,
             updated_at TEXT NOT NULL
+        )
+    """
+
+    _CREATE_POSITION_STRATEGY_TABLE_SQL = """
+        CREATE TABLE IF NOT EXISTS position_strategy_tags (
+            symbol      TEXT NOT NULL,
+            direction   TEXT NOT NULL,
+            strategy_tag TEXT NOT NULL,
+            opened_at   TEXT NOT NULL,
+            PRIMARY KEY (symbol, direction)
         )
     """
 
@@ -106,6 +118,7 @@ class RiskController:
             self._thread_local.conn.execute(self._CREATE_COOLDOWN_TABLE_SQL)
             self._thread_local.conn.execute(self._CREATE_COOLDOWN_INDEX_SQL)
             self._thread_local.conn.execute(self._CREATE_RUNTIME_STATE_TABLE_SQL)
+            self._thread_local.conn.execute(self._CREATE_POSITION_STRATEGY_TABLE_SQL)
             self._migrate_cooldown_strategy_tag(self._thread_local.conn)
             self._thread_local.conn.commit()
             self._conn = self._thread_local.conn  # 保留引用供 __del__ 使用
@@ -143,9 +156,9 @@ class RiskController:
         对单笔订单执行全部风控断言校验。
 
         校验项：
-        1. 单笔保证金 <= 总资金 × 35%
+        1. 单笔保证金 <= 总资金 × 20%（P0 红线）
         2. 单币累计持仓 <= 总资金 × 40%
-        3. 止损冷却期内禁止同方向开仓（按 strategy_tag 隔离）
+        3. 止损冷却期内禁止同方向开仓（按 symbol+direction 隔离，不区分策略）
         4. 该策略是否处于 Paper Mode
         5. 同时持仓数量 <= MAX_OPEN_POSITIONS（P0）
         6. 全账户总持仓名义价值 <= 总资金 × MAX_TOTAL_EXPOSURE_RATIO（P0）
@@ -222,13 +235,13 @@ class RiskController:
             log.warning(f"风控拒绝: {reason}")
             return ValidationResult(passed=False, reason=reason)
 
-        # 断言 3：止损冷却期检查（按策略隔离）
+        # 断言 3：止损冷却期检查（按 symbol+direction 全账户共享，不区分策略）
         direction_str = (
             order.direction.value
             if hasattr(order.direction, "value")
             else str(order.direction)
         )
-        if self._is_in_cooldown(order.symbol, direction_str, strategy_tag):
+        if self._is_in_cooldown(order.symbol, direction_str):
             reason = (
                 f"{order.symbol} {direction_str} 处于止损冷却期"
                 f"（{self.STOP_LOSS_COOLDOWN_HOURS} 小时内禁止同方向开仓）"
@@ -346,12 +359,14 @@ class RiskController:
         记录某币种某方向的止损事件，启动 24 小时冷却期。
 
         持久化到 SQLite（若已配置），同时写入内存列表作为回退。
-        冷却期按 (symbol, direction, strategy_tag) 隔离，不同策略互不影响。
+        冷却期按 (symbol, direction) 共享，不区分策略——
+        这是为满足「止损后同币种同方向 24 小时内禁止开仓」的业务要求，
+        无论哪个策略记录了冷却期，后续任何策略都不应在冷却期内重复开仓。
 
         参数:
             symbol: 币种交易对符号，如 "BTCUSDT"
             direction: 交易方向，"long" 或 "short"
-            strategy_tag: 策略标签，如 "crypto_oversold_long"
+            strategy_tag: 策略标签（仅作记录，不影响冷却期判断）
         """
         now = datetime.now(timezone.utc)
 
@@ -371,6 +386,39 @@ class RiskController:
             f"止损记录: {symbol} {direction} strategy={strategy_tag} "
             f"于 {now.isoformat()}，冷却期 {self.STOP_LOSS_COOLDOWN_HOURS} 小时"
         )
+
+    def record_position_strategy_tag(self, symbol: str, direction: str, strategy_tag: str) -> None:
+        """
+        记录某持仓由哪个策略开仓。
+
+        写入 position_strategy_tags 表，供后续 _protect_existing_positions
+        触发止损时查找真实策略标签，而不是写 "existing_position"。
+        """
+        if not strategy_tag or strategy_tag == "existing_position":
+            return
+        now = datetime.now(timezone.utc)
+        conn = self._get_conn()
+        if conn is not None:
+            conn.execute(
+                "INSERT OR REPLACE INTO position_strategy_tags "
+                "(symbol, direction, strategy_tag, opened_at) VALUES (?, ?, ?, ?)",
+                (symbol, direction, strategy_tag, now.isoformat()),
+            )
+            conn.commit()
+
+    def _get_position_strategy_tag(self, symbol: str, direction: str) -> str:
+        """查询已有持仓的策略标签；若未记录返回 \"existing_position\"。"""
+        conn = self._get_conn()
+        if conn is not None:
+            cursor = conn.execute(
+                "SELECT strategy_tag FROM position_strategy_tags "
+                "WHERE symbol = ? AND direction = ? LIMIT 1",
+                (symbol, direction),
+            )
+            row = cursor.fetchone()
+            if row:
+                return row[0]
+        return "existing_position"
 
     # ----------------------------------------------------------------
     # 内部辅助方法
@@ -423,11 +471,14 @@ class RiskController:
             total += abs(quantity) * price
         return total
 
-    def _is_in_cooldown(self, symbol: str, direction: str, strategy_tag: str = "") -> bool:
+    def _is_in_cooldown(self, symbol: str, direction: str) -> bool:
         """
-        检查指定币种、方向和策略是否处于止损冷却期内。
+        检查指定币种、方向是否处于止损冷却期内。
 
-        冷却期按 (symbol, direction, strategy_tag) 隔离。
+        冷却期按 (symbol, direction) 隔离，不区分 strategy_tag——
+        这是为满足「止损后同币种同方向 24 小时内禁止开仓」的业务要求，
+        无论哪个策略记录了冷却期，后续任何策略都不应在冷却期内重复开仓。
+
         优先查询 SQLite（若已配置），否则回退到内存列表。
         """
         now = datetime.now(timezone.utc)
@@ -435,27 +486,19 @@ class RiskController:
         conn = self._get_conn()
         if conn is not None:
             cutoff = (now - timedelta(hours=self.STOP_LOSS_COOLDOWN_HOURS)).isoformat()
+            # 不再按 strategy_tag 隔离——只要存在任一策略的冷却期记录就拦
             cursor = conn.execute(
                 "SELECT 1 FROM stop_loss_cooldowns "
-                "WHERE symbol = ? AND direction = ? AND strategy_tag = ? "
-                "AND recorded_at > ? LIMIT 1",
-                (symbol, direction, strategy_tag, cutoff),
+                "WHERE symbol = ? AND direction = ? AND recorded_at > ? LIMIT 1",
+                (symbol, direction, cutoff),
             )
             return cursor.fetchone() is not None
 
         # 内存回退
         cooldown_delta = timedelta(hours=self.STOP_LOSS_COOLDOWN_HOURS)
         for rec_symbol, rec_direction, rec_tag, rec_time in self._stop_loss_records:
-            if (
-                rec_symbol == symbol
-                and rec_direction == direction
-                and rec_tag == strategy_tag
-            ):
-                # 兼容 naive datetime（旧测试用 datetime.now() 无时区）
-                if rec_time.tzinfo is None:
-                    elapsed = datetime.now() - rec_time
-                else:
-                    elapsed = now - rec_time
+            if rec_symbol == symbol and rec_direction == direction:
+                elapsed = (datetime.now() - rec_time) if rec_time.tzinfo is None else (now - rec_time)
                 if elapsed < cooldown_delta:
                     return True
 

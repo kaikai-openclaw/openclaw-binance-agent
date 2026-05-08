@@ -57,6 +57,7 @@ from src.skills.skill1_collect import (
     RSI_PERIOD,
     EMA_FAST,
     ATR_PERIOD,
+    ATR_PERIOD_FILTER,
 )
 
 log = logging.getLogger(__name__)
@@ -267,6 +268,16 @@ class _AStockOversoldBase(BaseSkill):
         all_tickers = self._client.get_spot_all()
         total_count = len(all_tickers)
 
+        # 排除科创板（688 开头）
+        exclude_kcb = input_data.get("exclude_kcb", False)
+        if exclude_kcb:
+            before = len(all_tickers)
+            all_tickers = [
+                t for t in all_tickers
+                if not (t.get("symbol", "").startswith("688") or t.get("code", "").startswith("688"))
+            ]
+            log.info("[%s] 排除科创板: %d → %d", self.name, before, len(all_tickers))
+
         if target_symbols:
             pool = self._build_target_pool(all_tickers, target_symbols)
             if not pool and hasattr(self._client, "get_spot_by_hist"):
@@ -373,8 +384,10 @@ class _AStockOversoldBase(BaseSkill):
 
             returns = calc_returns(closes)
             atr_val = calc_atr(highs, lows, closes, ATR_PERIOD)
+            atr_filter_val = calc_atr(highs, lows, closes, ATR_PERIOD_FILTER)
             last_close = closes[-1]
             atr_pct = round(atr_val / last_close * 100, 2) if (atr_val and last_close > 0) else None
+            atr_filter_pct = round(atr_filter_val / last_close * 100, 2) if (atr_filter_val and last_close > 0) else None
 
             scored_item = {
                 "symbol": symbol,
@@ -392,6 +405,7 @@ class _AStockOversoldBase(BaseSkill):
                 "oversold_score": result["oversold_score"],
                 "signal_details": result["signal_details"],
                 "atr_pct": atr_pct,
+                "atr_filter_pct": atr_filter_pct,
                 "collected_at": datetime.now(timezone.utc).isoformat(),
             }
             return scored_item, returns

@@ -117,6 +117,7 @@ class TradeRecord:
     closed_at: datetime            # 平仓时间戳
     strategy_tag: str = "unknown"  # 策略标签，用于独立归因统计
     is_paper: bool = False         # 是否为模拟盘交易
+    close_reason: str = "unknown"  # 平仓原因: stop_loss / take_profit / timeout / partial_tp / unknown
 
 
 @dataclass

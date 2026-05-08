@@ -11,5 +11,5 @@
     }
   },
   "required": ["input_state_id"],
-  "additionalProperties": false
+  "additionalProperties": true
 }

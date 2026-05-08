@@ -49,13 +49,10 @@
 - 每轮执行开始要清理无持仓残留 Algo 条件单。
 
 ## 定时任务规范
-
-“超跌交易”定时任务必须优先使用固定入口：
-
+"超跌交易"定时任务必须优先使用固定入口：
 ```bash
 .venv/bin/python3 skills/binance-trading/scripts/run_oversold_cron.py --fast --format markdown
 ```
-
 该脚本负责统一输出扫描、评级、交易执行、已同步平仓、持仓涨跌、杠杆、资金占比、保护单健康状态、账户和风险状态。不要让模型根据零散命令输出自由改写最终报告。
 
 ## 记忆管理
@@ -70,3 +67,100 @@
 - 修改后运行相关测试，至少覆盖被改动模块。
 - 提交前检查 `git status`，排除 `memory/`、数据库、密钥和临时文件。
 - 提交信息沿用仓库风格，例如 `fix: 规范超跌定时任务报告`。
+
+## 构建 / 运行
+```bash
+cd openclaw-binance-agent
+uv run python <script>.py              # 运行脚本
+uv sync                                # 同步依赖
+```
+
+## 测试
+```bash
+cd openclaw-binance-agent
+
+# 全部测试
+PYTHONPATH="." python -m pytest
+
+# 单个测试文件
+PYTHONPATH="." python -m pytest tests/test_skill4_execute.py
+
+# 单个测试函数（详细模式）
+PYTHONPATH="." python -m pytest tests/test_skill4_execute.py::test_trailing_stop_triggers_after_activation_for_long -v
+```
+
+## 代码风格
+
+### 导入顺序
+标准库 → 第三方 → 本地模块，禁止跨模块相对导入。
+
+```python
+import logging
+from datetime import datetime, timezone
+from typing import Any, Callable, List, Optional
+
+import requests
+
+from src.infra.binance_fapi import BinanceFapiClient
+from src.models.types import OrderRequest
+```
+
+### 类型注解
+- 所有函数签名包含完整类型提示，包括返回类型。
+- 使用 `Optional[X]`（而非 `X | None`）保持一致。
+- 使用 dataclass 定义数据模型。
+
+```python
+@dataclass
+class OrderRequest:
+    symbol: str
+    direction: TradeDirection
+    price: float
+    quantity: float
+    leverage: int
+    order_type: str = "limit"
+```
+
+### 命名规范
+| 元素 | 规范 | 示例 |
+|------|------|------|
+| 类 | PascalCase | `BinanceFapiClient` |
+| 函数/方法 | snake_case | `validate_order` |
+| 常量 | UPPER_SNAKE | `MAX_SINGLE_MARGIN_RATIO` |
+| 私有属性 | `_前缀` | `self._binance_client` |
+| 枚举值 | PascalCase | `TradeDirection.LONG` |
+
+### 枚举
+```python
+class OrderStatus(str, Enum):
+    FILLED = "filled"
+    OPEN = "open"
+    REJECTED_BY_RISK = "rejected_by_risk"
+```
+
+### 异常处理与日志
+- 为领域错误定义特定异常类，不使用裸 `except:`。
+- try-except 捕获特定异常，优雅降级。
+- 日志：`log = logging.getLogger(__name__)`
+
+```python
+class IPBannedError(Exception):
+    pass
+
+try:
+    result = self._binance_client.get_position_risk(symbol)
+except Exception as exc:
+    log.warning(f"获取持仓信息失败: {exc}")
+```
+
+### 文档字符串
+使用中文。参数说明中英混用均可。
+
+```python
+def validate_order(self, order: OrderRequest, account: AccountState) -> ValidationResult:
+    """对单笔订单执行全部风控断言校验。"""
+```
+
+## 不提交的文件
+
+`.env`、`*.db`、`memory/`、`data/`、`.venv/`、`.hypothesis/`、`.pytest_cache/`。

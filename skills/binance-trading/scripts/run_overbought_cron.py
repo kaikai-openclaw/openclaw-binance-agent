@@ -359,12 +359,11 @@ def run_report(args: argparse.Namespace) -> dict:
                     risk_ratio=risk_ratio,
                     require_market_price=True,
                     # ── 超买做空策略参数 ──
-                    # 1h 模式：小仓位 + 宽止损，12h 持仓
-                    #   止损 1.5× ATR（0.8× 太紧，1h 噪音会频繁扫止损）
-                    #   止盈 3.0× ATR，盈亏比 2:1
-                    #   单笔持仓上限 6%（做空风险更大，严控敞口）
-                    #   移动止损 1.5× ATR 激活（让趋势有空间发展）
-                    # 4h 模式：48h 持仓，atr_stop_mult=1.2，ATR ≤ 4.2% 可进场
+                    # 1h 模式：小仓位 + 宽止损，4h 持仓
+                    #   止损 1.5× ATR，止盈 3.0× ATR，盈亏比 2:1
+                    #   做空移动止损激活 0.8× ATR（P0-2：更快锁利）
+                    #   单笔持仓上限 5%（5%×100U@10x）
+                    # 4h 模式：24h 持仓，atr_stop_mult=1.2，ATR ≤ 4.2% 可进场
                     #   盈亏比 2.9:1（atr_tp_mult=3.5 / atr_stop_mult=1.2）
                     #   做空持仓上限 10%（风险不对称，比做多更保守）
                     # 1d 模式：波段做空，atr_stop_mult=1.5，ATR ≤ 4.7% 可进场
@@ -372,18 +371,23 @@ def run_report(args: argparse.Namespace) -> dict:
                     max_stop_pct=0.04
                     if args.mode == "1h"
                     else (0.05 if args.mode == "4h" else 0.07),
-                    max_hold_hours=4.0
-                    if args.mode == "1h"
-                    else 24.0,  # 1h策略75%触发=3h，时间衰减止盈真正生效
+                    max_hold_hours=4.0 if args.mode == "1h" else 24.0,
                     atr_stop_mult=1.5 if args.mode == "1h" else 1.2,
                     atr_tp_mult=3.0 if args.mode == "1h" else 3.5,
-                    # 4h做空收紧移动止损（做空亏损无限，必须更快锁利）
+                    # P0-2: 做空移动止损激活系数（更快锁利）
+                    # LONG 用下面两个参数，SHORT 用 Skill3 硬编码的 0.8/1.2
                     trailing_stop_ratio=0.5 if args.mode == "1h" else 0.40,
                     trailing_activation_mult=1.5 if args.mode == "1h" else 1.2,
                     trailing_activation_mult_hv=2.0 if args.mode == "1h" else 1.5,
+                    # P1-3: max_position_pct 和 max_margin_usdt 一致性
+                    # 1h: 5%仓位 / 5U保证金；4h: 10%仓位 / 10U保证金；1d: 10%仓位
                     max_trades=2 if args.mode == "1h" else 3,
-                    max_position_pct=6.0 if args.mode == "1h" else 10.0,
-                    max_margin_usdt=5.0 if args.mode in ("1h", "4h") else None,
+                    max_position_pct=5.0
+                    if args.mode == "1h"
+                    else (10.0 if args.mode == "4h" else 10.0),
+                    max_margin_usdt=5.0
+                    if args.mode == "1h"
+                    else (10.0 if args.mode == "4h" else None),
                 )
                 s3_input_id = state_store.save(
                     "skill3_input", {"input_state_id": s2_id}

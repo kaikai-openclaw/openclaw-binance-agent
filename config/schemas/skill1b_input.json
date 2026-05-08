@@ -95,6 +95,16 @@
       "maximum": 0,
       "default": 0,
       "description": "当日跌幅预筛阈值（%），设 0 禁用（默认禁用，让 K 线指标判断超跌）"
+    },
+    "exclude_kcb": {
+      "type": "boolean",
+      "default": false,
+      "description": "是否排除科创板（688xxx），默认 False"
+    },
+    "skip_market_regime": {
+      "type": "boolean",
+      "default": false,
+      "description": "跳过大盘环境过滤，默认 False"
     }
   },
   "required": [

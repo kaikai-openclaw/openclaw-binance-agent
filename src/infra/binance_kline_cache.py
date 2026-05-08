@@ -14,6 +14,7 @@ Binance 合约 K 线本地缓存模块
 import logging
 import os
 import sqlite3
+import threading
 from typing import Any, Dict, List, Optional, Tuple
 
 log = logging.getLogger(__name__)
@@ -50,11 +51,12 @@ class BinanceKlineCache:
         db_dir = os.path.dirname(db_path)
         if db_dir:
             os.makedirs(db_dir, exist_ok=True)
-        self._conn = sqlite3.connect(db_path)
+        self._conn = sqlite3.connect(db_path, check_same_thread=False)
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute(_CREATE_SQL)
         self._conn.execute(_INDEX_SQL)
         self._conn.commit()
+        self._lock = threading.RLock()
 
     # ── 查询 ──────────────────────────────────────────────
 
@@ -90,29 +92,24 @@ class BinanceKlineCache:
             sql += " AND open_time <= ?"
             params.append(end_time)
 
-        sql += " ORDER BY open_time ASC"
-
-        if limit > 0:
-            sql += " LIMIT ?"
-            params.append(limit)
-
-        cursor = self._conn.execute(sql, params)
-        return [
-            {
-                "open_time": row[0],
-                "open": row[1],
-                "high": row[2],
-                "low": row[3],
-                "close": row[4],
-                "volume": row[5],
-                "close_time": row[6],
-                "quote_volume": row[7],
-                "trades": row[8],
-                "taker_buy_volume": row[9],
-                "taker_buy_quote_vol": row[10],
-            }
-            for row in cursor.fetchall()
-        ]
+        with self._lock:
+            cursor = self._conn.execute(sql, params)
+            return [
+                {
+                    "open_time": row[0],
+                    "open": row[1],
+                    "high": row[2],
+                    "low": row[3],
+                    "close": row[4],
+                    "volume": row[5],
+                    "close_time": row[6],
+                    "quote_volume": row[7],
+                    "trades": row[8],
+                    "taker_buy_volume": row[9],
+                    "taker_buy_quote_vol": row[10],
+                }
+                for row in cursor.fetchall()
+            ]
 
     def query_as_lists(
         self, symbol: str, interval: str, limit: int = 100,
@@ -122,16 +119,17 @@ class BinanceKlineCache:
         返回: [[open_time, open, high, low, close, volume, close_time, ...], ...]
         与 BinancePublicClient.get_klines() 返回格式一致，方便下游无缝切换。
         """
-        cursor = self._conn.execute(
-            "SELECT open_time, open, high, low, close, volume, "
-            "close_time, quote_volume, trades, taker_buy_volume, taker_buy_quote_vol "
-            "FROM binance_kline_cache "
-            "WHERE symbol = ? AND interval = ? "
-            "ORDER BY open_time DESC LIMIT ?",
-            (symbol, interval, limit),
-        )
-        rows = cursor.fetchall()
-        rows.reverse()  # 正序
+        with self._lock:
+            cursor = self._conn.execute(
+                "SELECT open_time, open, high, low, close, volume, "
+                "close_time, quote_volume, trades, taker_buy_volume, taker_buy_quote_vol "
+                "FROM binance_kline_cache "
+                "WHERE symbol = ? AND interval = ? "
+                "ORDER BY open_time DESC LIMIT ?",
+                (symbol, interval, limit),
+            )
+            rows = cursor.fetchall()
+            rows.reverse()  # 正序
         # 转为 Binance 原始格式: 值转字符串
         return [
             [
@@ -155,34 +153,37 @@ class BinanceKlineCache:
 
     def get_row_count(self, symbol: str, interval: str) -> int:
         """返回缓存中该交易对的总行数。"""
-        cursor = self._conn.execute(
-            "SELECT COUNT(*) FROM binance_kline_cache "
-            "WHERE symbol = ? AND interval = ?",
-            (symbol, interval),
-        )
-        return cursor.fetchone()[0]
+        with self._lock:
+            cursor = self._conn.execute(
+                "SELECT COUNT(*) FROM binance_kline_cache "
+                "WHERE symbol = ? AND interval = ?",
+                (symbol, interval),
+            )
+            return cursor.fetchone()[0]
 
     def get_time_range(
         self, symbol: str, interval: str,
     ) -> Optional[Tuple[int, int]]:
         """返回缓存中该交易对的 (最早open_time, 最晚open_time)，无数据返回 None。"""
-        cursor = self._conn.execute(
-            "SELECT MIN(open_time), MAX(open_time) FROM binance_kline_cache "
-            "WHERE symbol = ? AND interval = ?",
-            (symbol, interval),
-        )
-        row = cursor.fetchone()
-        if row and row[0] is not None and row[1] is not None:
-            return (row[0], row[1])
-        return None
+        with self._lock:
+            cursor = self._conn.execute(
+                "SELECT MIN(open_time), MAX(open_time) FROM binance_kline_cache "
+                "WHERE symbol = ? AND interval = ?",
+                (symbol, interval),
+            )
+            row = cursor.fetchone()
+            if row and row[0] is not None and row[1] is not None:
+                return (row[0], row[1])
+            return None
 
     def get_cached_symbols(self, interval: str = "4h") -> List[str]:
         """返回缓存中已有数据的所有交易对列表。"""
-        cursor = self._conn.execute(
-            "SELECT DISTINCT symbol FROM binance_kline_cache WHERE interval = ?",
-            (interval,),
-        )
-        return [row[0] for row in cursor.fetchall()]
+        with self._lock:
+            cursor = self._conn.execute(
+                "SELECT DISTINCT symbol FROM binance_kline_cache WHERE interval = ?",
+                (interval,),
+            )
+            return [row[0] for row in cursor.fetchall()]
 
     # ── 写入 ──────────────────────────────────────────────
 
@@ -192,26 +193,27 @@ class BinanceKlineCache:
         """批量写入/更新缓存（dict 格式），返回写入行数。"""
         if not rows:
             return 0
-        self._conn.executemany(
-            "INSERT OR REPLACE INTO binance_kline_cache "
-            "(symbol, interval, open_time, open, high, low, close, volume, "
-            "close_time, quote_volume, trades, taker_buy_volume, taker_buy_quote_vol) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            [
-                (
-                    symbol, interval,
-                    r["open_time"], r["open"], r["high"], r["low"], r["close"],
-                    r["volume"], r["close_time"],
-                    r.get("quote_volume", 0),
-                    r.get("trades", 0),
-                    r.get("taker_buy_volume", 0),
-                    r.get("taker_buy_quote_vol", 0),
-                )
-                for r in rows
-            ],
-        )
-        self._conn.commit()
-        return len(rows)
+        with self._lock:
+            self._conn.executemany(
+                "INSERT OR REPLACE INTO binance_kline_cache "
+                "(symbol, interval, open_time, open, high, low, close, volume, "
+                "close_time, quote_volume, trades, taker_buy_volume, taker_buy_quote_vol) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (
+                        symbol, interval,
+                        r["open_time"], r["open"], r["high"], r["low"], r["close"],
+                        r["volume"], r["close_time"],
+                        r.get("quote_volume", 0),
+                        r.get("trades", 0),
+                        r.get("taker_buy_volume", 0),
+                        r.get("taker_buy_quote_vol", 0),
+                    )
+                    for r in rows
+                ],
+            )
+            self._conn.commit()
+            return len(rows)
 
     def upsert_from_raw(
         self, symbol: str, interval: str, klines: List[list],
@@ -222,37 +224,39 @@ class BinanceKlineCache:
         """
         if not klines:
             return 0
-        self._conn.executemany(
-            "INSERT OR REPLACE INTO binance_kline_cache "
-            "(symbol, interval, open_time, open, high, low, close, volume, "
-            "close_time, quote_volume, trades, taker_buy_volume, taker_buy_quote_vol) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            [
-                (
-                    symbol, interval,
-                    int(k[0]),
-                    float(k[1]),   # open
-                    float(k[2]),   # high
-                    float(k[3]),   # low
-                    float(k[4]),   # close
-                    float(k[5]),   # volume
-                    int(k[6]),     # close_time
-                    float(k[7]) if len(k) > 7 else 0,   # quote_volume
-                    int(k[8]) if len(k) > 8 else 0,     # trades
-                    float(k[9]) if len(k) > 9 else 0,   # taker_buy_volume
-                    float(k[10]) if len(k) > 10 else 0,  # taker_buy_quote_vol
-                )
-                for k in klines
-                if len(k) >= 6 and _safe_float(k[4]) and _safe_float(k[4]) > 0
-            ],
-        )
-        self._conn.commit()
-        return len(klines)
+        with self._lock:
+            self._conn.executemany(
+                "INSERT OR REPLACE INTO binance_kline_cache "
+                "(symbol, interval, open_time, open, high, low, close, volume, "
+                "close_time, quote_volume, trades, taker_buy_volume, taker_buy_quote_vol) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (
+                        symbol, interval,
+                        int(k[0]),
+                        float(k[1]),   # open
+                        float(k[2]),   # high
+                        float(k[3]),   # low
+                        float(k[4]),   # close
+                        float(k[5]),   # volume
+                        int(k[6]),     # close_time
+                        float(k[7]) if len(k) > 7 else 0,   # quote_volume
+                        int(k[8]) if len(k) > 8 else 0,     # trades
+                        float(k[9]) if len(k) > 9 else 0,   # taker_buy_volume
+                        float(k[10]) if len(k) > 10 else 0,  # taker_buy_quote_vol
+                    )
+                    for k in klines
+                    if len(k) >= 6 and _safe_float(k[4]) and _safe_float(k[4]) > 0
+                ],
+            )
+            self._conn.commit()
+            return len(klines)
 
     # ── 生命周期 ──────────────────────────────────────────
 
     def close(self) -> None:
-        self._conn.close()
+        with self._lock:
+            self._conn.close()
 
 
 def _safe_float(val) -> Optional[float]:

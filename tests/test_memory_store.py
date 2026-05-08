@@ -37,7 +37,7 @@ def _make_trade(
     rating_score: int = 7,
     position_size_pct: float = 10.0,
     closed_at: datetime | None = None,
-    strategy_tag: str = "crypto_oversold_short",
+    strategy_tag: str = "crypto_oversold_4h",
 ) -> TradeRecord:
     """辅助函数：创建交易记录。"""
     if closed_at is None:

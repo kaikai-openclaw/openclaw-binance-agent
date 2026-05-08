@@ -144,10 +144,10 @@ class TestValidateOrder:
     def test_max_open_positions_exceeded(self):
         """持仓数量达到上限时应拒绝新开仓（P0）。"""
         rc = RiskController()
-        # 构造 12 个持仓（达到 MAX_OPEN_POSITIONS=12 上限）
+        # 构造 30 个持仓（达到 MAX_OPEN_POSITIONS=30 上限）
         positions = [
             {"symbol": f"TOKEN{i}USDT", "quantity": 1.0, "entry_price": 10.0}
-            for i in range(12)
+            for i in range(30)
         ]
         account = _make_account(total_balance=100000.0, positions=positions)
         order = _make_order(symbol="NEWUSDT", price=10.0, quantity=1.0, leverage=10)
@@ -160,7 +160,7 @@ class TestValidateOrder:
         rc = RiskController()
         positions = [
             {"symbol": f"TOKEN{i}USDT", "quantity": 1.0, "entry_price": 10.0}
-            for i in range(11)
+            for i in range(19)
         ]
         account = _make_account(total_balance=100000.0, positions=positions)
         order = _make_order(symbol="NEWUSDT", price=10.0, quantity=1.0, leverage=10)

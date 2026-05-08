@@ -349,6 +349,53 @@ def metadata_by_symbol(execution_results: list[dict]) -> dict[str, dict[str, Any
     return metadata
 
 
+def build_full_metadata(store, current_execution_results: list[dict]) -> dict[str, dict[str, Any]]:
+    """构建完整的 symbol → metadata 映射，供 trade_syncer 使用。
+
+    优先级：本轮 execution_results > StateStore 历史 skill4 记录。
+    这样历史持仓（非本轮开仓）的平仓成交也能携带正确的 strategy_tag 落库。
+    """
+    full: dict[str, dict[str, Any]] = {}
+
+    # 1. 从 StateStore 历史 skill4 执行记录补充（旧到新，后写覆盖前写）
+    try:
+        conn = getattr(store, "_conn", None)
+        if conn is not None:
+            rows = conn.execute(
+                "SELECT data FROM state_snapshots "
+                "WHERE skill_name = 'skill4_execute' "
+                "ORDER BY created_at ASC",
+            ).fetchall()
+            for (raw,) in rows:
+                data = json.loads(raw)
+                for e in data.get("execution_results", []):
+                    sym = e.get("symbol", "")
+                    tag = e.get("strategy_tag", "") or ""
+                    if sym and tag and tag not in ("unknown", "crypto_generic"):
+                        full[sym] = {
+                            "rating_score": int(e.get("rating_score") or 6),
+                            "position_size_pct": float(e.get("position_size_pct") or 0.0),
+                            "hold_duration_hours": float(e.get("hold_duration_hours") or 0.0),
+                            "strategy_tag": tag,
+                        }
+    except Exception as exc:
+        log.warning(f"build_full_metadata: 读取历史 skill4 记录失败: {exc}")
+
+    # 2. 本轮 execution_results 覆盖（最新最准确）
+    for result in current_execution_results:
+        sym = result.get("symbol")
+        if not sym:
+            continue
+        full[sym] = {
+            "rating_score": int(result.get("rating_score") or 6),
+            "position_size_pct": float(result.get("position_size_pct") or 0.0),
+            "hold_duration_hours": float(result.get("hold_duration_hours") or 0.0),
+            "strategy_tag": result.get("strategy_tag") or "unknown",
+        }
+
+    return full
+
+
 def protection_warnings(protection: dict) -> list[str]:
     """从保护单报告中提取告警信息。"""
     warnings = []

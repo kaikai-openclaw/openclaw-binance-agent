@@ -870,7 +870,7 @@ class ShortTermWickSkill(_CryptoWickBase):
 
     def __init__(self, state_store, input_schema, output_schema, client) -> None:
         super().__init__(state_store, input_schema, output_schema, client)
-        self.name = "crypto_wick_short"
+        self.name = "crypto_wick_15m"
 
     def run(self, input_data: dict) -> dict:
         return self._run_scan(
@@ -904,7 +904,7 @@ class LongTermWickSkill(_CryptoWickBase):
 
     def __init__(self, state_store, input_schema, output_schema, client) -> None:
         super().__init__(state_store, input_schema, output_schema, client)
-        self.name = "crypto_wick_long"
+        self.name = "crypto_wick_1h"
 
     def run(self, input_data: dict) -> dict:
         return self._run_scan(

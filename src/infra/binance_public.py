@@ -23,7 +23,7 @@ log = logging.getLogger(__name__)
 # 退避序列（秒）
 _BACKOFF = [1, 2, 4, 8, 16]
 _MAX_RETRIES = 5
-_TIMEOUT = 15
+_TIMEOUT = (5, 45)  # (connect_timeout, read_timeout)，大接口（如 ticker/24hr）响应慢时留足余量
 
 # K 线周期 → 毫秒映射（用于 get_klines_cached 的时效校验）
 # 1w/1M 因 UTC 对齐规则特殊（周一起始 / 月份不定长），这里不放入表内，
@@ -132,6 +132,7 @@ class BinancePublicClient:
           3. 若缓存已覆盖到当前正在形成的那根 K 线，且条数足够 → 直接用缓存。
           4. 周期不在 _INTERVAL_MS_MAP 中（1w / 1M 等）→ 退化为"每次联网"。
           5. 无缓存实例 → 退化为普通 get_klines。
+          6. 【关键修复】剔除当前未闭合 K 线，确保分析基于已确认的历史数据。
         """
         if not self._kline_cache:
             return self.get_klines(symbol, interval, limit)
@@ -154,11 +155,22 @@ class BinancePublicClient:
         if fresh:
             cached = self._kline_cache.query_as_lists(symbol, interval, limit)
             if len(cached) >= limit:
-                return cached[-limit:]
+                result = cached[-limit:]
+                # ── 剔除当前未闭合 K 线 ─────────────────────────────────────
+                # 未闭合 K 线的 open_time >= current_candle_open
+                # 趋势判断必须基于已确认 K 线，否则 MACD/KDJ 金叉随时变（re-painting）
+                while (result and result[-1][0] >= current_candle_open
+                       and len(result) > 1):
+                    result = result[:-1]
+                return result
 
         klines = self.get_klines(symbol, interval, limit)
         if klines:
             self._kline_cache.upsert_from_raw(symbol, interval, klines)
+        # ── 剔除当前未闭合 K 线 ─────────────────────────────────────────────
+        while (klines and klines[-1][0] >= current_candle_open
+               and len(klines) > 1):
+            klines = klines[:-1]
         return klines
 
     def get_klines_range(

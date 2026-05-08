@@ -54,23 +54,47 @@ def main():
                         help="扫描模式：short=短期超跌反弹(3~5天), long=长期超跌蓄能(2~4周)（默认 short）")
     parser.add_argument("--scan", action="store_true",
                         help="全市场扫描模式")
-    parser.add_argument("--rsi", type=float, default=25,
-                        help="RSI 超跌阈值（默认 35）")
-    parser.add_argument("--bias", type=float, default=-6,
-                        help="20日乖离率阈值（默认 -6%%）")
-    parser.add_argument("--drop", type=float, default=-8,
-                        help="近N日累计跌幅阈值（默认 -8%%）")
-    parser.add_argument("--drop-days", type=int, default=10,
-                        help="累计跌幅回看天数（默认 10）")
-    parser.add_argument("--min-score", type=int, default=25,
-                        help="超跌综合评分最低阈值（默认 25）")
+    parser.add_argument("--rsi", type=float, default=None,
+                        help="RSI 超跌阈值（默认 short=25, long=35）")
+    parser.add_argument("--bias", type=float, default=None,
+                        help="乖离率阈值（默认 short=-6%%, long=-15%%）")
+    parser.add_argument("--drop", type=float, default=None,
+                        help="累计跌幅阈值（默认 short=-12%%, long=-25%%）")
+    parser.add_argument("--drop-days", type=int, default=None,
+                        help="累计跌幅回看天数（默认 short=10, long=30）")
+    parser.add_argument("--min-score", type=int, default=None,
+                        help="超跌综合评分最低阈值（默认 35）")
     parser.add_argument("--max", type=int, default=30,
                         help="最大输出数量（默认 30）")
     parser.add_argument("--volume-confirm", action="store_true",
                         help="要求底部放量确认")
     parser.add_argument("--prefilter", type=float, default=0,
                         help="当日跌幅预筛阈值（默认 0 禁用，设 -3 启用当日跌幅过滤）")
+    parser.add_argument("--exclude-kcb", action="store_true",
+                        help="排除科创板（688开头）")
     args = parser.parse_args()
+
+    # 模式相关默认值（CLI 未显式指定时应用）
+    if args.mode == "long":
+        _rsi_default = 35.0
+        _bias_default = -15.0
+        _drop_default = -25.0
+        _drop_days_default = 30
+    else:
+        _rsi_default = 25.0
+        _bias_default = -6.0
+        _drop_default = -12.0
+        _drop_days_default = 10
+    if args.rsi is None:
+        args.rsi = _rsi_default
+    if args.bias is None:
+        args.bias = _bias_default
+    if args.drop is None:
+        args.drop = _drop_default
+    if args.drop_days is None:
+        args.drop_days = _drop_days_default
+    if args.min_score is None:
+        args.min_score = 35
 
     if not args.symbols and not args.scan:
         parser.error("请指定股票代码或使用 --scan 全市场扫描")
@@ -91,6 +115,7 @@ def main():
             "max_candidates": args.max,
             "require_volume_confirm": args.volume_confirm,
             "prefilter_change_pct": args.prefilter,
+            "exclude_kcb": args.exclude_kcb,
         }
 
         if args.symbols:

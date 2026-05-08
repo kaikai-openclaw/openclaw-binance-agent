@@ -68,7 +68,8 @@ ADX_PERIOD = 14
 ADX_TREND_THRESHOLD = 25.0  # ADX > 25 视为有趋势
 
 # ── ATR 参数 ──────────────────────────────────────────────
-ATR_PERIOD = 14
+ATR_PERIOD = 20          # 主 ATR 周期（SL/TP 计算用，更平滑）
+ATR_PERIOD_FILTER = 14   # 高波动过滤专用 ATR 周期（保留 14 做基准，快速反映短期波动）
 
 # ── 量比计算窗口 ──────────────────────────────────────────
 VOLUME_SHORT_WINDOW = 5   # 近 5 根 K 线

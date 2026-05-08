@@ -130,7 +130,7 @@ class Skill3Strategy(BaseSkill):
         min_net_rr_ratio: float = DEFAULT_MIN_NET_RR_RATIO,
         trading_rule_provider: Optional[TradingRuleProvider] = None,
         memory_store: Optional[MemoryStore] = None,
-        max_trades: int = 3,
+        max_trades: int = 4,
         trailing_stop_ratio: float = DEFAULT_TRAILING_STOP_RATIO,
         trailing_activation_mult: float = DEFAULT_TRAILING_ACTIVATION_MULT,
         trailing_activation_mult_hv: float = DEFAULT_TRAILING_ACTIVATION_MULT_HV,

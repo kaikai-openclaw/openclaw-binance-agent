@@ -378,7 +378,7 @@ def run_report(args: argparse.Namespace) -> dict:
                     #   持仓 48h，仓位上限 15U，保证金更宽松
                     max_trades=1
                     if args.mode == "1d"
-                    else 3,  # P1-2: 1d 波段限制交易数量
+                    else 4,  # P1-2: 1d 波段限制交易数量
                     max_hold_hours=48.0 if args.mode == "1d" else 12.0,
                     max_stop_pct=0.07 if args.mode == "1d" else 0.05,
                     atr_stop_mult=1.2 if args.mode == "1d" else 1.0,

@@ -124,6 +124,48 @@ def _save_ticker_to_cache(ticker: Dict[str, Any]) -> None:
         pass
 
 
+def preload_ticker_cache() -> bool:
+    """预加载全市场 USDT 交易对 24h ticker 数据到缓存。"""
+    log_func = logging.getLogger(__name__)
+    try:
+        log_func.info("开始预加载 24h ticker 缓存...")
+        r = requests.get("https://fapi.binance.com/fapi/v1/ticker/24hr", timeout=30)
+        all_tickers = r.json()
+        usdt_tickers = [t for t in all_tickers if t["symbol"].endswith("USDT")]
+        log_func.info(f"获取到 {len(usdt_tickers)} 个 USDT 交易对")
+
+        conn = sqlite3.connect(TICKER_CACHE_DB, timeout=10)
+        cursor = conn.cursor()
+        for t in usdt_tickers:
+            try:
+                cursor.execute(
+                    "INSERT OR REPLACE INTO ticker_24h_cache "
+                    "(symbol, last_price, price_change_pct, volume, quote_volume, high_24h, low_24h, update_time) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        t["symbol"],
+                        float(t["lastPrice"]),
+                        float(t["priceChangePercent"]),
+                        float(t["volume"]),
+                        float(t["quoteVolume"]),
+                        float(t["highPrice"]),
+                        float(t["lowPrice"]),
+                        int(time.time() * 1000),
+                    ),
+                )
+            except Exception:
+                pass
+        conn.commit()
+        conn.close()
+        log_func.info(
+            f"预加载完成: {len(usdt_tickers)} 个 USDT 交易对 ticker 数据已写入缓存"
+        )
+        return True
+    except Exception as e:
+        log_func.warning(f"预加载 ticker 缓存失败: {e}")
+        return False
+
+
 def _fetch_binance_ticker(symbol: str) -> Dict[str, Any]:
     """从 Binance fapi 获取单个币种的 24h tick 数据。"""
     r = requests.get("https://fapi.binance.com/fapi/v1/ticker/24hr", timeout=15)

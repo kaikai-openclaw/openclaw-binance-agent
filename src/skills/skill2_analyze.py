@@ -77,9 +77,7 @@ class TradingAgentsModule:
             log.warning(
                 f"[TradingAgentsModule] {symbol} 分析超时（>{ANALYSIS_TIMEOUT}s），已终止"
             )
-            raise TimeoutError(
-                f"{symbol} 分析超时，超过 {ANALYSIS_TIMEOUT} 秒"
-            )
+            raise TimeoutError(f"{symbol} 分析超时，超过 {ANALYSIS_TIMEOUT} 秒")
 
     def shutdown(self) -> None:
         """关闭线程池，释放资源。"""
@@ -157,12 +155,22 @@ class Skill2Analyze(BaseSkill):
         else:
             effective_threshold = self._rating_threshold
 
+        # 预加载 24h ticker 缓存
+        from src.integrations.trading_agents_adapter import preload_ticker_cache
+
+        log.info(f"[{self.name}] 预加载 24h ticker 缓存...")
+        preload_ticker_cache()
+
         # 步骤 1：从 State_Store 读取候选币种列表
         upstream_data = self.state_store.load(input_state_id)
         candidates = upstream_data.get("candidates", [])
 
         # 透传 strategy_tag：如果上游数据带了 strategy_tag 且候选本身没有，则补到每个候选
-        upstream_strategy_tag = upstream_data.get("strategy_tag") or input_data.get("strategy_tag") or "crypto_reversal_4h"
+        upstream_strategy_tag = (
+            upstream_data.get("strategy_tag")
+            or input_data.get("strategy_tag")
+            or "crypto_reversal_4h"
+        )
 
         log.info(
             f"[{self.name}] 读取到 {len(candidates)} 个候选币种，"
@@ -228,7 +236,9 @@ class Skill2Analyze(BaseSkill):
                     atr_pct = candidate.get("atr_pct")
                     if atr_pct is not None:
                         rating["atr_pct"] = atr_pct
-                    strategy_tag = candidate.get("strategy_tag") or upstream_strategy_tag
+                    strategy_tag = (
+                        candidate.get("strategy_tag") or upstream_strategy_tag
+                    )
                     rating["strategy_tag"] = strategy_tag
                     # 透传扫描层预期方向，供 Skill3 在 hold 时使用
                     signal_direction = candidate.get("signal_direction")
@@ -247,7 +257,10 @@ class Skill2Analyze(BaseSkill):
                                 f"与策略预期 ({expected_signal}) 反向冲突，强行降级拦截！"
                             )
                             rating["rating_score"] = 0
-                            rating["comment"] = f"[反向冲突已拦截: 预期 {expected_signal} 但 LLM 判定 {rating['signal']}] " + rating.get("comment", "")
+                            rating["comment"] = (
+                                f"[反向冲突已拦截: 预期 {expected_signal} 但 LLM 判定 {rating['signal']}] "
+                                + rating.get("comment", "")
+                            )
 
                     all_ratings.append(rating)
             except TimeoutError:
@@ -256,15 +269,12 @@ class Skill2Analyze(BaseSkill):
                 failed_symbols.append({"symbol": symbol, "reason": "分析超时"})
             except Exception as exc:
                 # 需求 2.7：错误跳过，记录日志，继续处理剩余币种
-                log.warning(
-                    f"[{self.name}] {symbol} 分析失败: {exc}，已跳过"
-                )
+                log.warning(f"[{self.name}] {symbol} 分析失败: {exc}，已跳过")
                 failed_symbols.append({"symbol": symbol, "reason": str(exc)[:100]})
 
         # 步骤 3：过滤评级分低于阈值的币种（使用热更新后的 effective_threshold）
         filtered_ratings = [
-            r for r in all_ratings
-            if r["rating_score"] >= effective_threshold
+            r for r in all_ratings if r["rating_score"] >= effective_threshold
         ]
         filtered_count = len(all_ratings) - len(filtered_ratings)
 
@@ -311,9 +321,7 @@ class Skill2Analyze(BaseSkill):
 
         # 校验必要字段
         if rating_score is None or signal is None or confidence is None:
-            log.warning(
-                f"[{self.name}] {symbol} 分析结果缺少必要字段，已跳过"
-            )
+            log.warning(f"[{self.name}] {symbol} 分析结果缺少必要字段，已跳过")
             return None
 
         # 校验 rating_score 范围 [1, 10]
@@ -326,16 +334,12 @@ class Skill2Analyze(BaseSkill):
         # 校验 signal 枚举值
         valid_signals = {"long", "short", "hold"}
         if signal not in valid_signals:
-            log.warning(
-                f"[{self.name}] {symbol} signal={signal} 无效，已跳过"
-            )
+            log.warning(f"[{self.name}] {symbol} signal={signal} 无效，已跳过")
             return None
 
         # 校验 confidence 范围 [0, 100]
         if not isinstance(confidence, (int, float)):
-            log.warning(
-                f"[{self.name}] {symbol} confidence={confidence} 无效，已跳过"
-            )
+            log.warning(f"[{self.name}] {symbol} confidence={confidence} 无效，已跳过")
             return None
         confidence = max(0.0, min(100.0, float(confidence)))
 

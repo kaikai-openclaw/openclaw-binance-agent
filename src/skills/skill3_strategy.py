@@ -52,24 +52,31 @@ log = logging.getLogger(__name__)
 DEFAULT_RISK_RATIO = 0.02
 
 # 默认持仓时间上限（小时）
-DEFAULT_MAX_HOLD_HOURS = 24.0
+DEFAULT_MAX_HOLD_HOURS = 12.0  # 1h策略实际平均持仓<1h，统一缩短让时间衰减止盈真正生效
 
 # 默认杠杆倍数
 DEFAULT_LEVERAGE = 10
 
 # 止损止盈比例常量（仅在没有 ATR 时的回退路径使用）
-STOP_LOSS_PCT = 0.03       # 止损幅度 3%
-TAKE_PROFIT_PCT = 0.06     # 止盈幅度 6%（盈亏比 2:1）
+STOP_LOSS_PCT = 0.03  # 止损幅度 3%
+TAKE_PROFIT_PCT = 0.06  # 止盈幅度 6%（盈亏比 2:1）
 
 # ATR 动态止损默认参数
-DEFAULT_ATR_STOP_MULT = 1.5     # 止损距离 = ATR × 1.5
-DEFAULT_ATR_TP_MULT = 3.0       # 止盈距离 = ATR × 3.0（盈亏比 2:1）
-DEFAULT_MIN_STOP_PCT = 0.005    # 止损距离下限 0.5%（防止极低波动下 SL 贴得过近被秒扫）
-DEFAULT_MAX_STOP_PCT = 0.07     # 止损距离上限 7%（10x 杠杆下保证金最多亏 70%，留 30% 安全边际防滑点强平）
+DEFAULT_ATR_STOP_MULT = 1.5  # 止损距离 = ATR × 1.5
+DEFAULT_ATR_TP_MULT = 3.0  # 止盈距离 = ATR × 3.0（盈亏比 2:1）
+DEFAULT_MIN_STOP_PCT = 0.005  # 止损距离下限 0.5%（防止极低波动下 SL 贴得过近被秒扫）
+DEFAULT_MAX_STOP_PCT = (
+    0.07  # 止损距离上限 7%（10x 杠杆下保证金最多亏 70%，留 30% 安全边际防滑点强平）
+)
+DEFAULT_MAX_STOP_USDT = 0.03  # 做空硬顶止损距离 3%（币价 × 3%，防止趋势反转时亏损无限）
+DEFAULT_SHORT_TRAILING_ACTIVATION_MULT = (
+    0.8  # 做空移动止损激活系数（从1.5收紧至0.8，更快锁利）
+)
+DEFAULT_SHORT_TRAILING_ACTIVATION_MULT_HV = 1.2  # 做空高波动移动止损激活系数
 
 # 入场区间宽度常量
-ENTRY_SPREAD_MIN = 0.01    # 最窄区间（置信度 100% 时）
-ENTRY_SPREAD_MAX = 0.05    # 最宽区间（置信度 0% 时）
+ENTRY_SPREAD_MIN = 0.01  # 最窄区间（置信度 100% 时）
+ENTRY_SPREAD_MAX = 0.05  # 最宽区间（置信度 0% 时）
 
 # 测试路径的标准化基准价（仅在未注入任何 provider 时使用）
 TEST_FALLBACK_PRICE = 100.0
@@ -77,9 +84,11 @@ TEST_FALLBACK_PRICE = 100.0
 # P0-4：扣费后净盈亏比的最低阈值；低于此值的交易直接拒绝
 DEFAULT_MIN_NET_RR_RATIO = 1.2
 DEFAULT_TRAILING_STOP_RATIO = 0.5
-DEFAULT_TRAILING_ACTIVATION_MULT = 1.0       # 常规币 trailing stop 激活距离 = 止损距离 × 此值
-DEFAULT_TRAILING_ACTIVATION_MULT_HV = 1.5    # 高波动币 trailing stop 激活距离乘数
-DEFAULT_HIGH_VOL_TP_MULT = 3.0               # 高波动币止盈乘数（与常规币保持同等盈亏比，不再放大）
+DEFAULT_TRAILING_ACTIVATION_MULT = (
+    1.0  # 常规币 trailing stop 激活距离 = 止损距离 × 此值
+)
+DEFAULT_TRAILING_ACTIVATION_MULT_HV = 1.5  # 高波动币 trailing stop 激活距离乘数
+DEFAULT_HIGH_VOL_TP_MULT = 3.0  # 高波动币止盈乘数（与常规币保持同等盈亏比，不再放大）
 
 # 市场价格提供者类型：接收 symbol，返回当前市场价格（None 或 <=0 表示不可用）
 MarketPriceProvider = Callable[[str], Optional[float]]
@@ -202,9 +211,7 @@ class Skill3Strategy(BaseSkill):
                 vip_discount=fee_vip_discount,
             )
         except ValueError:
-            log.warning(
-                f"[{self.name}] fee_market={fee_market} 未知，禁用费用建模"
-            )
+            log.warning(f"[{self.name}] fee_market={fee_market} 未知，禁用费用建模")
             self._round_trip_cost_pct = 0.0
 
     def run(self, input_data: dict) -> dict:
@@ -269,8 +276,8 @@ class Skill3Strategy(BaseSkill):
                 key=lambda r: r.get("rating_score", 0),
                 reverse=True,
             )
-            skipped = ratings_sorted[self._max_trades:]
-            ratings = ratings_sorted[:self._max_trades]
+            skipped = ratings_sorted[self._max_trades :]
+            ratings = ratings_sorted[: self._max_trades]
             skipped_symbols = [r.get("symbol", "") for r in skipped]
             log.info(
                 f"[{self.name}] 评级通过 {len(ratings) + len(skipped)} 个，"
@@ -307,7 +314,9 @@ class Skill3Strategy(BaseSkill):
         return output
 
     def _generate_trade_plan(
-        self, rating: Dict[str, Any], account: AccountState,
+        self,
+        rating: Dict[str, Any],
+        account: AccountState,
         risk_ratio: Optional[float] = None,
     ) -> Optional[Dict[str, Any]]:
         """
@@ -328,8 +337,15 @@ class Skill3Strategy(BaseSkill):
         symbol = rating.get("symbol", "")
         signal = rating.get("signal", "")
         confidence = rating.get("confidence", 0.0)
-        atr_pct = rating.get("atr_pct")  # Skill-1/Skill-2 透传的 ATR 百分比（可选）
-        wick_tip_price = rating.get("wick_tip_price")  # 插针 Skill 透传的影线尖端价（可选）
+        atr_pct = rating.get(
+            "atr_pct"
+        )  # Skill-1/Skill-2 透传的 ATR 百分比（SL/TP 用，ATR 20 周期，更平滑）
+        atr_filter_pct = rating.get(
+            "atr_filter_pct"
+        )  # 高波动过滤专用 ATR（ATR 14 周期，保留短期敏感度）
+        wick_tip_price = rating.get(
+            "wick_tip_price"
+        )  # 插针 Skill 透传的影线尖端价（可选）
         rating_score = rating.get("rating_score", 0)  # 评级分数，用于判断是否临界通过
 
         # hold 信号时使用扫描层的预期方向（LLM 不确定但不反对）
@@ -357,20 +373,25 @@ class Skill3Strategy(BaseSkill):
         entry_price, entry_upper, entry_lower, price_source = entry_range
 
         # 插针策略有 wick_tip_price 作为天然止损位，不依赖 ATR，跳过波动率检查
-        if not wick_tip_price and self._should_skip_for_excessive_volatility(atr_pct, symbol):
+        # 高波动过滤优先使用 atr_filter_pct（ATR 14 周期），回退到 atr_pct（ATR 20 周期）
+        effective_atr_skip = atr_filter_pct if atr_filter_pct is not None else atr_pct
+        if not wick_tip_price and self._should_skip_for_excessive_volatility(
+            effective_atr_skip, symbol, direction=direction
+        ):
             return None
 
         # 计算止损和止盈价格（优先级：wick_tip > ATR 动态 > 固定百分比）
         stop_loss_price, take_profit_price, sl_source = self._calculate_sl_tp(
-            entry_price, direction, atr_pct, symbol,
+            entry_price,
+            direction,
+            atr_pct,
+            symbol,
             wick_tip_price=wick_tip_price,
         )
 
         # 需求 3.8：数值参数边界校验
         if entry_price <= 0 or stop_loss_price <= 0 or take_profit_price <= 0:
-            log.warning(
-                f"[{self.name}] {symbol} 价格参数无效，跳过"
-            )
+            log.warning(f"[{self.name}] {symbol} 价格参数无效，跳过")
             return None
 
         # P0-4：扣费后净盈亏比守门
@@ -397,34 +418,53 @@ class Skill3Strategy(BaseSkill):
                 stop_loss_price=stop_loss_price,
             )
         except ValueError as e:
-            log.warning(
-                f"[{self.name}] {symbol} 头寸规模计算失败: {e}"
-            )
+            log.warning(f"[{self.name}] {symbol} 头寸规模计算失败: {e}")
             return None
 
         # 转换为头寸规模百分比
         position_value = position_size * entry_price
         position_size_pct = (position_value / account.total_balance) * 100
 
-        # ── 高波动/临界评分降仓 ─────────────────────────────────────────────
-        # 高波动：ATR% > 4 时，仓位减半（10x 杠杆下波动过大）
-        if atr_pct is not None and atr_pct > 4.0:
+        # ── 高波动/临界评分降仓（先执行，再 cap） ────────────────────────────
+        # 高波动：ATR 14周期 > 4% 时，仓位减半（10x 杠杆下波动过大）
+        # 注意：此逻辑必须在 cap 检查之前执行，否则高波动币种会被 cap 直接截断
+        # 优先使用 atr_filter_pct（ATR 14 周期），因为它是真正传到 plan 的值；
+        # atr_pct（ATR 20 周期）在某些评级里是 None，导致降仓失效
+        effective_atr = atr_filter_pct if atr_filter_pct is not None else atr_pct
+        if effective_atr is not None and effective_atr > 4.0:
             position_size_pct *= 0.5
-            position_size = (position_size_pct / 100.0 * account.total_balance) / entry_price
+            position_size = (
+                position_size_pct / 100.0 * account.total_balance
+            ) / entry_price
             position_value = position_size * entry_price
             log.info(
-                f"[{self.name}] {symbol} ATR%={atr_pct:.2f}>4% 高波动，仓位降至 {position_size_pct:.2f}%"
+                f"[{self.name}] {symbol} ATR%={effective_atr:.2f}>4% 高波动，仓位降至 {position_size_pct:.2f}%"
             )
         # 临界评分：评级 6 分刚好及格，仓位减半控制风险
         elif rating_score == 6:
             position_size_pct *= 0.5
-            position_size = (position_size_pct / 100.0 * account.total_balance) / entry_price
+            position_size = (
+                position_size_pct / 100.0 * account.total_balance
+            ) / entry_price
             position_value = position_size * entry_price
             log.info(
                 f"[{self.name}] {symbol} 评级分=6（临界），仓位降至 {position_size_pct:.2f}%"
             )
 
+        # P2-8: 交割周仓位减半
+        delivery_week = rating.get("delivery_week", False)
+        if delivery_week:
+            position_size_pct *= 0.5
+            position_size = (
+                position_size_pct / 100.0 * account.total_balance
+            ) / entry_price
+            position_value = position_size * entry_price
+            log.info(
+                f"[{self.name}] {symbol} 处于季度交割周，仓位降至 {position_size_pct:.2f}%"
+            )
+
         # 需求 3.4 & 3.5：风控预校验 — 单笔持仓不超过 max_position_pct
+        # cap 作为最终硬上限，在 ATR/评分降仓之后执行
         cap = self._max_position_pct
         if position_size_pct > cap:
             log.info(
@@ -478,8 +518,12 @@ class Skill3Strategy(BaseSkill):
         if not validation.passed:
             # 需求 3.5：尝试裁剪头寸至合规范围
             adjusted_plan = self._try_adjust_position(
-                symbol, direction, entry_price, position_size,
-                position_size_pct, account
+                symbol,
+                direction,
+                entry_price,
+                position_size,
+                position_size_pct,
+                account,
             )
             if adjusted_plan is not None:
                 position_size = adjusted_plan["quantity"]
@@ -530,16 +574,31 @@ class Skill3Strategy(BaseSkill):
         plan["round_trip_cost_pct"] = round(cost_pct, 6)
         plan["net_rr_ratio"] = round(net_rr, 4)
         plan["strategy_tag"] = rating.get("strategy_tag") or "crypto_generic"
-        
+
         # 优化的高波动率追踪止盈逻辑 (Trailing Stop 强化)
+        # P0-2: 做空使用更快的移动止损激活系数（0.8 vs 1.0），更快锁利
         is_high_vol = atr_pct is not None and atr_pct >= 5.0
-        activation_multiplier = self._trailing_activation_mult_hv if is_high_vol else self._trailing_activation_mult
-        activation_dist = abs(entry_price - stop_loss_price) * activation_multiplier
-        
-        if direction == TradeDirection.LONG:
-            activation_price = entry_price + activation_dist
+        if direction == TradeDirection.SHORT:
+            activation_multiplier = (
+                DEFAULT_SHORT_TRAILING_ACTIVATION_MULT_HV
+                if is_high_vol
+                else DEFAULT_SHORT_TRAILING_ACTIVATION_MULT
+            )
         else:
+            activation_multiplier = (
+                self._trailing_activation_mult_hv
+                if is_high_vol
+                else self._trailing_activation_mult
+            )
+        activation_dist = abs(entry_price - stop_loss_price) * activation_multiplier
+
+        # 移动止损激活价格：价格必须先向有利方向移动到 activation_price 才激活
+        # 做空(LONG)：有利方向是上涨，activation_price 在入场价上方
+        # 做空(SHORT)：有利方向是下跌，activation_price 在入场价下方
+        if direction == TradeDirection.SHORT:
             activation_price = entry_price - activation_dist
+        else:
+            activation_price = entry_price + activation_dist
 
         plan["trailing_stop"] = {
             "activation_price": round(activation_price, 8),
@@ -577,9 +636,7 @@ class Skill3Strategy(BaseSkill):
                 if raw is not None and raw > 0:
                     base_price = float(raw)
             except Exception as exc:
-                log.warning(
-                    f"[{self.name}] 获取 {symbol} 市场价格失败: {exc}"
-                )
+                log.warning(f"[{self.name}] 获取 {symbol} 市场价格失败: {exc}")
 
         price_source: str
         if base_price is not None:
@@ -595,7 +652,9 @@ class Skill3Strategy(BaseSkill):
                 f"(require_market_price=False)"
             )
 
-        spread_pct = ENTRY_SPREAD_MAX - (confidence / 100.0) * (ENTRY_SPREAD_MAX - ENTRY_SPREAD_MIN)
+        spread_pct = ENTRY_SPREAD_MAX - (confidence / 100.0) * (
+            ENTRY_SPREAD_MAX - ENTRY_SPREAD_MIN
+        )
         spread = base_price * spread_pct
 
         upper = base_price + spread
@@ -639,7 +698,9 @@ class Skill3Strategy(BaseSkill):
                 stop_loss = wick_tip_price * (1 - wick_buffer)
                 sl_dist_pct = (entry_price - stop_loss) / entry_price
                 # clip 止损距离到合理范围
-                sl_dist_pct = max(self._min_stop_pct, min(self._max_stop_pct, sl_dist_pct))
+                sl_dist_pct = max(
+                    self._min_stop_pct, min(self._max_stop_pct, sl_dist_pct)
+                )
                 stop_loss = entry_price * (1 - sl_dist_pct)
                 tp_dist_pct = sl_dist_pct * (self._atr_tp_mult / self._atr_stop_mult)
                 take_profit = entry_price * (1 + tp_dist_pct)
@@ -651,7 +712,9 @@ class Skill3Strategy(BaseSkill):
             elif direction == TradeDirection.SHORT and wick_tip_price > entry_price:
                 stop_loss = wick_tip_price * (1 + wick_buffer)
                 sl_dist_pct = (stop_loss - entry_price) / entry_price
-                sl_dist_pct = max(self._min_stop_pct, min(self._max_stop_pct, sl_dist_pct))
+                sl_dist_pct = max(
+                    self._min_stop_pct, min(self._max_stop_pct, sl_dist_pct)
+                )
                 stop_loss = entry_price * (1 + sl_dist_pct)
                 tp_dist_pct = sl_dist_pct * (self._atr_tp_mult / self._atr_stop_mult)
                 take_profit = entry_price * (1 - tp_dist_pct)
@@ -684,7 +747,7 @@ class Skill3Strategy(BaseSkill):
             source = "fixed"
             log.warning(
                 f"[{self.name}] {symbol} 缺少 ATR 信息，止损回退到固定 "
-                f"{STOP_LOSS_PCT*100:.1f}%/{TAKE_PROFIT_PCT*100:.1f}% — "
+                f"{STOP_LOSS_PCT * 100:.1f}%/{TAKE_PROFIT_PCT * 100:.1f}% — "
                 f"建议上游透传 atr_pct 以启用波动率自适应止损"
             )
 
@@ -701,12 +764,15 @@ class Skill3Strategy(BaseSkill):
         self,
         atr_pct: Optional[float],
         symbol: str,
+        direction: Optional[TradeDirection] = None,
     ) -> bool:
         """
         ATR 原始止损距离超过系统上限时跳过交易。
 
         这类币种即使把止损硬截到 max_stop_pct，也很容易被正常波动扫损；
         与其放大单笔尾部风险，不如本轮不生成交易计划。
+
+        P0-1 改造：做空增加硬顶止损距离（entry_price × 3%），防止趋势反转时亏损无限。
         """
         if atr_pct is None or atr_pct <= 0:
             return False
@@ -714,6 +780,13 @@ class Skill3Strategy(BaseSkill):
         stop_mult, _ = self._get_dynamic_multipliers(float(atr_pct))
         raw_sl_pct = (float(atr_pct) / 100.0) * stop_mult
         if raw_sl_pct <= self._max_stop_pct:
+            if direction == TradeDirection.SHORT and raw_sl_pct > DEFAULT_MAX_STOP_USDT:
+                log.warning(
+                    f"[{self.name}] {symbol} 做空 ATR 波动过大，跳过交易: "
+                    f"atr_pct={atr_pct:.2f}%, raw_sl={raw_sl_pct:.2%}, "
+                    f"做空硬顶={DEFAULT_MAX_STOP_USDT:.2%}"
+                )
+                return True
             return False
 
         log.warning(
@@ -808,9 +881,7 @@ class Skill3Strategy(BaseSkill):
                 quantity=quantity,
                 leverage=self._leverage,
             )
-            validation = self._risk_controller.validate_order(
-                order_request, account
-            )
+            validation = self._risk_controller.validate_order(order_request, account)
 
             if validation.passed:
                 return {"quantity": quantity, "pct": pct}

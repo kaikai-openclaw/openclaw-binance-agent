@@ -55,6 +55,7 @@
 数据源：BinancePublicClient（K 线优先走本地 SQLite 缓存）
 """
 
+import calendar
 import logging
 import math
 import re
@@ -678,6 +679,10 @@ class _CryptoReversalBase(BaseSkill):
                     else None
                 )
 
+                # P2-1: 季度交割周检测
+                now_utc = datetime.now(timezone.utc)
+                is_delivery_week = _is_delivery_week(now_utc)
+
                 scored.append(
                     {
                         "symbol": symbol,
@@ -723,6 +728,7 @@ class _CryptoReversalBase(BaseSkill):
                         "signal_direction": "long",
                         "strategy_tag": self.name,
                         "collected_at": datetime.now(timezone.utc).isoformat(),
+                        "delivery_week": is_delivery_week,  # P2-1: 季度交割周标记
                     }
                 )
             except Exception as exc:
@@ -1247,3 +1253,36 @@ def _score_lower_shadow(
             if body < (h - l) * 0.1 and lower_shadow > (h - l) * 0.5:
                 return max_score * 0.7
     return 0.0
+
+
+# ══════════════════════════════════════════════════════════
+# P2-1: 季度交割周检测（与超买/超跌策略共用逻辑）
+# ══════════════════════════════════════════════════════════
+
+DELIVERY_MONTHS = {3, 6, 9, 12}
+DELIVERY_LOOKBACK_DAYS = 7
+
+
+def _is_delivery_week(dt: datetime) -> bool:
+    """检测是否处于季度交割周。
+
+    季度交割日 = 季度最后一个周五
+    交割周 = 交割日前后 7 天
+    """
+    if dt.month not in DELIVERY_MONTHS:
+        return False
+
+    _, last_day = calendar.monthrange(dt.year, dt.month)
+    last_friday = None
+    for day in range(last_day, 0, -1):
+        check_date = datetime(dt.year, dt.month, day)
+        if check_date.weekday() == calendar.FRIDAY:
+            last_friday = day
+            break
+
+    if last_friday is None:
+        return False
+
+    delivery_date = datetime(dt.year, dt.month, last_friday)
+    days_to_delivery = (delivery_date - dt).days
+    return -DELIVERY_LOOKBACK_DAYS <= days_to_delivery <= DELIVERY_LOOKBACK_DAYS

@@ -374,7 +374,7 @@ def run_report(args: argparse.Namespace) -> dict:
                     atr_stop_mult=1.5,  # 1h 和 4h 均用 1.5，1h 用 0.5% 仓位管控风险
                     atr_tp_mult=3.0 if args.mode == "1h" else 4.0,
                     trailing_stop_ratio=0.5 if args.mode == "1h" else 0.35,
-                    trailing_activation_mult=1.5 if args.mode == "1h" else 2.0,
+                    trailing_activation_mult=1.5 if args.mode == "1h" else 1.5,
                     trailing_activation_mult_hv=2.0 if args.mode == "1h" else 2.5,
                     high_vol_tp_mult=3.5 if args.mode == "1h" else 4.0,
                     max_trades=2 if args.mode == "1h" else 3,

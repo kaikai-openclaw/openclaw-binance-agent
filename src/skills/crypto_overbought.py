@@ -57,6 +57,7 @@
 import logging
 import math
 import re
+import calendar
 import time
 import uuid
 from datetime import datetime, timezone
@@ -94,6 +95,10 @@ KDJ_M2 = 3
 FUNDING_RATE_HIGH = 0.001  # +0.1%，偏高
 FUNDING_RATE_EXTREME = 0.003  # +0.3%，极端（多头付费维持仓位）
 FUNDING_RATE_VERY_EXTREME = 0.005  # +0.5%，罕见极端
+FUNDING_RATE_MAX_FOR_SHORT = (
+    0.0015  # +0.15%，做空资金费率上限（超过则借币成本过高，直接排除）
+)
+FUNDING_RATE_MIN_FOR_SCORE = 0.0005  # +0.05%，做空资金费率下限（低于此值不加分）
 
 # ══════════════════════════════════════════════════════════
 # 短期超买参数（4h K 线）
@@ -327,7 +332,11 @@ class _CryptoOverboughtBase(BaseSkill):
         """
         判断当前市场是否适合做空。
 
-        BTC 短期暴跌时阻断做空（已经在跌了，做空追跌风险高）。
+        P2-7 改造:
+        - BTC 4h 短期暴跌 > 8%：阻断做空（已经在跌了，做空追跌风险高）
+        - BTC 1d 级别强势上涨 > 8%：克制做空（顺势做空胜率低）
+        - BTC 4h 短期暴涨 > 5%：放行（FOMO 见顶是做空最佳时机）
+
         BTC 暴涨时放行（FOMO 见顶是做空最佳时机）。
         """
         if input_data.get("ignore_market_regime"):
@@ -335,34 +344,60 @@ class _CryptoOverboughtBase(BaseSkill):
 
         symbol = "BTCUSDT"
         try:
-            klines = self._fetch_klines(symbol, "4h", 80)
+            klines_4h = self._fetch_klines(symbol, "4h", 80)
+            klines_1d = self._fetch_klines(symbol, "1d", 20)
         except Exception as exc:
             log.warning("[%s] 市场状态获取失败: %s", self.name, exc)
             return {"status": "unknown", "reason": f"fetch_failed:{exc}"}
 
-        if not klines or len(klines) < 60:
-            return {"status": "unknown", "reason": "insufficient_market_klines"}
+        if not klines_4h or len(klines_4h) < 60:
+            return {"status": "unknown", "reason": "insufficient_market_klines_4h"}
 
-        closes = [float(k[4]) for k in klines]
-        last_close = closes[-1]
-        lookback = 6
-        recent_return_pct = (
-            (last_close - closes[-lookback]) / closes[-lookback] * 100
-            if len(closes) > lookback and closes[-lookback] > 0
+        closes_4h = [float(k[4]) for k in klines_4h]
+        last_close_4h = closes_4h[-1]
+
+        # 4h 短期检查（最近 24h = 6 根 4h）
+        lookback_4h = 6
+        recent_return_4h_pct = (
+            (last_close_4h - closes_4h[-lookback_4h]) / closes_4h[-lookback_4h] * 100
+            if len(closes_4h) > lookback_4h and closes_4h[-lookback_4h] > 0
             else 0.0
         )
-        if recent_return_pct <= -8.0:
+        if recent_return_4h_pct <= -8.0:
             return {
                 "status": "blocked",
-                "reason": f"BTC 短期暴跌 {recent_return_pct:.2f}%，不宜追空",
+                "reason": f"BTC 短期暴跌 {recent_return_4h_pct:.2f}%，不宜追空",
                 "symbol": symbol,
-                "recent_return_pct": round(recent_return_pct, 4),
+                "recent_return_pct": round(recent_return_4h_pct, 4),
             }
+
+        # P2-7: 1d 级别趋势检查（克制做空）
+        if klines_1d and len(klines_1d) >= 5:
+            closes_1d = [float(k[4]) for k in klines_1d]
+            last_close_1d = closes_1d[-1]
+            lookback_1d = 5  # 5 日趋势
+            if len(closes_1d) >= lookback_1d:
+                daily_return_5d_pct = (
+                    (last_close_1d - closes_1d[-lookback_1d])
+                    / closes_1d[-lookback_1d]
+                    * 100
+                    if closes_1d[-lookback_1d] > 0
+                    else 0.0
+                )
+                if daily_return_5d_pct > 8.0:
+                    return {
+                        "status": "cautious",
+                        "reason": f"BTC 日线强势上涨 {daily_return_5d_pct:.2f}%，做空需谨慎",
+                        "symbol": symbol,
+                        "recent_return_pct": round(recent_return_4h_pct, 4),
+                        "daily_return_5d_pct": round(daily_return_5d_pct, 4),
+                    }
+
         return {
             "status": "enabled",
             "reason": "market_regime_ok",
             "symbol": symbol,
-            "recent_return_pct": round(recent_return_pct, 4),
+            "recent_return_pct": round(recent_return_4h_pct, 4),
         }
 
     def _run_scan(
@@ -412,6 +447,15 @@ class _CryptoOverboughtBase(BaseSkill):
                 },
                 "market_regime": market_regime,
             }
+
+        # P2-7: 市场环境克制时提高评分门槛
+        market_cautious = market_regime.get("status") == "cautious"
+        if market_cautious:
+            log.warning(
+                "[%s] 市场环境谨慎（BTC日线强势），做空门槛提高: %s",
+                self.name,
+                market_regime.get("reason", ""),
+            )
 
         if target_symbols:
             pool = self._build_target_pool(tickers, target_symbols)
@@ -703,7 +747,23 @@ class _CryptoOverboughtBase(BaseSkill):
                 else:
                     result["short_squeeze_bonus"] = 0
 
-                if result["overbought_score"] < min_score and not target_symbols:
+                # P1-4: 资金费率硬顶过滤（超过 0.15% 的币种借币成本过高，排除）
+                if fr is not None and fr > FUNDING_RATE_MAX_FOR_SHORT:
+                    log.info(
+                        "[%s] %s 资金费率 %.4f%% 超过做空上限 %.4f%%，跳过",
+                        self.name,
+                        symbol,
+                        fr * 100,
+                        FUNDING_RATE_MAX_FOR_SHORT * 100,
+                    )
+                    continue
+
+                # P2-7: 市场谨慎时提高 10 分门槛
+                effective_min_score = min_score + (10 if market_cautious else 0)
+                if (
+                    result["overbought_score"] < effective_min_score
+                    and not target_symbols
+                ):
                     continue
 
                 # 顶部确认硬性门槛：价格必须已从近期高点回落 ≥ 2% 且 ≤ 12%（1h）/ ≤ 15%（4h/1d）
@@ -749,6 +809,29 @@ class _CryptoOverboughtBase(BaseSkill):
                     )
                     continue
 
+                # P2-6: 高波动惩罚（ATR > 5% 的币种降低评分）
+                # 高波动币种止损距离大，盈亏比变差，需要更高评分才值得做空
+                atr_check_val = calc_atr(highs, lows, closes, ATR_PERIOD_FILTER)
+                last_close_for_atr = closes[-1]
+                atr_check_pct = (
+                    round(atr_check_val / last_close_for_atr * 100, 2)
+                    if (atr_check_val and last_close_for_atr > 0)
+                    else None
+                )
+                if atr_check_pct is not None and atr_check_pct > 5.0:
+                    vol_penalty = min(10.0, (atr_check_pct - 5.0) * 2.0)
+                    result["overbought_score"] = max(
+                        1, result["overbought_score"] - vol_penalty
+                    )
+                    result["vol_penalty"] = vol_penalty
+                    log.info(
+                        "[%s] %s ATR%.2f%%>5%% 高波动，评分扣减 %.1f",
+                        self.name,
+                        symbol,
+                        atr_check_pct,
+                        vol_penalty,
+                    )
+
                 returns_map[symbol] = calc_returns(closes)
                 atr_val = calc_atr(highs, lows, closes, ATR_PERIOD)
                 atr_filter_val = calc_atr(highs, lows, closes, ATR_PERIOD_FILTER)
@@ -763,6 +846,10 @@ class _CryptoOverboughtBase(BaseSkill):
                     if (atr_filter_val and last_close > 0)
                     else None
                 )
+
+                # P2-8: 日历效应检测（季度交割周）
+                now_utc = datetime.now(timezone.utc)
+                is_delivery_week = _is_delivery_week(now_utc)
 
                 scored.append(
                     {
@@ -815,6 +902,7 @@ class _CryptoOverboughtBase(BaseSkill):
                         "signal_direction": "short",
                         "strategy_tag": self.name,
                         "collected_at": datetime.now(timezone.utc).isoformat(),
+                        "delivery_week": is_delivery_week,  # P2-8: 季度交割周标记
                     }
                 )
             except Exception as exc:
@@ -1019,6 +1107,7 @@ def calc_overbought_score(
     fr_display = None
     if funding_rate is not None:
         fr_display = round(funding_rate * 100, 4)
+        # P1-4: 0.05%-0.1% 区间降低评分（借币成本开始侵蚀利润）
         if funding_rate > FUNDING_RATE_HIGH:
             if funding_rate >= FUNDING_RATE_VERY_EXTREME:
                 score += w["funding"]
@@ -1032,6 +1121,21 @@ def calc_overbought_score(
                 )
                 score += w["funding"] * 0.5 * min(1.0, ratio)
                 signals.append(f"费率={fr_display:.3f}%偏高")
+        elif funding_rate >= FUNDING_RATE_HIGH:
+            # 0.1% 临界值，按偏低处理（避免 fr=0.001 时 penalty=0 的信号真空）
+            penalty = w["funding"] * 0.15
+            score -= penalty
+            signals.append(
+                f"费率={fr_display:.3f}%临界(借币成本偏高,扣{penalty:.1f}分)"
+            )
+        elif funding_rate > FUNDING_RATE_MIN_FOR_SCORE:
+            # 0.05% < funding_rate < 0.1%：借币成本开始侵蚀利润，降低评分
+            ratio = (funding_rate - FUNDING_RATE_MIN_FOR_SCORE) / (
+                FUNDING_RATE_HIGH - FUNDING_RATE_MIN_FOR_SCORE
+            )
+            penalty = w["funding"] * 0.3 * (1 - ratio)
+            score -= penalty
+            signals.append(f"费率={fr_display:.3f}%偏低(借币成本高,扣{penalty:.1f}分)")
         elif funding_rate < -0.0005:
             # 费率为负：空头在付费给多头，说明空头已经很拥挤
             # 此时做空 = 加入拥挤的一方，轧空风险高
@@ -1470,3 +1574,36 @@ def _score_upper_shadow(
             if body < (h - l) * 0.1 and upper_shadow > (h - l) * 0.5:
                 return 0.7
     return 0.0
+
+
+# ══════════════════════════════════════════════════════════
+# P2-8: 日历效应过滤
+# ══════════════════════════════════════════════════════════
+
+DELIVERY_MONTHS = {3, 6, 9, 12}  # 季度交割月份
+DELIVERY_LOOKBACK_DAYS = 7  # 交割周定义：交割日前后 7 天
+
+
+def _is_delivery_week(dt: datetime) -> bool:
+    """检测是否处于季度交割周。
+
+    季度交割日 = 季度最后一个周五
+    交割周 = 交割日前后 7 天
+    """
+    if dt.month not in DELIVERY_MONTHS:
+        return False
+
+    _, last_day = calendar.monthrange(dt.year, dt.month)
+    last_friday = None
+    for day in range(last_day, 0, -1):
+        check_date = datetime(dt.year, dt.month, day)
+        if check_date.weekday() == calendar.FRIDAY:
+            last_friday = day
+            break
+
+    if last_friday is None:
+        return False
+
+    delivery_date = datetime(dt.year, dt.month, last_friday)
+    days_to_delivery = (delivery_date - dt).days
+    return -DELIVERY_LOOKBACK_DAYS <= days_to_delivery <= DELIVERY_LOOKBACK_DAYS

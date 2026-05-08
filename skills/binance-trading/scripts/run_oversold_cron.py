@@ -340,19 +340,22 @@ def run_report(args: argparse.Namespace) -> dict:
                     market_price_provider=market_price_provider,
                     trading_rule_provider=trading_rule_provider,
                     risk_ratio=risk_ratio,
-                    max_margin_usdt=2.0,  # 测试降仓：单笔保证金不超过 2 USDT（10x=20 USDT名义仓位）
+                    # P1-1: 保证金上限按模式自适应
+                    # 4h: 2U（10x=20U名义仓位，快进快出）
+                    # 1d: 15U（10x=150U名义仓位，波段持仓需要更大空间）
+                    max_margin_usdt=15.0 if args.mode == "1d" else 2.0,
                     require_market_price=True,
                     # ── 超跌策略参数 ──
-                    # 短期(4h)：快进快出，atr_stop_mult=1.0，止损更紧
-                    #   ATR ≤ 5% 的币均可进场（5% × 1.0 = 5% ≤ max_stop_pct）
-                    #   盈亏比 2.5:1（atr_tp_mult=2.5 / atr_stop_mult=1.0）
+                    # 4h：快进快出，atr_stop_mult=1.0，止损更紧
+                    #   ATR ≤ 5% 可进场，盈亏比 2.5:1
                     #   移动止损 1.3× ATR 激活（1.0× 太早，反弹初期容易被扫）
-                    # 长期(1d)：波段反弹，atr_stop_mult=1.2，ATR ≤ 5.8% 可进场
+                    # 1d：波段持仓，atr_stop_mult=1.2，ATR ≤ 5.8% 可进场
                     #   盈亏比 3.75:1（atr_tp_mult=4.5 / atr_stop_mult=1.2）
-                    # 1h:4h / 1d 分别设置：1h策略75%触发=3h，时间衰减止盈真正生效
-                    max_hold_hours=48.0
+                    #   持仓 48h，仓位上限 15U，保证金更宽松
+                    max_trades=1
                     if args.mode == "1d"
-                    else (4.0 if args.mode == "1h" else 12.0),
+                    else 3,  # P1-2: 1d 波段限制交易数量
+                    max_hold_hours=48.0 if args.mode == "1d" else 12.0,
                     max_stop_pct=0.07 if args.mode == "1d" else 0.05,
                     atr_stop_mult=1.2 if args.mode == "1d" else 1.0,
                     atr_tp_mult=4.5 if args.mode == "1d" else 2.5,

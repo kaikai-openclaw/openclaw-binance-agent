@@ -759,19 +759,9 @@ def render_markdown(report: dict) -> str:
     pm = report.get("paper_mode", {})
     level = cb.get("level", "N/A")
     action = report.get("action_taken", "None")
-    pm_before = pm.get("before", False)
     pm_after = pm.get("after", False)
 
     current_price = market.get("current_price", 0)
-    returns_1h = market.get("returns_1h", 0)
-    returns_6h = market.get("returns_6h", 0)
-    returns_24h = market.get("returns_24h", 0)
-    volatility = market.get("volatility_1h", 0)
-    vol_ratio = market.get("volume_ratio_24h", 0)
-    ema_5 = market.get("ema_5")
-    ema_20 = market.get("ema_20")
-    ema_60 = market.get("ema_60")
-    sma_20 = market.get("sma_20")
     trend = market.get("trend", "UNKNOWN")
 
     level_icon = {
@@ -788,103 +778,32 @@ def render_markdown(report: dict) -> str:
         "UNKNOWN": "❓",
     }.get(trend, "❓")
 
-    def fmt_ema(v):
-        if v is None:
-            return "N/A"
-        return f"${v:,.2f}"
-
-    def fmt_pct(v):
-        sign = "+" if v >= 0 else ""
-        color = "🟢" if v >= 0 else "🔴"
-        return f"{color} {sign}{v:.2f}%"
-
     lines = [
-        f"## 🛡️ BTC 熔断器报告",
-        f"",
-        f"- **检查时间**: {report.get('finished_at', 'N/A')}",
-        f"- **间隔**: 每 {report.get('interval_minutes', 5)} 分钟",
-        f"- **Dry Run**: {'是' if report.get('dry_run') else '否'}",
-        f"",
-        f"### 📊 BTC 市场概览",
-        f"",
-        f"| 指标 | 值 |",
-        f"|------|-----|",
-        f"| 当前价格 | **{fmt_ema(current_price)}** |",
-        f"| 趋势 | {trend_icon} {trend} |",
-        f"",
-        f"### 📈 价格变动",
-        f"",
-        f"| 时间周期 | 涨跌幅 |",
-        f"|------|-----|",
-        f"| 1小时 | {fmt_pct(returns_1h)} |",
-        f"| 6小时 | {fmt_pct(returns_6h)} |",
-        f"| 24小时 | {fmt_pct(returns_24h)} |",
-        f"",
-        f"### 📉 均线指标",
-        f"",
-        f"| 均线 | 价格 | 状态 |",
-        f"|------|-----|------|",
-        f"| EMA(5) | {fmt_ema(ema_5)} | {'> EMA20' if ema_5 and ema_20 and ema_5 > ema_20 else '< EMA20'} |",
-        f"| EMA(20) | {fmt_ema(ema_20)} | - |",
-        f"| EMA(60) | {fmt_ema(ema_60)} | {'> EMA20' if ema_60 and ema_20 and ema_60 > ema_20 else '< EMA20'} |",
-        f"| SMA(20) | {fmt_ema(sma_20)} | - |",
-        f"",
-        f"### 📊 波动性与成交量",
-        f"",
-        f"| 指标 | 值 | 说明 |",
-        f"|------|-----|------|",
-        f"| 1h 波动率 | {volatility:.2f}% | 最近24根K线极差 |",
-        f"| 成交量比 | {vol_ratio:.2f}x | 当前/均值 | {'⚠️ 放量' if vol_ratio > 1.5 else '正常'} |",
-        f"",
-        f"### 🛡️ 熔断状态",
-        f"",
-        f"| 指标 | 值 |",
-        f"|------|-----|",
-        f"| 级别 | {level_icon} **{level}** |",
-        f"| 1h 回报率(熔断计算) | {fmt_pct(cb.get('btc_1h_return_pct', 0))} |",
-        f"| 短期下跌预警 | {'⚠️ 是' if cb.get('short_term_drop') else '否'} |",
-        f"| 收紧止损比例 | {cb.get('tighten_ratio', 0) * 100:.0f}% |",
-        f"| 减仓比例 | {cb.get('reduce_ratio', 0) * 100:.0f}% |",
-        f"| 上次触发级别 | {cb.get('last_level', 0)} |",
-        f"| 级别升级 | {'✅ 是' if cb.get('level_escalated') else '❌ 否'} |",
-        f"",
-        f"### 📋 保护操作",
-        f"",
-        f"| 状态 | 值 |",
-        f"|------|-----|",
-        f"| 执行动作 | {action} |",
-        f"| Paper Mode 前 | {'🔴 是' if pm_before else '🟢 否'} |",
-        f"| Paper Mode 后 | {'🔴 是' if pm_after else '🟢 否'} |",
-        f"",
+        f"## 🛡️ BTC 熔断器 {level_icon} **{level}** | {trend_icon} {trend} | ${current_price:,.0f}",
     ]
+
+    if level != "NORMAL" or pm_after:
+        lines.append(f"**动作**: {action}")
 
     actions = report.get("actions", [])
     if actions:
-        lines.append(f"### 📝 操作详情")
         lines.append("")
-        lines.append(f"| 币种 | 操作 | 状态 | 详情 |")
-        lines.append(f"|------|------|------|------|")
         for a in actions:
             status_icon = "✅" if a.get("status") == "success" else "❌"
             if a.get("action") == "tighten_sl":
-                detail = f"新止损: {a.get('new_sl', 0):.4f} ({a.get('qty', '-')})"
+                detail = f"止损→{a.get('new_sl', 0):.4f}"
             elif a.get("action") == "reduce":
-                detail = f"数量: {a.get('qty', 0):.4f} ({a.get('ratio', 0) * 100:.0f}%)"
+                detail = f"减{a.get('ratio', 0) * 100:.0f}%"
             elif a.get("action") == "close":
-                detail = f"数量: {a.get('qty', 0):.4f}"
+                detail = f"平仓"
             else:
                 detail = a.get("error", "-")
             lines.append(
-                f"| {a.get('symbol', '-')} | {a.get('action', '-')} | {status_icon} | {detail} |"
+                f"{status_icon} {a.get('symbol', '-')}: {a.get('action', '-')} | {detail}"
             )
-        lines.append("")
 
     if report.get("errors"):
-        lines.append(f"### ❌ 错误")
-        lines.append("")
-        for err in report["errors"]:
-            lines.append(f"- {err}")
-        lines.append("")
+        lines.append(f"❌ 错误: {report['errors'][0]}")
 
     return "\n".join(lines)
 

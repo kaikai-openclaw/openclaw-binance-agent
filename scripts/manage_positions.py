@@ -635,7 +635,7 @@ try:  # 锁保护区：确保任何异常都能释放文件锁
                     **state.get(sym, {}),
                     "original_tp": a["original_tp"],
                     "tp_decay_step": a["tp_step"],
-                    "sl_step": state.get(sym, {}).get("sl_step", a["sl_step"]),
+                    "sl_step": state.get(sym, {}).get("sl_step", 0),
                     "open_ms": a["open_ms"],
                     "direction": a["direction_str"],
                 }
@@ -667,7 +667,7 @@ try:  # 锁保护区：确保任何异常都能释放文件锁
                     **current_state,
                     "original_tp": a["original_tp"],
                     "tp_decay_step": a["tp_step"],
-                    "sl_step": current_state.get("sl_step", a["sl_step"]),
+                    "sl_step": current_state.get("sl_step", 0),
                     "open_ms": a["open_ms"],
                     "direction": a["direction_str"],
                 }

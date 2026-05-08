@@ -135,7 +135,9 @@ class Skill5Evolve(BaseSkill):
         evolution = self._compute_evolution()
 
         # 生成 Markdown 表格（需求 5.2）
-        markdown = self._generate_markdown(account, positions_display, evolution)
+        markdown = self._generate_markdown(
+            account, positions_display, evolution, execution_results
+        )
         log.info(f"[{self.name}] Markdown 报告:\n{markdown}")
 
         output = {
@@ -642,6 +644,7 @@ class Skill5Evolve(BaseSkill):
         account: AccountState,
         positions: List[dict],
         evolution: dict,
+        execution_results: List[dict],
     ) -> str:
         """
         生成格式化 Markdown 表格展示。
@@ -688,6 +691,58 @@ class Skill5Evolve(BaseSkill):
             lines.append("")
         else:
             lines.extend(["## 持仓明细", "", "当前无持仓。", ""])
+
+        executed = [
+            r
+            for r in execution_results
+            if r.get("status") in ("filled", "paper_trade", "open")
+        ]
+        rejected = [
+            r for r in execution_results if r.get("status") == "rejected_by_risk"
+        ]
+        if executed:
+            lines.extend(
+                [
+                    "## 本轮新开仓",
+                    "",
+                    "| 币种 | 方向 | 成交价 | 数量 | 盈亏 | 平仓原因 |",
+                    "|------|------|--------|------|------|----------|",
+                ]
+            )
+            for r in executed:
+                pnl = r.get("pnl_amount")
+                pnl_str = f"{pnl:+.2f}" if pnl is not None else "—"
+                price = r.get("executed_price")
+                qty = r.get("executed_quantity")
+                price_str = f"{price:.4f}" if price is not None else "—"
+                qty_str = f"{qty:.4f}" if qty is not None else "—"
+                lines.append(
+                    f"| {r.get('symbol', '') or '—'} | {r.get('direction', '') or '—'} | "
+                    f"{price_str} | {qty_str} | "
+                    f"{pnl_str} | {r.get('close_reason', '') or '—'} |"
+                )
+            lines.append("")
+        else:
+            lines.extend(["## 本轮新开仓", "", "本轮无新开仓。", ""])
+
+        if rejected:
+            lines.extend(
+                [
+                    "## 本轮风控拒绝",
+                    "",
+                    "| 币种 | 方向 | 计划数量 | 拒绝原因 |",
+                    "|------|------|----------|----------|",
+                ]
+            )
+            for r in rejected:
+                planned = r.get("planned_quantity")
+                planned_str = f"{planned:.4f}" if planned is not None else "—"
+                reason = r.get("reason") or "风控拒绝"
+                lines.append(
+                    f"| {r.get('symbol', '') or '—'} | {r.get('direction', '') or '—'} | "
+                    f"{planned_str} | {reason} |"
+                )
+            lines.append("")
 
         lines.extend(
             [

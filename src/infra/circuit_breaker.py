@@ -7,12 +7,12 @@
   Level 2：BTC 1h 内跌幅 > 5%  → 减仓 50%，止损收紧 40%
   Level 3：BTC 1h 内跌幅 > 8%  → 全部强平，停止开新仓（切换 Paper Mode）
 
-同时检查短期快速下跌（最近1根1h K线跌幅 > 2%）作为补充预警。
+短期快速下跌（最近1根1h K线跌幅 > 2%）作为补充预警，**仅记录日志，不触发动作**。
 
 内部所有计算使用 decimal 形式（-0.10 表示 -10%），
 结果返回时乘以 100 转换为百分比形式（-10.0%）供外部显示。
 
-Level 3 触发后会持久化标记到 db_path（如果提供），重启后可检测。
+Level >= TIGHTEN (1,2,3) 触发后会持久化标记到 db_path（如果提供），重启后可检测。
 """
 
 import json
@@ -65,37 +65,39 @@ class CircuitBreaker:
     def _load_persisted_level(self) -> None:
         if self._db_path is None:
             return
-        marker = self._db_path / "circuit_breaker_level3.json"
+        marker = self._db_path / "circuit_breaker_level.json"
         if marker.exists():
             try:
                 data = json.loads(marker.read_text())
                 level = CircuitLevel(data.get("level", 0))
-                if level >= CircuitLevel.CLOSE_ALL:
+                if level >= CircuitLevel.TIGHTEN:
                     self._current_level = level
                     log.warning(
-                        "[CircuitBreaker] 检测到上次 Level 3 熔断标记，"
-                        "当前级别设为 CLOSE_ALL，重启后继续处理"
+                        "[CircuitBreaker] 检测到上次熔断标记 (Level %d),重启后继续处理",
+                        level,
                     )
             except Exception as exc:
                 log.warning("[CircuitBreaker] 读取熔断标记失败: %s", exc)
 
-    def _persist_level3(self) -> None:
+    def _persist_level(self) -> None:
         if self._db_path is None:
             return
         try:
             self._db_path.mkdir(parents=True, exist_ok=True)
-            marker = self._db_path / "circuit_breaker_level3.json"
+            marker = self._db_path / "circuit_breaker_level.json"
             marker.write_text(
                 json.dumps(
                     {
-                        "level": CircuitLevel.CLOSE_ALL,
+                        "level": self._current_level,
                         "timestamp": time.time(),
                     }
                 )
             )
-            log.info("[CircuitBreaker] Level 3 熔断已持久化")
+            log.info("[CircuitBreaker] Level %d 熔断已持久化", self._current_level)
         except Exception as exc:
-            log.warning("[CircuitBreaker] 持久化 Level 3 失败: %s", exc)
+            log.warning(
+                "[CircuitBreaker] 持久化 Level %d 失败: %s", self._current_level, exc
+            )
 
     def check(self, btc_price: float) -> CircuitBreakerResult:
         """
@@ -203,8 +205,8 @@ class CircuitBreaker:
                 reduce_ratio = 0.0
 
             self._current_level = level
-            if level >= CircuitLevel.CLOSE_ALL:
-                self._persist_level3()
+            if level >= CircuitLevel.TIGHTEN:
+                self._persist_level()
             return CircuitBreakerResult(
                 level=level,
                 btc_price=current_price,
@@ -223,21 +225,18 @@ class CircuitBreaker:
         重置熔断状态。
 
         Args:
-            force: 为 True 时强制重置所有级别包括 Level 3；False 时只重置 Level 1/2。
+            force: 为 True 时强制重置所有级别；False 时只重置 Level 1/2。
         """
         with self._lock:
-            if self._current_level < CircuitLevel.CLOSE_ALL:
-                self._current_level = CircuitLevel.NORMAL
-                log.info("[CircuitBreaker] 熔断状态已重置")
-            elif force and self._current_level >= CircuitLevel.CLOSE_ALL:
+            if self._current_level < CircuitLevel.CLOSE_ALL or force:
                 self._current_level = CircuitLevel.NORMAL
                 self._clear_persisted_level()
-                log.info("[CircuitBreaker] Level 3 熔断状态已重置（force=True）")
+                log.info("[CircuitBreaker] 熔断状态已重置（force=%s）", force)
 
     def _clear_persisted_level(self) -> None:
         if self._db_path is None:
             return
-        marker = self._db_path / "circuit_breaker_level3.json"
+        marker = self._db_path / "circuit_breaker_level.json"
         if marker.exists():
             try:
                 marker.unlink()

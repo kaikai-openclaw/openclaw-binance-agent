@@ -629,38 +629,15 @@ def run_report(
                         )
                         _save_last_triggered_level(current_level)
 
-                    elif current_level >= CircuitLevel.REDUCE.value:
-                        tighten_r = check_result["tighten_ratio"]
-                        reduce_r = check_result["reduce_ratio"]
-                        log.warning(
-                            "[btc_circuit] 🟠 Level %d 触发，减仓%.0f%% + 收紧止损%.0f%%",
-                            current_level,
-                            reduce_r * 100,
-                            tighten_r * 100,
-                        )
-                        reduce_results = _reduce_positions(
-                            fapi_client,
-                            trading_rule_provider,
-                            reduce_r,
-                        )
-                        tighten_results = _tighten_stop_loss(
-                            fapi_client,
-                            trading_rule_provider,
-                            tighten_r,
-                        )
-                        actions_results.extend(reduce_results)
-                        actions_results.extend(tighten_results)
-                        action_taken = (
-                            f"REDUCE {reduce_r * 100:.0f}% + TIGHTEN {tighten_r * 100:.0f}% "
-                            f"(减仓{len(reduce_results)}持仓, 止损{len(tighten_results)}持仓)"
-                        )
-                        _save_last_triggered_level(current_level)
-
                     elif current_level >= CircuitLevel.TIGHTEN.value:
                         tighten_r = check_result["tighten_ratio"]
                         reduce_r = check_result["reduce_ratio"]
+                        level_icon = (
+                            "🟠" if current_level >= CircuitLevel.REDUCE.value else "🟡"
+                        )
                         log.warning(
-                            "[btc_circuit] 🟡 Level %d 触发，减仓%.0f%% + 收紧止损%.0f%%",
+                            "[btc_circuit] %s Level %d 触发，减仓%.0f%% + 收紧止损%.0f%%",
+                            level_icon,
                             current_level,
                             reduce_r * 100,
                             tighten_r * 100,

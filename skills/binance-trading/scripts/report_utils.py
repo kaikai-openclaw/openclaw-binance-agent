@@ -453,10 +453,14 @@ def render_positions_markdown(
     source_map: Optional[dict] = None,
     max_detail: int = 5,
     compact: bool = False,
+    header: Optional[str] = None,
 ) -> list[str]:
     """渲染持仓明细，使用 Telegram 友好的格式。"""
     source_map = source_map or {}
-    lines = ["📈 *持仓明细*"]
+    default_header = "📈 *持仓明细*"
+    if header is not None:
+        default_header = header
+    lines = [default_header]
     if not positions:
         lines.append("当前无持仓")
         return lines

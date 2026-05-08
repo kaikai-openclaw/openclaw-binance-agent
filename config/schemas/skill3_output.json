@@ -109,12 +109,39 @@
         "additionalProperties": false
       }
     },
+    "rejected_symbols": {
+      "type": "array",
+      "description": "筛选通过但未开仓的币种及原因",
+      "items": {
+        "type": "object",
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "description": "币种符号"
+          },
+          "reason": {
+            "type": "string",
+            "description": "拒绝原因"
+          },
+          "rating_score": {
+            "type": "number",
+            "description": "评级分数"
+          },
+          "signal": {
+            "type": "string",
+            "description": "交易信号"
+          }
+        },
+        "required": ["symbol", "reason"],
+        "additionalProperties": false
+      }
+    },
     "pipeline_status": {
       "type": "string",
       "enum": ["has_trades", "no_opportunity"],
       "description": "本轮是否有交易机会"
     }
   },
-  "required": ["state_id", "trade_plans", "pipeline_status"],
+  "required": ["state_id", "trade_plans", "rejected_symbols", "pipeline_status"],
   "additionalProperties": false
 }

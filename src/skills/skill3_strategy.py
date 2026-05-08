@@ -263,6 +263,7 @@ class Skill3Strategy(BaseSkill):
             return {
                 "state_id": str(uuid.uuid4()),
                 "trade_plans": [],
+                "rejected_symbols": [],
                 "pipeline_status": PipelineStatus.NO_OPPORTUNITY.value,
             }
 
@@ -287,10 +288,22 @@ class Skill3Strategy(BaseSkill):
 
         # 步骤 4 & 5：为每个目标币种生成交易计划（使用热更新后的 risk_ratio）
         trade_plans: List[Dict[str, Any]] = []
+        rejected_symbols: List[Dict[str, str]] = []
         for rating in ratings:
-            plan = self._generate_trade_plan(rating, account, effective_risk_ratio)
+            plan, rejection_reason = self._generate_trade_plan(
+                rating, account, effective_risk_ratio
+            )
             if plan is not None:
                 trade_plans.append(plan)
+            elif rejection_reason:
+                rejected_symbols.append(
+                    {
+                        "symbol": rating.get("symbol", ""),
+                        "reason": rejection_reason,
+                        "rating_score": rating.get("rating_score", 0),
+                        "signal": rating.get("signal", ""),
+                    }
+                )
 
         # 判断 pipeline_status
         if trade_plans:
@@ -302,6 +315,7 @@ class Skill3Strategy(BaseSkill):
         output = {
             "state_id": str(uuid.uuid4()),
             "trade_plans": trade_plans,
+            "rejected_symbols": rejected_symbols,
             "pipeline_status": pipeline_status,
         }
 
@@ -318,7 +332,7 @@ class Skill3Strategy(BaseSkill):
         rating: Dict[str, Any],
         account: AccountState,
         risk_ratio: Optional[float] = None,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> tuple[Optional[Dict[str, Any]], Optional[str]]:
         """
         为单个目标币种生成交易计划。
 
@@ -331,7 +345,7 @@ class Skill3Strategy(BaseSkill):
             risk_ratio: 本轮有效风险比例；None 时回退到 self._risk_ratio（构造时注入值）
 
         返回:
-            交易计划字典，或 None（信号为 hold 或风控拒绝时）
+            (交易计划字典, None) 或 (None, 拒绝原因字符串)（信号为 hold 或风控拒绝时）
         """
         effective_risk = risk_ratio if risk_ratio is not None else self._risk_ratio
         symbol = rating.get("symbol", "")
@@ -358,7 +372,7 @@ class Skill3Strategy(BaseSkill):
                 log.info(f"[{self.name}] {symbol} LLM=hold，使用扫描预期方向 {signal}")
             else:
                 log.info(f"[{self.name}] {symbol} 信号为 hold 且无预期方向，跳过")
-                return None
+                return None, "信号为 hold 且无预期方向"
 
         # 确定交易方向
         direction = TradeDirection.LONG if signal == "long" else TradeDirection.SHORT
@@ -369,7 +383,7 @@ class Skill3Strategy(BaseSkill):
             log.warning(
                 f"[{self.name}] {symbol} 市场价格不可用（require_market_price=True），跳过"
             )
-            return None
+            return None, "市场价格不可用"
         entry_price, entry_upper, entry_lower, price_source = entry_range
 
         # 插针策略有 wick_tip_price 作为天然止损位，不依赖 ATR，跳过波动率检查
@@ -378,7 +392,7 @@ class Skill3Strategy(BaseSkill):
         if not wick_tip_price and self._should_skip_for_excessive_volatility(
             effective_atr_skip, symbol, direction=direction
         ):
-            return None
+            return None, "ATR 波动过大"
 
         # 计算止损和止盈价格（优先级：wick_tip > ATR 动态 > 固定百分比）
         stop_loss_price, take_profit_price, sl_source = self._calculate_sl_tp(
@@ -392,7 +406,7 @@ class Skill3Strategy(BaseSkill):
         # 需求 3.8：数值参数边界校验
         if entry_price <= 0 or stop_loss_price <= 0 or take_profit_price <= 0:
             log.warning(f"[{self.name}] {symbol} 价格参数无效，跳过")
-            return None
+            return None, "价格参数无效"
 
         # P0-4：扣费后净盈亏比守门
         sl_dist_pct = abs(entry_price - stop_loss_price) / entry_price
@@ -407,7 +421,7 @@ class Skill3Strategy(BaseSkill):
                 f"低于阈值 {self._min_net_rr_ratio:.2f}（TP={tp_dist_pct:.4f} "
                 f"SL={sl_dist_pct:.4f} cost={cost_pct:.4f}），跳过"
             )
-            return None
+            return None, f"净盈亏比 {net_rr:.2f} 低于阈值 {self._min_net_rr_ratio:.2f}"
 
         # 需求 3.2：使用固定风险模型计算头寸规模（使用热更新后的 effective_risk）
         try:
@@ -419,7 +433,7 @@ class Skill3Strategy(BaseSkill):
             )
         except ValueError as e:
             log.warning(f"[{self.name}] {symbol} 头寸规模计算失败: {e}")
-            return None
+            return None, f"头寸规模计算失败: {e}"
 
         # 转换为头寸规模百分比
         position_value = position_size * entry_price
@@ -495,7 +509,7 @@ class Skill3Strategy(BaseSkill):
             log.warning(
                 f"[{self.name}] {symbol} 头寸数量不满足交易所 LOT_SIZE/minNotional，跳过"
             )
-            return None
+            return None, "不满足交易所 LOT_SIZE/minNotional"
         if normalized_position_size != position_size:
             log.info(
                 f"[{self.name}] {symbol} quantity 按交易所规则规整: "
@@ -537,7 +551,7 @@ class Skill3Strategy(BaseSkill):
                     log.warning(
                         f"[{self.name}] {symbol} 裁剪后数量不满足交易所规则，跳过"
                     )
-                    return None
+                    return None, "裁剪后数量不满足交易所规则"
                 position_size = normalized_position_size
                 position_value = position_size * entry_price
                 position_size_pct = (position_value / account.total_balance) * 100
@@ -549,12 +563,12 @@ class Skill3Strategy(BaseSkill):
                     f"[{self.name}] {symbol} 风控预校验失败且无法裁剪: "
                     f"{validation.reason}"
                 )
-                return None
+                return None, validation.reason
 
         # 需求 3.8：最终边界校验
         if position_size_pct <= 0:
             log.warning(f"[{self.name}] {symbol} 头寸规模为零，跳过")
-            return None
+            return None, "头寸规模为零"
 
         plan = {
             "symbol": symbol,
@@ -605,7 +619,7 @@ class Skill3Strategy(BaseSkill):
             # Binance callbackRate 精度为 1 位小数（步进 0.1%），源头即规整
             "trail_pct": round(sl_dist_pct * self._trailing_stop_ratio * 100, 1),
         }
-        return plan
+        return plan, None
 
     def _calculate_entry_range(
         self, confidence: float, symbol: str = ""

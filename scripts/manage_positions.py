@@ -433,17 +433,17 @@ try:  # 锁保护区：确保任何异常都能释放文件锁
             )
             if new_tp is not None:
                 normed_tp = norm_tp(sym, new_tp, direction)
-                tp_safe = (
+                tick = _tick_map.get(sym, Decimal("0.000001"))
+                if abs(normed_tp - current_tp) < float(tick):
+                    skipped.append(
+                        f"{sym}({dir_label}): 止盈下调被 tick 精度吞没"
+                        f"（{current_tp:.8g} → {normed_tp:.8g}），跳过"
+                    )
+                elif (
                     normed_tp > mark
                     if direction == TradeDirection.LONG
                     else normed_tp < mark
-                )
-                if not tp_safe:
-                    skipped.append(
-                        f"{sym}({dir_label}): 止盈下调规整后穿越当前价 "
-                        f"({new_tp:.8g} → {normed_tp:.8g} vs mark={mark:.8g})，跳过"
-                    )
-                else:
+                ):
                     tp_actions.append(
                         {
                             "symbol": sym,
@@ -462,7 +462,14 @@ try:  # 锁保护区：确保任何异常都能释放文件锁
                             "close_side": close_side,
                             "dir_label": dir_label,
                             "direction_str": current_direction_str,
+                            "tp_decay_step": tp_decay_step,
+                            "sl_step": sl_step,
                         }
+                    )
+                else:
+                    skipped.append(
+                        f"{sym}({dir_label}): 止盈下调规整后穿越当前价 "
+                        f"({new_tp:.8g} → {normed_tp:.8g} vs mark={mark:.8g})，跳过"
                     )
             else:
                 # new_tp is None：无需衰减，仅刷新状态。
@@ -659,7 +666,7 @@ try:  # 锁保护区：确保任何异常都能释放文件锁
                 state[sym] = {
                     **current_state,
                     "original_tp": a["original_tp"],
-                    "tp_decay_step": a["tp_decay_step"],
+                    "tp_decay_step": a["tp_step"],
                     "sl_step": current_state.get("sl_step", a["sl_step"]),
                     "open_ms": a["open_ms"],
                     "direction": a["direction_str"],

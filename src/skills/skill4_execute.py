@@ -1488,18 +1488,14 @@ class Skill4Execute(BaseSkill):
         new_tp_dist = tp_dist * (1 - decay)
         if direction == TradeDirection.LONG:
             new_tp = entry_price + new_tp_dist
-            # 确保新止盈价仍高于入场价（有意义）
             if new_tp <= entry_price:
                 return None, tp_decay_step
-            # 安全校验：新止盈价必须高于当前价格，否则 Binance 会拒单（-2021）
-            # 且止盈单撤掉后无法重挂，导致止盈保护丢失
             if current_price > 0 and new_tp <= current_price:
                 return None, tp_decay_step
         else:
             new_tp = entry_price - new_tp_dist
             if new_tp >= entry_price:
                 return None, tp_decay_step
-            # 安全校验：新止盈价必须低于当前价格
             if current_price > 0 and new_tp >= current_price:
                 return None, tp_decay_step
 

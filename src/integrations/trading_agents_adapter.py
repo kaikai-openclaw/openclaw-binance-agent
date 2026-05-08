@@ -18,6 +18,7 @@ import os
 import re
 import time
 import requests
+import sqlite3
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from datetime import datetime
 from typing import Any, Dict, Optional
@@ -26,8 +27,14 @@ from dotenv import load_dotenv
 
 # 适配器在 src/integrations/ 下，项目根目录是父父目录
 # trading_agents_adapter.py → integrations/ → src/ → 项目根
-_project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_project_root = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+)
 load_dotenv(os.path.join(_project_root, ".env"))
+
+# 24h ticker 缓存配置
+TICKER_CACHE_TTL_SECONDS = 180  # 3 分钟缓存
+TICKER_CACHE_DB = os.path.join(_project_root, "data", "binance_kline_cache.db")
 
 log = logging.getLogger(__name__)
 
@@ -49,7 +56,73 @@ DEFAULT_QUICK_THINK_LLM = _env("QUICK_THINK_LLM", "MiniMax-M2.7-highspeed")
 DEFAULT_BACKEND_URL = _env("LLM_BACKEND_URL", "")
 
 
-# ── 快速分析器（单次 LLM 调用）─────────────────────────────────────────────
+# ── 24h Ticker 缓存 ───────────────────────────────────────────────────────
+
+
+def _get_cached_ticker(symbol: str) -> Optional[Dict[str, Any]]:
+    """从本地缓存获取 24h ticker 数据（TTL=3分钟）。"""
+    try:
+        conn = sqlite3.connect(TICKER_CACHE_DB, timeout=5)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT last_price, price_change_pct, volume, quote_volume, high_24h, low_24h, update_time "
+            "FROM ticker_24h_cache WHERE symbol = ?",
+            (symbol,),
+        )
+        row = cursor.fetchone()
+        conn.close()
+        if row is None:
+            return None
+        (
+            last_price,
+            price_change_pct,
+            volume,
+            quote_volume,
+            high_24h,
+            low_24h,
+            update_time,
+        ) = row
+        age_seconds = time.time() - (update_time / 1000)
+        if age_seconds > TICKER_CACHE_TTL_SECONDS:
+            return None
+        return {
+            "symbol": symbol,
+            "last_price": last_price,
+            "price_change_pct": price_change_pct,
+            "volume": volume,
+            "quote_volume": quote_volume,
+            "high_24h": high_24h,
+            "low_24h": low_24h,
+        }
+    except Exception:
+        return None
+
+
+def _save_ticker_to_cache(ticker: Dict[str, Any]) -> None:
+    """将 24h ticker 数据写入本地缓存。"""
+    try:
+        conn = sqlite3.connect(TICKER_CACHE_DB, timeout=5)
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT OR REPLACE INTO ticker_24h_cache "
+            "(symbol, last_price, price_change_pct, volume, quote_volume, high_24h, low_24h, update_time) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                ticker["symbol"],
+                ticker["last_price"],
+                ticker["price_change_pct"],
+                ticker["volume"],
+                ticker["quote_volume"],
+                ticker["high_24h"],
+                ticker["low_24h"],
+                int(time.time() * 1000),
+            ),
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
 
 def _fetch_binance_ticker(symbol: str) -> Dict[str, Any]:
     """从 Binance fapi 获取单个币种的 24h tick 数据。"""
@@ -131,7 +204,13 @@ def _build_strategy_guide(market_data: dict) -> str:
         )
 
     # 通用兜底
-    dir_text = "做多" if direction == "long" else "做空" if direction == "short" else "未知方向"
+    dir_text = (
+        "做多"
+        if direction == "long"
+        else "做空"
+        if direction == "short"
+        else "未知方向"
+    )
     return (
         f"策略类型：通用量化筛选（{dir_text}）\n"
         f"请综合技术指标和量化信号评估该方向的胜率和风险。"
@@ -157,13 +236,13 @@ def _call_fast_llm(prompt: str, model: Optional[str] = None) -> str:
     # ── OpenAI 兼容接口（minimax / zhipu / openai / qwen / xai / openrouter / ollama）
     # 这些 provider 都走统一的 chat/completions 端点
     _OPENAI_COMPAT_PROVIDERS = {
-        "minimax":    ("MINIMAX_API_KEY",    "https://api.minimaxi.com/v1"),
-        "zhipu":      ("ZHIPU_API_KEY",      "https://open.bigmodel.cn/api/paas/v4"),
-        "openai":     ("OPENAI_API_KEY",     "https://api.openai.com/v1"),
-        "qwen":       ("QWEN_API_KEY",       "https://dashscope.aliyuncs.com/compatible-mode/v1"),
-        "xai":        ("XAI_API_KEY",        "https://api.x.ai/v1"),
+        "minimax": ("MINIMAX_API_KEY", "https://api.minimaxi.com/v1"),
+        "zhipu": ("ZHIPU_API_KEY", "https://open.bigmodel.cn/api/paas/v4"),
+        "openai": ("OPENAI_API_KEY", "https://api.openai.com/v1"),
+        "qwen": ("QWEN_API_KEY", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+        "xai": ("XAI_API_KEY", "https://api.x.ai/v1"),
         "openrouter": ("OPENROUTER_API_KEY", "https://openrouter.ai/api/v1"),
-        "ollama":     (None,                 "http://localhost:11434/v1"),
+        "ollama": (None, "http://localhost:11434/v1"),
     }
 
     if provider in _OPENAI_COMPAT_PROVIDERS:
@@ -183,15 +262,19 @@ def _call_fast_llm(prompt: str, model: Optional[str] = None) -> str:
         # 默认 max_tokens 常为 1024，对 reasoning 模型会导致答案被截断在思考
         # 块内（表现为解析 JSON 失败），因此统一提升到 2048。
         # MiniMax API 不认 "minimax/" 前缀，需要剥离
-        api_model = model.split("/", 1)[1] if provider == "minimax" and "/" in model else model
+        api_model = (
+            model.split("/", 1)[1] if provider == "minimax" and "/" in model else model
+        )
 
         resp = requests.post(
             f"{base_url}/chat/completions",
             headers=headers,
-            json={"model": api_model,
-                  "messages": [{"role": "user", "content": prompt}],
-                  "max_tokens": 2048,
-                  "temperature": 0.3},
+            json={
+                "model": api_model,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 2048,
+                "temperature": 0.3,
+            },
             timeout=90,
         )
         resp.raise_for_status()
@@ -204,6 +287,7 @@ def _call_fast_llm(prompt: str, model: Optional[str] = None) -> str:
             raise ValueError("快速模式需要 GOOGLE_API_KEY，但未设置")
         from google.genai import Client
         from google.genai import types as genai_types
+
         client = Client(api_key=google_key)
         # Google SDK 不接受 "google/" 前缀，直接剥离
         sdk_model = model.split("/", 1)[1] if model.startswith("google/") else model
@@ -219,9 +303,11 @@ def _call_fast_llm(prompt: str, model: Optional[str] = None) -> str:
         if not api_key:
             raise ValueError("快速模式需要 ANTHROPIC_API_KEY，但未设置")
         import anthropic
+
         client = anthropic.Anthropic(api_key=api_key)
         message = client.messages.create(
-            model=model, max_tokens=1024,
+            model=model,
+            max_tokens=1024,
             messages=[{"role": "user", "content": prompt}],
         )
         return message.content[0].text
@@ -249,7 +335,7 @@ def _extract_json(text: str) -> dict:
     # （发生于 reasoning 模型思考过长占满 max_tokens 被截断）
     m = re.search(r"<think>", text, flags=re.IGNORECASE)
     if m:
-        text = text[:m.start()]
+        text = text[: m.start()]
 
     # 3. 去掉 markdown code fence
     text = re.sub(r"```(?:json)?\s*", "", text)
@@ -265,7 +351,7 @@ def _extract_json(text: str) -> dict:
         elif ch == "}":
             depth -= 1
             if depth == 0 and start >= 0:
-                return json.loads(text[start:i + 1])
+                return json.loads(text[start : i + 1])
 
     # 区分错误原因，给出可操作的错误信息
     if "<think>" in original.lower():
@@ -305,36 +391,55 @@ def create_fast_analyzer() -> callable:
     def analyzer(symbol: str, market_data: dict) -> Dict[str, Any]:
         t0 = time.time()
 
-        # 尝试获取实时行情，失败时用上游 market_data 兜底
-        try:
-            ticker = _fetch_binance_ticker(symbol)
-        except Exception as e:
-            log.warning(f"[FastAnalyzer] {symbol} Binance 行情获取失败: {e}, 使用上游 market_data 兜底")
-            ticker = {
-                "symbol": symbol,
-                "last_price": market_data.get("last_price", 0),
-                "price_change_pct": market_data.get("price_change_pct", 0),
-                "volume": market_data.get("volume", 0),
-                "quote_volume": market_data.get("quote_volume_24h", market_data.get("quote_volume", 0)),
-                "high_24h": market_data.get("high_24h", 0),
-                "low_24h": market_data.get("low_24h", 0),
-            }
-            if not ticker["last_price"]:
-                return {"rating_score": 5, "signal": "hold", "confidence": 30.0,
-                        "comment": f"[快速模式] Binance 行情获取失败且无兜底数据: {e}"}
+        # 1. 尝试从缓存获取 24h ticker（TTL=3分钟）
+        ticker = _get_cached_ticker(symbol)
+        cache_hit = ticker is not None
 
-        log.info(f"[FastAnalyzer] {symbol} 行情获取成功: {ticker['last_price']}, "
-                 f"24h {ticker['price_change_pct']:+.2f}%")
+        # 2. 缓存未命中，尝试调用 Binance API
+        if ticker is None:
+            try:
+                ticker = _fetch_binance_ticker(symbol)
+                if ticker:
+                    _save_ticker_to_cache(ticker)
+            except Exception as e:
+                log.warning(
+                    f"[FastAnalyzer] {symbol} Binance 行情获取失败: {e}, 使用上游 market_data 兜底"
+                )
+                ticker = {
+                    "symbol": symbol,
+                    "last_price": market_data.get("last_price", 0),
+                    "price_change_pct": market_data.get("price_change_pct", 0),
+                    "volume": market_data.get("volume", 0),
+                    "quote_volume": market_data.get(
+                        "quote_volume_24h", market_data.get("quote_volume", 0)
+                    ),
+                    "high_24h": market_data.get("high_24h", 0),
+                    "low_24h": market_data.get("low_24h", 0),
+                }
+                if not ticker["last_price"]:
+                    return {
+                        "rating_score": 5,
+                        "signal": "hold",
+                        "confidence": 30.0,
+                        "comment": f"[快速模式] Binance 行情获取失败且无兜底数据: {e}",
+                    }
+
+        log.info(
+            f"[FastAnalyzer] {symbol} 行情获取成功{' (缓存)' if cache_hit else ''}: {ticker['last_price']}, "
+            f"24h {ticker['price_change_pct']:+.2f}%"
+        )
 
         signal_dir_map = {
             "long": "抄底做多 (Long)",
             "short": "摸顶做空 (Short)",
-            "hold": "观望 (Hold)"
+            "hold": "观望 (Hold)",
         }
-        
+
         expected_dir = market_data.get("signal_direction", "")
-        direction_text = signal_dir_map.get(expected_dir, expected_dir) if expected_dir else "未知"
-        
+        direction_text = (
+            signal_dir_map.get(expected_dir, expected_dir) if expected_dir else "未知"
+        )
+
         deep_indicators = ""
         if market_data.get("rsi") is not None:
             deep_indicators += f"- RSI: {market_data['rsi']}\n"
@@ -347,7 +452,9 @@ def create_fast_analyzer() -> callable:
         if market_data.get("funding_rate") is not None:
             deep_indicators += f"- 资金费率: {market_data['funding_rate']}%\n"
         if market_data.get("macd_divergence") is not None:
-            deep_indicators += f"- MACD背离: {'是' if market_data['macd_divergence'] else '否'}\n"
+            deep_indicators += (
+                f"- MACD背离: {'是' if market_data['macd_divergence'] else '否'}\n"
+            )
         if market_data.get("volume_surge") is not None:
             deep_indicators += f"- 放量倍数: {market_data['volume_surge']}x\n"
         elif market_data.get("volume_surge_ratio") is not None:
@@ -356,27 +463,44 @@ def create_fast_analyzer() -> callable:
             deep_indicators += "- 布林带: 跌破下轨\n"
         if market_data.get("above_boll_upper"):
             deep_indicators += "- 布林带: 突破上轨\n"
-        if market_data.get("consecutive_down") is not None and market_data["consecutive_down"] > 0:
+        if (
+            market_data.get("consecutive_down") is not None
+            and market_data["consecutive_down"] > 0
+        ):
             deep_indicators += f"- 连续下跌: {market_data['consecutive_down']}根\n"
-        if market_data.get("consecutive_up") is not None and market_data["consecutive_up"] > 0:
+        if (
+            market_data.get("consecutive_up") is not None
+            and market_data["consecutive_up"] > 0
+        ):
             deep_indicators += f"- 连续上涨: {market_data['consecutive_up']}根\n"
         if market_data.get("drop_pct") is not None:
             deep_indicators += f"- 近期累计跌幅: {market_data['drop_pct']}%\n"
         if market_data.get("rally_pct") is not None:
             deep_indicators += f"- 近期累计涨幅: {market_data['rally_pct']}%\n"
         if market_data.get("distance_from_high_pct") is not None:
-            deep_indicators += f"- 距近期高点: {market_data['distance_from_high_pct']}%\n"
+            deep_indicators += (
+                f"- 距近期高点: {market_data['distance_from_high_pct']}%\n"
+            )
         if market_data.get("rise_from_low_pct") is not None:
-            deep_indicators += f"- 距近期低点涨幅: {market_data['rise_from_low_pct']}%\n"
+            deep_indicators += (
+                f"- 距近期低点涨幅: {market_data['rise_from_low_pct']}%\n"
+            )
 
         # 反转扫描层子维度详情（均线、企稳、MACD 等）
         reversal_details = ""
         if market_data.get("ma_turn_detail"):
             reversal_details += f"- 均线状态: {market_data['ma_turn_detail']}（{market_data.get('ma_turn_score', 0)}分）\n"
         if market_data.get("price_stable_score") is not None:
-            reversal_details += f"- 价格企稳评分: {market_data['price_stable_score']}分\n"
-        if market_data.get("funding_reversal_score") is not None and market_data["funding_reversal_score"] > 0:
-            reversal_details += f"- 费率回归评分: {market_data['funding_reversal_score']}分\n"
+            reversal_details += (
+                f"- 价格企稳评分: {market_data['price_stable_score']}分\n"
+            )
+        if (
+            market_data.get("funding_reversal_score") is not None
+            and market_data["funding_reversal_score"] > 0
+        ):
+            reversal_details += (
+                f"- 费率回归评分: {market_data['funding_reversal_score']}分\n"
+            )
         if market_data.get("macd_detail"):
             reversal_details += f"- MACD状态: {market_data['macd_detail']}（{market_data.get('macd_reversal_score', 0)}分）\n"
         if market_data.get("dist_bottom_pct") is not None:
@@ -385,7 +509,10 @@ def create_fast_analyzer() -> callable:
             reversal_details += f"- 前期跌幅: {market_data['prior_drop_pct']}%\n"
         if market_data.get("kdj_score") is not None and market_data["kdj_score"] > 0:
             reversal_details += f"- KDJ低位金叉: 是（{market_data['kdj_score']}分）\n"
-        if market_data.get("shadow_score") is not None and market_data["shadow_score"] > 0:
+        if (
+            market_data.get("shadow_score") is not None
+            and market_data["shadow_score"] > 0
+        ):
             reversal_details += f"- 长下影线: 是（{market_data['shadow_score']}分）\n"
 
         # 扫描层综合评分和信号摘要
@@ -405,10 +532,10 @@ def create_fast_analyzer() -> callable:
 {strategy_guide}
 
 【实时行情】
-- 当前价格: {ticker['last_price']} USDT
-- 24h 涨跌幅: {ticker['price_change_pct']:+.2f}%
-- 24h 成交量: {ticker['quote_volume']/1e6:.1f}M USDT
-- 24h 高点: {ticker['high_24h']} / 低点: {ticker['low_24h']}
+- 当前价格: {ticker["last_price"]} USDT
+- 24h 涨跌幅: {ticker["price_change_pct"]:+.2f}%
+- 24h 成交量: {ticker["quote_volume"] / 1e6:.1f}M USDT
+- 24h 高点: {ticker["high_24h"]} / 低点: {ticker["low_24h"]}
 
 【技术指标】
 {deep_indicators if deep_indicators else "暂无"}
@@ -447,7 +574,9 @@ def create_fast_analyzer() -> callable:
         elif scan_score >= 50:
             mapped_rating = 7
         elif scan_score >= 40:
-            mapped_rating = 6   # 与回测有效门槛对齐（oversold≥40, reversal≥60 → 此处≥40进入候选池）
+            mapped_rating = (
+                6  # 与回测有效门槛对齐（oversold≥40, reversal≥60 → 此处≥40进入候选池）
+            )
         elif scan_score >= 30:
             mapped_rating = 5
         elif scan_score >= 20:
@@ -467,26 +596,30 @@ def create_fast_analyzer() -> callable:
             result["rating_score"] = min(10, mapped_rating + bonus)
             result["signal"] = llm_signal
             result["confidence"] = float(scan_score)
-            result["comment"] = (
-                f"[快速模式] 扫描分={scan_score} LLM={llm_signal}"
-                + (f" +1确认" if bonus else "")
+            result["comment"] = f"[快速模式] 扫描分={scan_score} LLM={llm_signal}" + (
+                f" +1确认" if bonus else ""
             )
             log.info(
-                f"[FastAnalyzer] {symbol} 完成 {time.time()-t0:.1f}s: "
+                f"[FastAnalyzer] {symbol} 完成 {time.time() - t0:.1f}s: "
                 f"score={result['rating_score']}(扫描{scan_score}{'+1' if bonus else ''}) "
                 f"signal={llm_signal}"
             )
             return result
         except Exception as e:
             log.warning(f"[FastAnalyzer] {symbol} LLM 调用失败: {e}")
-            return {"rating_score": mapped_rating, "signal": "hold", "confidence": float(scan_score),
-                    "comment": f"[快速模式] LLM失败，保留扫描分={scan_score}: {e}"}
+            return {
+                "rating_score": mapped_rating,
+                "signal": "hold",
+                "confidence": float(scan_score),
+                "comment": f"[快速模式] LLM失败，保留扫描分={scan_score}: {e}",
+            }
 
     log.info("[FastAnalyzer] 快速分析器已初始化（单次 LLM 调用）")
     return analyzer
 
 
 # ── 标准 TradingAgents 分析器 ──────────────────────────────────────────────
+
 
 def create_trading_agents_analyzer(
     llm_provider: Optional[str] = None,
@@ -580,7 +713,9 @@ def create_trading_agents_analyzer(
         ticker = symbol.replace("USDT", "-USD")
         analysis_date = datetime.now().strftime("%Y-%m-%d")
 
-        log.info(f"TradingAgents 分析: {ticker} @ {analysis_date} (超时={PROPAGATE_TIMEOUT}s)")
+        log.info(
+            f"TradingAgents 分析: {ticker} @ {analysis_date} (超时={PROPAGATE_TIMEOUT}s)"
+        )
 
         # 用线程池包裹 propagate()，超时自动 fallback
         with ThreadPoolExecutor(max_workers=1) as executor:
@@ -603,7 +738,9 @@ def create_trading_agents_analyzer(
                 fast = create_fast_analyzer()
                 return fast(symbol, market_data)
 
-        log.info(f"TradingAgents 返回 decision type={type(decision)}, value={repr(decision)[:200]}")
+        log.info(
+            f"TradingAgents 返回 decision type={type(decision)}, value={repr(decision)[:200]}"
+        )
         if final_state:
             ftd = final_state.get("final_trade_decision", "")
             log.info(f"TradingAgents final_trade_decision: {repr(ftd)[:300]}")
@@ -614,10 +751,13 @@ def create_trading_agents_analyzer(
             raise ValueError("TradingAgents 返回空决策")
         result = _parse_decision(decision)
         # 保留原始决策文本作为摘要点评
-        result["comment"] = _clean_llm_text(decision)[:500] if decision else "无分析结果"
+        result["comment"] = (
+            _clean_llm_text(decision)[:500] if decision else "无分析结果"
+        )
         # 保存完整分析报告到磁盘
         if final_state:
             from src.infra.report_store import save_analysis_report
+
             save_analysis_report(final_state, symbol, market="crypto")
         return result
 

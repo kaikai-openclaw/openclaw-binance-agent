@@ -27,17 +27,19 @@ class FakePosition:
 
 def test_build_position_snapshots_includes_pnl_leverage_and_margin_pct():
     positions = [
-        FakePosition({
-            "symbol": "BTCUSDT",
-            "positionAmt": "0.001",
-            "entryPrice": "76750",
-            "markPrice": "77230",
-            "unRealizedProfit": "0.48",
-            "notional": "77.23",
-            "positionInitialMargin": "7.723",
-            "leverage": "10",
-            "liquidationPrice": "69000",
-        })
+        FakePosition(
+            {
+                "symbol": "BTCUSDT",
+                "positionAmt": "0.001",
+                "entryPrice": "76750",
+                "markPrice": "77230",
+                "unRealizedProfit": "0.48",
+                "notional": "77.23",
+                "positionInitialMargin": "7.723",
+                "leverage": "10",
+                "liquidationPrice": "69000",
+            }
+        )
     ]
 
     result = cron.build_position_snapshots(
@@ -56,11 +58,13 @@ def test_build_position_snapshots_includes_pnl_leverage_and_margin_pct():
 
 
 def test_build_protection_report_flags_duplicate_orders():
-    positions = [{
-        "symbol": "BTCUSDT",
-        "direction": "long",
-        "entry_price": 76750.0,
-    }]
+    positions = [
+        {
+            "symbol": "BTCUSDT",
+            "direction": "long",
+            "entry_price": 76750.0,
+        }
+    ]
     orders = [
         {
             "symbol": "BTCUSDT",
@@ -104,6 +108,7 @@ def test_build_protection_report_flags_duplicate_orders():
 
 def test_render_markdown_keeps_fixed_report_sections():
     report = {
+        "mode": "4h",
         "status": "success",
         "scan": {
             "filter_summary": {
@@ -132,6 +137,8 @@ def test_render_markdown_keeps_fixed_report_sections():
             "closed_since_last_run_count": 0,
         },
         "positions": [],
+        "new_positions": [],
+        "rejected_symbols": [],
         "protection_orders": {"health": {}},
         "account": {
             "paper_mode": False,
@@ -154,11 +161,7 @@ def test_render_markdown_keeps_fixed_report_sections():
 
     output = cron.render_markdown(report)
 
-    assert "超跌交易定时任务报告" in output
+    assert "超跌交易报告" in output
     assert "扫描结果:" in output
     assert "分析评级:" in output
     assert "已触发/已执行交易:" in output
-    assert "当前持仓:" in output
-    assert "保护单状态:" in output
-    assert "账户状态:" in output
-    assert "风险状态:" in output

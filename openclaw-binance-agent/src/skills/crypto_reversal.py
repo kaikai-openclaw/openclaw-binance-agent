@@ -191,17 +191,6 @@ DEFAULT_MIN_QUOTE_VOLUME = 10_000_000
 DEFAULT_MIN_REVERSAL_SCORE = 55  # 回测优化最优值：胜率60.3%，均收益+0.91%
 DEFAULT_MAX_CANDIDATES = 10
 
-# 反转策略黑名单：反复亏损币种（亏损≥2笔 or 合计亏损过大）直接排除，不再反向追
-REVERSAL_BLACKLIST = {
-    "ENJUSDT",  # 2笔合计 -9.0，场均 -12.3，极端亏损
-    "ORCAUSDT",  # 单笔亏损 -16.3，做空超跌均失败，极端风险
-    "SOONUSDT",  # 2笔合计 -3.6，流动性差
-    "CHZUSDT",  # 4h策略4笔合计 -6.95，2赢2输但亏的均值 -7.5 远大于赢的均值 +4.0
-    "TRUMPUSDT",  # MEME/政治币，庄家控盘
-    "PIPPINUSDT",  # 流动性极差，多次重复开仓
-    "LABUBUSDT",  # 强庄MEME币
-}
-
 
 # ══════════════════════════════════════════════════════════
 # 共享基类
@@ -211,9 +200,17 @@ REVERSAL_BLACKLIST = {
 class _CryptoReversalBase(BaseSkill):
     """底部反转筛选共享基类。"""
 
-    def __init__(self, state_store, input_schema, output_schema, client) -> None:
+    def __init__(
+        self,
+        state_store,
+        input_schema,
+        output_schema,
+        client,
+        risk_controller: Optional["RiskController"] = None,
+    ) -> None:
         super().__init__(state_store, input_schema, output_schema)
         self._client = client
+        self._risk_controller = risk_controller
 
     def _build_funding_map(self) -> Dict[str, float]:
         fr_map: Dict[str, float] = {}
@@ -255,8 +252,7 @@ class _CryptoReversalBase(BaseSkill):
             normalized.add(s)
         return [t for t in tickers if t.get("symbol", "") in normalized]
 
-    @staticmethod
-    def _base_filter(tickers, tradable, min_qv):
+    def _base_filter(self, tickers, tradable, min_qv):
         exclude_bases = {"USDC", "BUSD", "DAI", "TUSD", "FDUSD", "USDP"}
         result = []
         for t in tickers:
@@ -266,8 +262,7 @@ class _CryptoReversalBase(BaseSkill):
             base = sym.replace("USDT", "")
             if base in exclude_bases or not re.match(r"^[A-Z0-9]{2,15}$", base):
                 continue
-            # 黑名单币种直接排除（反复亏损币）
-            if sym in REVERSAL_BLACKLIST:
+            if self._risk_controller and self._risk_controller.is_blacklisted(sym):
                 continue
             qv = float(t.get("quoteVolume", 0))
             if qv < min_qv:
@@ -771,8 +766,17 @@ class ShortTermReversalSkill(_CryptoReversalBase):
     核心信号：底部放量 + 价格企稳 + 均线拐头 + 资金费率回归。
     """
 
-    def __init__(self, state_store, input_schema, output_schema, client) -> None:
-        super().__init__(state_store, input_schema, output_schema, client)
+    def __init__(
+        self,
+        state_store,
+        input_schema,
+        output_schema,
+        client,
+        risk_controller: Optional["RiskController"] = None,
+    ) -> None:
+        super().__init__(
+            state_store, input_schema, output_schema, client, risk_controller
+        )
         self.name = "crypto_reversal_4h"
 
     def run(self, input_data: dict) -> dict:
@@ -818,8 +822,17 @@ class HourlyReversalSkill(_CryptoReversalBase):
     比 4h 模式更敏感，放量要求更高以过滤噪音。
     """
 
-    def __init__(self, state_store, input_schema, output_schema, client) -> None:
-        super().__init__(state_store, input_schema, output_schema, client)
+    def __init__(
+        self,
+        state_store,
+        input_schema,
+        output_schema,
+        client,
+        risk_controller: Optional["RiskController"] = None,
+    ) -> None:
+        super().__init__(
+            state_store, input_schema, output_schema, client, risk_controller
+        )
         self.name = "crypto_reversal_1h"
 
     def run(self, input_data: dict) -> dict:
@@ -864,8 +877,17 @@ class LongTermReversalSkill(_CryptoReversalBase):
     核心信号：底部放量 + MACD 零轴下方金叉/底背离 + 均线拐头 + 距底部理想距离。
     """
 
-    def __init__(self, state_store, input_schema, output_schema, client) -> None:
-        super().__init__(state_store, input_schema, output_schema, client)
+    def __init__(
+        self,
+        state_store,
+        input_schema,
+        output_schema,
+        client,
+        risk_controller: Optional["RiskController"] = None,
+    ) -> None:
+        super().__init__(
+            state_store, input_schema, output_schema, client, risk_controller
+        )
         self.name = "crypto_reversal_1d"
 
     def run(self, input_data: dict) -> dict:

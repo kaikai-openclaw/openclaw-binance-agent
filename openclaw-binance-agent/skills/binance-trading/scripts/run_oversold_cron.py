@@ -294,6 +294,7 @@ def run_report(args: argparse.Namespace) -> dict:
                 load_schema("crypto_oversold_input.json"),
                 load_schema("crypto_oversold_output.json"),
                 public_client,
+                risk_controller,
             )
         else:
             oversold_skill = ShortTermOversoldSkill(
@@ -301,6 +302,7 @@ def run_report(args: argparse.Namespace) -> dict:
                 load_schema("crypto_oversold_input.json"),
                 load_schema("crypto_oversold_output.json"),
                 public_client,
+                risk_controller,
             )
 
         scan_input = {

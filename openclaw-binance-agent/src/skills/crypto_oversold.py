@@ -134,17 +134,6 @@ DEFAULT_MAX_CANDIDATES = 10
 DEFAULT_MAX_SPREAD_PCT = 0.25
 DEFAULT_MAX_ABS_FUNDING_RATE = 0.01
 
-# 超跌策略黑名单：持续下跌币种不适合做超跌反弹
-OVERSOLD_BLACKLIST = {
-    "ENJUSDT",  # 长期阴跌，超跌后继续跌
-    "ORCAUSDT",  # 单笔亏损 -16.3，极端风险
-    "SOONUSDT",  # 流动性差，反转失败率高
-    "TRUMPUSDT",  # Meme/政治币，强庄控盘
-    "PIPPINUSDT",  # 流动性极差
-    "LABUBUSDT",  # 强庄MEME币
-    "CHZUSDT",  # 4h反转策略中亏损严重，反弹乏力
-}
-
 MARKET_REGIME_SYMBOL = "BTCUSDT"
 MARKET_REGIME_INTERVAL = "4h"
 MARKET_REGIME_KLINE_LIMIT = 80
@@ -164,9 +153,17 @@ SYMBOL_TREND_RECENT_LOOKBACK = 8
 class _CryptoOversoldBase(BaseSkill):
     """超跌筛选共享基类，封装基础过滤、资金费率获取、去重等通用逻辑。"""
 
-    def __init__(self, state_store, input_schema, output_schema, client) -> None:
+    def __init__(
+        self,
+        state_store,
+        input_schema,
+        output_schema,
+        client,
+        risk_controller: Optional["RiskController"] = None,
+    ) -> None:
         super().__init__(state_store, input_schema, output_schema)
         self._client = client
+        self._risk_controller = risk_controller
 
     def _build_funding_map(self) -> Dict[str, float]:
         fr_map: Dict[str, float] = {}
@@ -208,8 +205,7 @@ class _CryptoOversoldBase(BaseSkill):
             normalized.add(s)
         return [t for t in tickers if t.get("symbol", "") in normalized]
 
-    @staticmethod
-    def _base_filter(tickers, tradable, min_qv):
+    def _base_filter(self, tickers, tradable, min_qv):
         exclude_bases = {"USDC", "BUSD", "DAI", "TUSD", "FDUSD", "USDP"}
         result = []
         for t in tickers:
@@ -219,8 +215,7 @@ class _CryptoOversoldBase(BaseSkill):
             base = sym.replace("USDT", "")
             if base in exclude_bases or not re.match(r"^[A-Z0-9]{2,15}$", base):
                 continue
-            # 黑名单币种直接排除（持续阴跌/强庄币，不适合做超跌反弹）
-            if sym in OVERSOLD_BLACKLIST:
+            if self._risk_controller and self._risk_controller.is_blacklisted(sym):
                 continue
             qv = float(t.get("quoteVolume", 0))
             if qv < min_qv:
@@ -825,8 +820,17 @@ class ShortTermOversoldSkill(_CryptoOversoldBase):
     核心信号：RSI 极端超卖 + 资金费率极端负值 + 底部放量。
     """
 
-    def __init__(self, state_store, input_schema, output_schema, client) -> None:
-        super().__init__(state_store, input_schema, output_schema, client)
+    def __init__(
+        self,
+        state_store,
+        input_schema,
+        output_schema,
+        client,
+        risk_controller: Optional["RiskController"] = None,
+    ) -> None:
+        super().__init__(
+            state_store, input_schema, output_schema, client, risk_controller
+        )
         self.name = "crypto_oversold_4h"
 
     def run(self, input_data: dict) -> dict:
@@ -871,8 +875,17 @@ class LongTermOversoldSkill(_CryptoOversoldBase):
     核心信号：日线 BIAS 深度偏离 + MACD 底背离 + 距高点深度回撤。
     """
 
-    def __init__(self, state_store, input_schema, output_schema, client) -> None:
-        super().__init__(state_store, input_schema, output_schema, client)
+    def __init__(
+        self,
+        state_store,
+        input_schema,
+        output_schema,
+        client,
+        risk_controller: Optional["RiskController"] = None,
+    ) -> None:
+        super().__init__(
+            state_store, input_schema, output_schema, client, risk_controller
+        )
         self.name = "crypto_oversold_1d"
 
     def run(self, input_data: dict) -> dict:

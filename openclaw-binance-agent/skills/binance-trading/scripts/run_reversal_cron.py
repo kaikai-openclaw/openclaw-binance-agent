@@ -297,6 +297,7 @@ def run_report(args: argparse.Namespace) -> dict:
                 load_schema("crypto_reversal_input.json"),
                 load_schema("crypto_reversal_output.json"),
                 public_client,
+                risk_controller,
             )
         elif args.mode == "1h":
             reversal_skill = HourlyReversalSkill(
@@ -304,6 +305,7 @@ def run_report(args: argparse.Namespace) -> dict:
                 load_schema("crypto_reversal_input.json"),
                 load_schema("crypto_reversal_output.json"),
                 public_client,
+                risk_controller,
             )
         else:
             reversal_skill = ShortTermReversalSkill(
@@ -311,6 +313,7 @@ def run_report(args: argparse.Namespace) -> dict:
                 load_schema("crypto_reversal_input.json"),
                 load_schema("crypto_reversal_output.json"),
                 public_client,
+                risk_controller,
             )
 
         scan_input = {

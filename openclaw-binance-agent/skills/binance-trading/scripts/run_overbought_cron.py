@@ -297,6 +297,7 @@ def run_report(args: argparse.Namespace) -> dict:
                 load_schema("crypto_overbought_input.json"),
                 load_schema("crypto_overbought_output.json"),
                 public_client,
+                risk_controller,
             )
         elif args.mode == "1h":
             overbought_skill = HourlyOverboughtSkill(
@@ -304,6 +305,7 @@ def run_report(args: argparse.Namespace) -> dict:
                 load_schema("crypto_overbought_input.json"),
                 load_schema("crypto_overbought_output.json"),
                 public_client,
+                risk_controller,
             )
         else:
             overbought_skill = ShortTermOverboughtSkill(
@@ -311,6 +313,7 @@ def run_report(args: argparse.Namespace) -> dict:
                 load_schema("crypto_overbought_input.json"),
                 load_schema("crypto_overbought_output.json"),
                 public_client,
+                risk_controller,
             )
 
         scan_input = {

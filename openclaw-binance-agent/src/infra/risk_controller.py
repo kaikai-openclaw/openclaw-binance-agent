@@ -46,8 +46,44 @@ class RiskController:
     STOP_LOSS_COOLDOWN_HOURS = 24  # 止损后同方向冷却期（小时）
     MAX_TOTAL_EXPOSURE_RATIO = 4.0  # 全账户总持仓名义价值 <= 总资金 × 4x（P0）
     MAX_OPEN_POSITIONS = 30  # 同时持仓数量上限（P0，全账户总共）
-    # 禁止交易的币种黑名单（全局，所有策略共享）
-    BLACKLISTED_SYMBOLS: set[str] = set()
+
+    # 策略级黑名单迁移：原硬编码在 crypto_*.py 中的黑名单合并至此
+    # 首次运行时自动初始化到 SQLite，之后由运行时管理（add/remove）
+    DEFAULT_BLACKLIST: set[str] = {
+        # 反转/超跌策略共同排除：反复亏损/流动性差/强庄币
+        "ENJUSDT",
+        "ORCAUSDT",
+        "SOONUSDT",
+        "CHZUSDT",
+        "TRUMPUSDT",
+        "PIPPINUSDT",
+        "LABUBUSDT",
+        # 做空策略额外排除：Meme币/极端投机币/稳定币交易对
+        "PEPEUSDT",
+        "DOGEUSDT",
+        "SHIBUSDT",
+        "WIFUSDT",
+        "FLOKIUSDT",
+        "BRETTUSDT",
+        "MOGUSDT",
+        "BOMEUSDT",
+        "SLERFUSDT",
+        "POPCATUSDT",
+        "PNUTUSDT",
+        "CHILLUSUSDT",
+        "MICKEYUSDT",
+        "SPXUSDT",
+        "FWOGUSDT",
+        "ROOMIUSDT",
+        "SCIOUSDT",
+        "SKYAIUSDT",
+        "MELANIAUSDT",
+        "TAGUSDT",
+        "ZEREBROUSDT",
+        "BANANAS31USDT",
+        "USDCUSDT",
+        "FDUSDUSDT",
+    }
 
     _CREATE_COOLDOWN_TABLE_SQL = """
         CREATE TABLE IF NOT EXISTS stop_loss_cooldowns (
@@ -135,6 +171,8 @@ class RiskController:
             self._paper_mode = self._load_paper_mode()
             self._strategy_paper_modes = self._load_strategy_paper_modes()
             self._blacklisted_symbols: set[str] = self._load_blacklist()
+            if not self._blacklisted_symbols:
+                self._init_default_blacklist()
         else:
             self._blacklisted_symbols: set[str] = set()
 
@@ -569,6 +607,21 @@ class RiskController:
             return set()
         cursor = conn.execute("SELECT symbol FROM symbol_blacklist")
         return {row[0] for row in cursor.fetchall()}
+
+    def _init_default_blacklist(self) -> None:
+        """从策略级硬编码黑名单初始化 SQLite 黑名单（仅首次空库时执行）。"""
+        conn = self._get_conn()
+        if conn is None:
+            return
+        updated_at = datetime.now(timezone.utc).isoformat()
+        for symbol in self.DEFAULT_BLACKLIST:
+            conn.execute(
+                "INSERT OR IGNORE INTO symbol_blacklist (symbol, added_at) VALUES (?, ?)",
+                (symbol, updated_at),
+            )
+        conn.commit()
+        self._blacklisted_symbols = set(self.DEFAULT_BLACKLIST)
+        log.info(f"黑名单已从默认配置初始化: {len(self.DEFAULT_BLACKLIST)} 个币种")
 
     def add_to_blacklist(self, symbol: str, reason: str = "manual") -> None:
         """将指定币种加入黑名单，持久化到 SQLite。"""

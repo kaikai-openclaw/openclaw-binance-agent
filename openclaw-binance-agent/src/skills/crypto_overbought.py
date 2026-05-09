@@ -180,40 +180,6 @@ DEFAULT_MIN_QUOTE_VOLUME = 20_000_000  # 从10M提高到20M，只做流动性好
 DEFAULT_MIN_OVERBOUGHT_SCORE = 45  # 从35收紧至45，减少低质量信号扫描通过
 DEFAULT_MAX_CANDIDATES = 10
 
-# 做空黑名单：Meme币/强庄币/极端投机币（容易轧空，不适合普通量化做空）
-SHORT_BLACKLIST = {
-    # Meme / 社区币
-    "PEPEUSDT",
-    "DOGEUSDT",
-    "SHIBUSDT",
-    "WIFUSDT",
-    "FLOKIUSDT",
-    "BRETTUSDT",
-    "MOGUSDT",
-    "BOMEUSDT",
-    "SLERFUSDT",
-    "POPCATUSDT",
-    "PNUTUSDT",
-    "CHILLUSUSDT",
-    "MICKEYUSDT",
-    "SPXUSDT",
-    "FWOGUSDT",
-    "ROOMIUSDT",
-    "SCIOUSDT",
-    # 强庄/流动性极差的币
-    "SKYAIUSDT",  # 24h+100%，庄家控盘
-    "PIPPINUSDT",  # 流动性极差，多次重复开仓
-    "LABUBUSDT",
-    "TRUMPUSDT",
-    "MELANIAUSDT",
-    # 极小市值高波动币
-    "TAGUSDT",  # 多次止损，历史极端波动
-    "ZEREBROUSDT",
-    "BANANAS31USDT",
-    # 稳定币交易对
-    "USDCUSDT",
-    "FDUSDUSDT",
-}
 # 轧空风险：成交额低于此值且 OI/成交额比过高 → 扣分
 # 阈值设为 2000 万：只对真正低流动性小币种扣分，避免误伤中等市值超买候选
 SQUEEZE_RISK_QV_THRESHOLD = 20_000_000
@@ -228,9 +194,17 @@ SQUEEZE_RISK_OI_RATIO = 0.6  # OI 价值 / 24h 成交额 > 60% = 极度拥挤（
 class _CryptoOverboughtBase(BaseSkill):
     """超买做空筛选共享基类。"""
 
-    def __init__(self, state_store, input_schema, output_schema, client) -> None:
+    def __init__(
+        self,
+        state_store,
+        input_schema,
+        output_schema,
+        client,
+        risk_controller: Optional["RiskController"] = None,
+    ) -> None:
         super().__init__(state_store, input_schema, output_schema)
         self._client = client
+        self._risk_controller = risk_controller
 
     def _build_funding_map(self) -> Dict[str, float]:
         fr_map: Dict[str, float] = {}
@@ -286,8 +260,7 @@ class _CryptoOverboughtBase(BaseSkill):
             normalized.add(s)
         return [t for t in tickers if t.get("symbol", "") in normalized]
 
-    @staticmethod
-    def _base_filter(tickers, tradable, min_qv):
+    def _base_filter(self, tickers, tradable, min_qv):
         exclude_bases = {"USDC", "BUSD", "DAI", "TUSD", "FDUSD", "USDP"}
         result = []
         for t in tickers:
@@ -297,8 +270,7 @@ class _CryptoOverboughtBase(BaseSkill):
             base = sym.replace("USDT", "")
             if base in exclude_bases or not re.match(r"^[A-Z0-9]{2,15}$", base):
                 continue
-            # 黑名单币种直接排除
-            if sym in SHORT_BLACKLIST:
+            if self._risk_controller and self._risk_controller.is_blacklisted(sym):
                 continue
             qv = float(t.get("quoteVolume", 0))
             if qv < min_qv:
@@ -945,8 +917,17 @@ class ShortTermOverboughtSkill(_CryptoOverboughtBase):
     核心信号：RSI 极端超买 + 资金费率极端正值 + 量价背离。
     """
 
-    def __init__(self, state_store, input_schema, output_schema, client) -> None:
-        super().__init__(state_store, input_schema, output_schema, client)
+    def __init__(
+        self,
+        state_store,
+        input_schema,
+        output_schema,
+        client,
+        risk_controller: Optional["RiskController"] = None,
+    ) -> None:
+        super().__init__(
+            state_store, input_schema, output_schema, client, risk_controller
+        )
         self.name = "crypto_overbought_4h"
 
     def run(self, input_data: dict) -> dict:
@@ -983,8 +964,17 @@ class HourlyOverboughtSkill(_CryptoOverboughtBase):
     比 4h 模式更敏感，轧空风险扣分更重。
     """
 
-    def __init__(self, state_store, input_schema, output_schema, client) -> None:
-        super().__init__(state_store, input_schema, output_schema, client)
+    def __init__(
+        self,
+        state_store,
+        input_schema,
+        output_schema,
+        client,
+        risk_controller: Optional["RiskController"] = None,
+    ) -> None:
+        super().__init__(
+            state_store, input_schema, output_schema, client, risk_controller
+        )
         self.name = "crypto_overbought_1h"
 
     def run(self, input_data: dict) -> dict:
@@ -1028,8 +1018,17 @@ class LongTermOverboughtSkill(_CryptoOverboughtBase):
     核心信号：MACD 顶背离 + 日线 BIAS 极端偏离 + 资金费率极端正值。
     """
 
-    def __init__(self, state_store, input_schema, output_schema, client) -> None:
-        super().__init__(state_store, input_schema, output_schema, client)
+    def __init__(
+        self,
+        state_store,
+        input_schema,
+        output_schema,
+        client,
+        risk_controller: Optional["RiskController"] = None,
+    ) -> None:
+        super().__init__(
+            state_store, input_schema, output_schema, client, risk_controller
+        )
         self.name = "crypto_overbought_1d"
 
     def run(self, input_data: dict) -> dict:

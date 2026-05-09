@@ -41,11 +41,13 @@ class RiskController:
     # 注意：以下常量与 SOUL.md / MEMORY.md 保持严格一致，修改前必须先更新文档。
     # 单笔保证金 <= 总资金 20%（SOUL.md 红线，P0）
     MAX_SINGLE_MARGIN_RATIO = 0.20
-    MAX_SINGLE_COIN_RATIO = 0.40      # 单币累计持仓 <= 总资金 40%
-    DAILY_LOSS_THRESHOLD = 0.05       # 日亏损阈值 5%
-    STOP_LOSS_COOLDOWN_HOURS = 24     # 止损后同方向冷却期（小时）
-    MAX_TOTAL_EXPOSURE_RATIO = 4.0    # 全账户总持仓名义价值 <= 总资金 × 4x（P0）
-    MAX_OPEN_POSITIONS = 30           # 同时持仓数量上限（P0，全账户总共）
+    MAX_SINGLE_COIN_RATIO = 0.40  # 单币累计持仓 <= 总资金 40%
+    DAILY_LOSS_THRESHOLD = 0.05  # 日亏损阈值 5%
+    STOP_LOSS_COOLDOWN_HOURS = 24  # 止损后同方向冷却期（小时）
+    MAX_TOTAL_EXPOSURE_RATIO = 4.0  # 全账户总持仓名义价值 <= 总资金 × 4x（P0）
+    MAX_OPEN_POSITIONS = 30  # 同时持仓数量上限（P0，全账户总共）
+    # 禁止交易的币种黑名单（全局，所有策略共享）
+    BLACKLISTED_SYMBOLS: set[str] = set()
 
     _CREATE_COOLDOWN_TABLE_SQL = """
         CREATE TABLE IF NOT EXISTS stop_loss_cooldowns (
@@ -77,6 +79,13 @@ class RiskController:
             strategy_tag TEXT NOT NULL,
             opened_at   TEXT NOT NULL,
             PRIMARY KEY (symbol, direction)
+        )
+    """
+
+    _CREATE_BLACKLIST_TABLE_SQL = """
+        CREATE TABLE IF NOT EXISTS symbol_blacklist (
+            symbol      TEXT PRIMARY KEY,
+            added_at    TEXT NOT NULL
         )
     """
 
@@ -119,11 +128,15 @@ class RiskController:
             self._thread_local.conn.execute(self._CREATE_COOLDOWN_INDEX_SQL)
             self._thread_local.conn.execute(self._CREATE_RUNTIME_STATE_TABLE_SQL)
             self._thread_local.conn.execute(self._CREATE_POSITION_STRATEGY_TABLE_SQL)
+            self._thread_local.conn.execute(self._CREATE_BLACKLIST_TABLE_SQL)
             self._migrate_cooldown_strategy_tag(self._thread_local.conn)
             self._thread_local.conn.commit()
             self._conn = self._thread_local.conn  # 保留引用供 __del__ 使用
             self._paper_mode = self._load_paper_mode()
             self._strategy_paper_modes = self._load_strategy_paper_modes()
+            self._blacklisted_symbols: set[str] = self._load_blacklist()
+        else:
+            self._blacklisted_symbols: set[str] = set()
 
     def _get_conn(self) -> Optional[sqlite3.Connection]:
         """
@@ -143,13 +156,17 @@ class RiskController:
         new_conn.execute(self._CREATE_COOLDOWN_TABLE_SQL)
         new_conn.execute(self._CREATE_COOLDOWN_INDEX_SQL)
         new_conn.execute(self._CREATE_RUNTIME_STATE_TABLE_SQL)
+        new_conn.execute(self._CREATE_POSITION_STRATEGY_TABLE_SQL)
+        new_conn.execute(self._CREATE_BLACKLIST_TABLE_SQL)
         self._migrate_cooldown_strategy_tag(new_conn)
         new_conn.commit()
         self._thread_local.conn = new_conn
         return new_conn
 
     def validate_order(
-        self, order: OrderRequest, account: AccountState,
+        self,
+        order: OrderRequest,
+        account: AccountState,
         strategy_tag: str = "",
     ) -> ValidationResult:
         """
@@ -168,10 +185,18 @@ class RiskController:
         # 断言 0：策略级 Paper Mode 检查
         # 注意：全局 paper_mode 由 _execute_single_trade 在风控通过后统一处理（模拟下单），
         # 此处仅拦截策略独立 paper mode，避免全局 paper mode 下订单被误判为 rejected_by_risk。
-        if strategy_tag and not self._paper_mode and self._strategy_paper_modes.get(strategy_tag, False):
-            reason = (
-                f"策略 {strategy_tag} 处于模拟盘模式，拒绝实盘下单"
-            )
+        if (
+            strategy_tag
+            and not self._paper_mode
+            and self._strategy_paper_modes.get(strategy_tag, False)
+        ):
+            reason = f"策略 {strategy_tag} 处于模拟盘模式，拒绝实盘下单"
+            log.warning(f"风控拒绝: {reason}")
+            return ValidationResult(passed=False, reason=reason)
+
+        # 断言 0：黑名单拦截
+        if order.symbol in self._blacklisted_symbols:
+            reason = f"{order.symbol} 在黑名单中，禁止交易"
             log.warning(f"风控拒绝: {reason}")
             return ValidationResult(passed=False, reason=reason)
 
@@ -179,8 +204,7 @@ class RiskController:
         existing_value = self._get_position_value(order.symbol, account)
         if existing_value > 0:
             reason = (
-                f"{order.symbol} 已有持仓（价值 {existing_value:.2f}），"
-                f"禁止重复开仓"
+                f"{order.symbol} 已有持仓（价值 {existing_value:.2f}），禁止重复开仓"
             )
             log.warning(f"风控拒绝: {reason}")
             return ValidationResult(passed=False, reason=reason)
@@ -188,10 +212,18 @@ class RiskController:
         total_balance = account.total_balance
 
         # 断言 0.6：同时持仓数量上限（P0）
-        open_positions = len([
-            p for p in account.positions
-            if (p.get("quantity", 0) if isinstance(p, dict) else getattr(p, "quantity", 0)) != 0
-        ])
+        open_positions = len(
+            [
+                p
+                for p in account.positions
+                if (
+                    p.get("quantity", 0)
+                    if isinstance(p, dict)
+                    else getattr(p, "quantity", 0)
+                )
+                != 0
+            ]
+        )
         if open_positions >= self.MAX_OPEN_POSITIONS:
             reason = (
                 f"当前持仓数 {open_positions} 已达上限 {self.MAX_OPEN_POSITIONS}，"
@@ -270,7 +302,9 @@ class RiskController:
         return loss_ratio >= self.DAILY_LOSS_THRESHOLD
 
     def execute_degradation(
-        self, account: AccountState, binance_client=None,
+        self,
+        account: AccountState,
+        binance_client=None,
         strategy_tag: str = "",
     ) -> None:
         """
@@ -340,21 +374,27 @@ class RiskController:
             return True
         return self._strategy_paper_modes.get(strategy_tag, False)
 
-    def enable_strategy_paper_mode(self, strategy_tag: str, reason: str = "manual") -> None:
+    def enable_strategy_paper_mode(
+        self, strategy_tag: str, reason: str = "manual"
+    ) -> None:
         """将指定策略切换到模拟盘模式。"""
         self._strategy_paper_modes[strategy_tag] = True
         key = f"paper_mode:{strategy_tag}"
         self._persist_runtime_state(key, "true", reason)
         log.warning(f"策略 Paper Mode 已启用: strategy={strategy_tag}, reason={reason}")
 
-    def disable_strategy_paper_mode(self, strategy_tag: str, reason: str = "manual") -> None:
+    def disable_strategy_paper_mode(
+        self, strategy_tag: str, reason: str = "manual"
+    ) -> None:
         """将指定策略恢复实盘模式。"""
         self._strategy_paper_modes[strategy_tag] = False
         key = f"paper_mode:{strategy_tag}"
         self._persist_runtime_state(key, "false", reason)
         log.warning(f"策略 Paper Mode 已关闭: strategy={strategy_tag}, reason={reason}")
 
-    def record_stop_loss(self, symbol: str, direction: str, strategy_tag: str = "") -> None:
+    def record_stop_loss(
+        self, symbol: str, direction: str, strategy_tag: str = ""
+    ) -> None:
         """
         记录某币种某方向的止损事件，启动 24 小时冷却期。
 
@@ -387,7 +427,9 @@ class RiskController:
             f"于 {now.isoformat()}，冷却期 {self.STOP_LOSS_COOLDOWN_HOURS} 小时"
         )
 
-    def record_position_strategy_tag(self, symbol: str, direction: str, strategy_tag: str) -> None:
+    def record_position_strategy_tag(
+        self, symbol: str, direction: str, strategy_tag: str
+    ) -> None:
         """
         记录某持仓由哪个策略开仓。
 
@@ -424,9 +466,7 @@ class RiskController:
     # 内部辅助方法
     # ----------------------------------------------------------------
 
-    def _get_position_value(
-        self, symbol: str, account: AccountState
-    ) -> float:
+    def _get_position_value(self, symbol: str, account: AccountState) -> float:
         """
         获取指定币种的现有持仓价值。
 
@@ -467,7 +507,9 @@ class RiskController:
                 price = pos.get("current_price", 0) or pos.get("entry_price", 0)
             else:
                 quantity = getattr(pos, "quantity", 0)
-                price = getattr(pos, "current_price", 0) or getattr(pos, "entry_price", 0)
+                price = getattr(pos, "current_price", 0) or getattr(
+                    pos, "entry_price", 0
+                )
             total += abs(quantity) * price
         return total
 
@@ -498,7 +540,11 @@ class RiskController:
         cooldown_delta = timedelta(hours=self.STOP_LOSS_COOLDOWN_HOURS)
         for rec_symbol, rec_direction, rec_tag, rec_time in self._stop_loss_records:
             if rec_symbol == symbol and rec_direction == direction:
-                elapsed = (datetime.now() - rec_time) if rec_time.tzinfo is None else (now - rec_time)
+                elapsed = (
+                    (datetime.now() - rec_time)
+                    if rec_time.tzinfo is None
+                    else (now - rec_time)
+                )
                 if elapsed < cooldown_delta:
                     return True
 
@@ -515,6 +561,46 @@ class RiskController:
         )
         row = cursor.fetchone()
         return row is not None and row[0].lower() == "true"
+
+    def _load_blacklist(self) -> set[str]:
+        """从 SQLite 黑名单表加载禁止交易的币种集合。"""
+        conn = self._get_conn()
+        if conn is None:
+            return set()
+        cursor = conn.execute("SELECT symbol FROM symbol_blacklist")
+        return {row[0] for row in cursor.fetchall()}
+
+    def add_to_blacklist(self, symbol: str, reason: str = "manual") -> None:
+        """将指定币种加入黑名单，持久化到 SQLite。"""
+        symbol = symbol.upper().strip()
+        conn = self._get_conn()
+        if conn is not None:
+            updated_at = datetime.now(timezone.utc).isoformat()
+            conn.execute(
+                "INSERT OR IGNORE INTO symbol_blacklist (symbol, added_at) VALUES (?, ?)",
+                (symbol, updated_at),
+            )
+            conn.commit()
+        self._blacklisted_symbols.add(symbol)
+        log.info(f"黑名单已添加: {symbol}, reason={reason}")
+
+    def remove_from_blacklist(self, symbol: str, reason: str = "manual") -> None:
+        """将指定币种从黑名单移除，持久化到 SQLite。"""
+        symbol = symbol.upper().strip()
+        conn = self._get_conn()
+        if conn is not None:
+            conn.execute("DELETE FROM symbol_blacklist WHERE symbol = ?", (symbol,))
+            conn.commit()
+        self._blacklisted_symbols.discard(symbol)
+        log.info(f"黑名单已移除: {symbol}, reason={reason}")
+
+    def is_blacklisted(self, symbol: str) -> bool:
+        """查询指定币种是否在黑名单中。"""
+        return symbol.upper().strip() in self._blacklisted_symbols
+
+    def get_blacklist(self) -> set[str]:
+        """返回当前黑名单集合的副本。"""
+        return set(self._blacklisted_symbols)
 
     def _persist_runtime_state(self, key: str, value: str, reason: str) -> None:
         """保存风控运行时状态；无数据库时保持内存行为。"""

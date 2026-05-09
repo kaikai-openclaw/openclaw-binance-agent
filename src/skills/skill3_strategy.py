@@ -63,7 +63,7 @@ TAKE_PROFIT_PCT = 0.06  # 止盈幅度 6%（盈亏比 2:1）
 
 # ATR 动态止损默认参数
 DEFAULT_ATR_STOP_MULT = 1.5  # 止损距离 = ATR × 1.5
-DEFAULT_ATR_TP_MULT = 3.0  # 止盈距离 = ATR × 3.0（盈亏比 2:1）
+DEFAULT_ATR_TP_MULT = 2.3  # 止盈距离 = ATR × 2.3（盈亏比 1.53:1）
 DEFAULT_MIN_STOP_PCT = 0.005  # 止损距离下限 0.5%（防止极低波动下 SL 贴得过近被秒扫）
 DEFAULT_MAX_STOP_PCT = (
     0.07  # 止损距离上限 7%（10x 杠杆下保证金最多亏 70%，留 30% 安全边际防滑点强平）
@@ -707,6 +707,9 @@ class Skill3Strategy(BaseSkill):
         """
         # 最优路径：插针尖端止损
         if wick_tip_price is not None and wick_tip_price > 0:
+            stop_mult, tp_mult = self._get_dynamic_multipliers(
+                atr_pct if atr_pct else 0
+            )
             wick_buffer = 0.005  # 0.5% 缓冲，防止精确到尖端被扫
             if direction == TradeDirection.LONG and wick_tip_price < entry_price:
                 stop_loss = wick_tip_price * (1 - wick_buffer)
@@ -716,7 +719,7 @@ class Skill3Strategy(BaseSkill):
                     self._min_stop_pct, min(self._max_stop_pct, sl_dist_pct)
                 )
                 stop_loss = entry_price * (1 - sl_dist_pct)
-                tp_dist_pct = sl_dist_pct * (self._atr_tp_mult / self._atr_stop_mult)
+                tp_dist_pct = sl_dist_pct * (tp_mult / stop_mult)
                 take_profit = entry_price * (1 + tp_dist_pct)
                 log.info(
                     f"[{self.name}] {symbol} 插针尖端止损: tip={wick_tip_price:.8g}, "
@@ -730,7 +733,7 @@ class Skill3Strategy(BaseSkill):
                     self._min_stop_pct, min(self._max_stop_pct, sl_dist_pct)
                 )
                 stop_loss = entry_price * (1 + sl_dist_pct)
-                tp_dist_pct = sl_dist_pct * (self._atr_tp_mult / self._atr_stop_mult)
+                tp_dist_pct = sl_dist_pct * (tp_mult / stop_mult)
                 take_profit = entry_price * (1 - tp_dist_pct)
                 log.info(
                     f"[{self.name}] {symbol} 插针尖端止损: tip={wick_tip_price:.8g}, "
@@ -793,14 +796,14 @@ class Skill3Strategy(BaseSkill):
 
         stop_mult, _ = self._get_dynamic_multipliers(float(atr_pct))
         raw_sl_pct = (float(atr_pct) / 100.0) * stop_mult
+        if direction == TradeDirection.SHORT and raw_sl_pct > DEFAULT_MAX_STOP_USDT:
+            log.warning(
+                f"[{self.name}] {symbol} 做空 ATR 波动过大，跳过交易: "
+                f"atr_pct={atr_pct:.2f}%, raw_sl={raw_sl_pct:.2%}, "
+                f"做空硬顶={DEFAULT_MAX_STOP_USDT:.2%}"
+            )
+            return True
         if raw_sl_pct <= self._max_stop_pct:
-            if direction == TradeDirection.SHORT and raw_sl_pct > DEFAULT_MAX_STOP_USDT:
-                log.warning(
-                    f"[{self.name}] {symbol} 做空 ATR 波动过大，跳过交易: "
-                    f"atr_pct={atr_pct:.2f}%, raw_sl={raw_sl_pct:.2%}, "
-                    f"做空硬顶={DEFAULT_MAX_STOP_USDT:.2%}"
-                )
-                return True
             return False
 
         log.warning(

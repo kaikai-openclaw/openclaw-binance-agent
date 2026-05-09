@@ -447,6 +447,12 @@ class Skill4Execute(BaseSkill):
                 strategy_tag=strategy_tag,
             )
 
+        self._risk_controller.record_position_strategy_tag(
+            symbol=symbol,
+            direction=direction_str,
+            strategy_tag=strategy_tag,
+        )
+
         if not self._monitor_until_close:
             # 市价单立即成交，用较短的超时（最多等 5 秒）确认持仓并挂保护单
             effective_timeout = (
@@ -466,14 +472,6 @@ class Skill4Execute(BaseSkill):
                 pre_order_position_amt=pre_order_position_amt,
                 confirm_timeout_override=effective_timeout,
             )
-            # 入场成功时记录策略标签，供后续 _protect_existing_positions 触发止损时
-            # 查找真实 strategy_tag，避免写 existing_position 导致跨策略 cooldown 漏拦
-            if entry_result.get("status") == OrderStatus.OPEN.value:
-                self._risk_controller.record_position_strategy_tag(
-                    symbol=symbol,
-                    direction=direction_str,
-                    strategy_tag=strategy_tag,
-                )
             return self._make_result(
                 symbol=symbol,
                 direction=direction_str,

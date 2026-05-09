@@ -46,7 +46,7 @@ class RiskController:
     DAILY_LOSS_THRESHOLD = 0.05  # 日亏损阈值 5%
     STOP_LOSS_COOLDOWN_HOURS = 24  # 止损后同方向冷却期（小时）
     MAX_TOTAL_EXPOSURE_RATIO = 4.0  # 全账户总持仓名义价值 <= 总资金 × 4x（P0）
-    MAX_OPEN_POSITIONS = 30  # 同时持仓数量上限（P0，全账户总共）
+    MAX_OPEN_POSITIONS = 15  # 同时持仓数量上限（P0，全账户总共）
 
     # 策略级黑名单迁移：原硬编码在 crypto_*.py 中的黑名单合并至此
     # 首次运行时自动初始化到 SQLite，之后由运行时管理（add/remove）

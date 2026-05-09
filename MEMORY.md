@@ -137,13 +137,13 @@ fetch_data.py                  → BinanceKlineCache → BinancePublicClient（C
 ### 止损上移与时间衰减止盈（2026-05-03 新增）
 
 - 止损上移（Break-even + 阶梯锁利）：
-  - step 0 → 1：盈利达 1x sl_dist，止损移至保本（entry_price）
-  - step 1 → 2：盈利达 2x sl_dist，止损锁住 0.5x 利润
-  - step 2 → 3：盈利达 3x sl_dist，止损锁住 1x 利润
+  - step 0 → 1：盈利达 1.3x sl_dist，止损移至保本（entry_price）
+  - step 1 → 2：盈利达 1.8x sl_dist，止损锁住 0.5x 利润
+  - step 2 → 3：盈利达 2.3x sl_dist，止损锁住 1x 利润
   - 仅在 `position_opened && sl_dist > 0 && server_sl_tp_placed` 时执行
 - 时间衰减止盈：
-  - step 0 → 1：持仓超过 max_hold_hours × 50%，止盈下调 20%
-  - step 1 → 2：持仓超过 max_hold_hours × 75%，止盈下调 40%
+  - step 0 → 1：持仓超过 max_hold_hours × 75%，止盈下调 40%
+  - 仅在 `sl_step == 0`（止损未上移，仍在亏损区）时执行，避免已保本后催促止盈
   - 仅在 `sl_step == 0`（止损未上移，仍在亏损区）时执行，避免已保本后催促止盈
 
 ### 超买做空策略优化（2026-05-03 回测验证）
@@ -166,6 +166,14 @@ fetch_data.py                  → BinanceKlineCache → BinancePublicClient（C
   - `allow_oversold`：牛市正常；横盘且近 5 日未加速下跌；熊市关闭
   - `allow_reversal`：牛市/横盘均可；熊市仅高分才入场
 - 横盘时自动提高评分门槛：超跌 +15，趋势 +10
+
+### 参数调整与Bug修复（2026-05-09）
+
+- ATR 止盈乘数调整：`DEFAULT_ATR_TP_MULT` 2.8 → 2.3（盈亏比 1.87:1 → 1.53:1）
+- skill3_strategy: wick_tip 路径改用动态乘数计算止盈距离
+- skill3_strategy: 做空硬顶检查优先级提升，避免被高波动跳过逻辑绕过
+- manage_positions: tp_improved 时正确保存 original_tp 为当前止盈价（修复时间衰减止盈基准错误）
+- risk_controller: db_path 为空时黑名单初始化兜底（修复测试环境 AttributeError）
 
 ## 待办
 

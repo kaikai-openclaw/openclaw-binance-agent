@@ -18,14 +18,17 @@ log = logging.getLogger(__name__)
 # 枚举类型
 # ============================================================
 
+
 class TradeDirection(str, Enum):
     """交易方向：做多或做空"""
+
     LONG = "long"
     SHORT = "short"
 
 
 class Signal(str, Enum):
     """多空或观望信号"""
+
     LONG = "long"
     SHORT = "short"
     HOLD = "hold"
@@ -33,25 +36,28 @@ class Signal(str, Enum):
 
 class OrderStatus(str, Enum):
     """订单状态"""
-    FILLED = "filled"                        # 已成交
-    OPEN = "open"                            # 已开仓/挂单，等待后续轮询管理
-    REJECTED_BY_RISK = "rejected_by_risk"    # 被风控拒绝
-    EXECUTION_FAILED = "execution_failed"    # 执行失败
-    PAPER_TRADE = "paper_trade"              # 模拟盘交易
+
+    FILLED = "filled"  # 已成交
+    OPEN = "open"  # 已开仓/挂单，等待后续轮询管理
+    REJECTED_BY_RISK = "rejected_by_risk"  # 被风控拒绝
+    EXECUTION_FAILED = "execution_failed"  # 执行失败
+    PAPER_TRADE = "paper_trade"  # 模拟盘交易
 
 
 class PipelineStatus(str, Enum):
     """Pipeline 状态：本轮是否有交易机会"""
+
     HAS_TRADES = "has_trades"
     NO_OPPORTUNITY = "no_opportunity"
 
 
 class AlertLevel(str, Enum):
     """告警级别"""
-    INFO = "INFO"            # 一般信息（如 Skill 执行完成）
-    WARNING = "WARNING"      # 警告（如重试中、头寸裁剪）
-    HIGH = "HIGH"            # 高优先级（如 API 重试耗尽、订单执行失败）
-    CRITICAL = "CRITICAL"    # 严重（如日亏损触发降级）
+
+    INFO = "INFO"  # 一般信息（如 Skill 执行完成）
+    WARNING = "WARNING"  # 警告（如重试中、头寸裁剪）
+    HIGH = "HIGH"  # 高优先级（如 API 重试耗尽、订单执行失败）
+    CRITICAL = "CRITICAL"  # 严重（如日亏损触发降级）
     EMERGENCY = "EMERGENCY"  # 紧急（如 IP 被封禁）
 
 
@@ -59,120 +65,144 @@ class AlertLevel(str, Enum):
 # 数据类（Dataclass）
 # ============================================================
 
+
 @dataclass
 class Candidate:
     """Skill-1 输出的候选币种"""
-    symbol: str           # 币种交易对符号，如 "BTCUSDT"
-    heat_score: float     # 市场热度评分（0-100）
-    source_url: str       # 数据来源 URL
+
+    symbol: str  # 币种交易对符号，如 "BTCUSDT"
+    heat_score: float  # 市场热度评分（0-100）
+    source_url: str  # 数据来源 URL
     collected_at: datetime  # 采集时间戳
 
 
 @dataclass
 class Rating:
     """Skill-2 输出的评级结果"""
-    symbol: str           # 币种交易对符号
-    rating_score: int     # 评级分（1-10）
-    signal: Signal        # 多空或观望信号
-    confidence: float     # 置信度百分比（0-100）
+
+    symbol: str  # 币种交易对符号
+    rating_score: int  # 评级分（1-10）
+    signal: Signal  # 多空或观望信号
+    confidence: float  # 置信度百分比（0-100）
 
 
 @dataclass
 class TradePlan:
     """Skill-3 输出的交易计划"""
-    symbol: str                    # 币种交易对符号
-    direction: TradeDirection      # 交易方向
-    entry_price_upper: float       # 入场价格区间上限
-    entry_price_lower: float       # 入场价格区间下限
-    position_size_pct: float       # 头寸规模百分比（不超过 20%）
-    stop_loss_price: float         # 止损价格
-    take_profit_price: float       # 止盈价格
-    max_hold_hours: float          # 持仓时间上限（小时）
+
+    symbol: str  # 币种交易对符号
+    direction: TradeDirection  # 交易方向
+    entry_price_upper: float  # 入场价格区间上限
+    entry_price_lower: float  # 入场价格区间下限
+    position_size_pct: float  # 头寸规模百分比（不超过 20%）
+    stop_loss_price: float  # 止损价格
+    take_profit_price: float  # 止盈价格
+    max_hold_hours: float  # 持仓时间上限（小时）
 
 
 @dataclass
 class ExecutionResult:
     """Skill-4 输出的执行结果"""
-    order_id: str                  # Binance 订单 ID
-    symbol: str                    # 币种交易对符号
-    direction: TradeDirection      # 交易方向
-    executed_price: float          # 成交价格
-    executed_quantity: float       # 成交数量
-    fee: float                     # 手续费
-    status: OrderStatus            # 订单状态
-    executed_at: datetime          # 成交时间戳
+
+    order_id: str  # Binance 订单 ID
+    symbol: str  # 币种交易对符号
+    direction: TradeDirection  # 交易方向
+    executed_price: float  # 成交价格
+    executed_quantity: float  # 成交数量
+    fee: float  # 手续费
+    status: OrderStatus  # 订单状态
+    executed_at: datetime  # 成交时间戳
 
 
 @dataclass
 class TradeRecord:
     """Memory_Store 中的交易记录"""
-    symbol: str                    # 币种交易对符号
-    direction: TradeDirection      # 交易方向
-    entry_price: float             # 入场价格
-    exit_price: float              # 平仓价格
-    pnl_amount: float              # 盈亏金额
-    hold_duration_hours: float     # 持仓时长（小时）
-    rating_score: int              # 评级分
-    position_size_pct: float       # 头寸规模百分比
-    closed_at: datetime            # 平仓时间戳
+
+    symbol: str  # 币种交易对符号
+    direction: TradeDirection  # 交易方向
+    entry_price: float  # 入场价格
+    exit_price: float  # 平仓价格
+    pnl_amount: float  # 盈亏金额
+    hold_duration_hours: float  # 持仓时长（小时）
+    rating_score: int  # 评级分
+    position_size_pct: float  # 头寸规模百分比
+    closed_at: datetime  # 平仓时间戳
     strategy_tag: str = "unknown"  # 策略标签，用于独立归因统计
-    is_paper: bool = False         # 是否为模拟盘交易
-    close_reason: str = "unknown"  # 平仓原因: stop_loss / take_profit / timeout / partial_tp / unknown
+    is_paper: bool = False  # 是否为模拟盘交易
+    close_reason: str = (
+        "unknown"  # 平仓原因: stop_loss / take_profit / timeout / partial_tp / unknown
+    )
 
 
 @dataclass
 class StrategyStats:
     """策略统计数据"""
-    win_rate: float          # 胜率百分比
-    avg_pnl_ratio: float     # 平均盈亏比
-    total_trades: int        # 总交易笔数
-    winning_trades: int      # 盈利笔数
-    losing_trades: int       # 亏损笔数
+
+    win_rate: float  # 胜率百分比
+    avg_pnl_ratio: float  # 平均盈亏比
+    total_trades: int  # 总交易笔数
+    winning_trades: int  # 盈利笔数
+    losing_trades: int  # 亏损笔数
 
 
 @dataclass
 class ReflectionLog:
     """反思日志"""
-    created_at: datetime                  # 创建时间
-    win_rate: float                       # 胜率百分比
-    avg_pnl_ratio: float                  # 平均盈亏比
-    suggested_rating_threshold: int       # 建议的评级过滤阈值
-    suggested_risk_ratio: float           # 建议的风险比例
-    reasoning: str                        # 调优推理过程
-    strategy_tag: str = ""                # 策略标签，空字符串表示全局
+
+    created_at: datetime  # 创建时间
+    win_rate: float  # 胜率百分比
+    avg_pnl_ratio: float  # 平均盈亏比
+    suggested_rating_threshold: int  # 建议的评级过滤阈值
+    suggested_risk_ratio: float  # 建议的风险比例
+    reasoning: str  # 调优推理过程
+    strategy_tag: str = ""  # 策略标签，空字符串表示全局
 
 
 @dataclass
 class AccountState:
     """账户状态"""
-    total_balance: float           # 账户总资金
-    available_margin: float        # 可用保证金
-    daily_realized_pnl: float      # 当日已实现盈亏
+
+    total_balance: float  # 账户总资金
+    available_margin: float  # 可用保证金
+    daily_realized_pnl: float  # 当日已实现盈亏
     positions: list = field(default_factory=list)  # 持仓列表
-    is_paper_mode: bool = False    # 是否处于模拟盘模式
+    is_paper_mode: bool = False  # 是否处于模拟盘模式
 
 
 @dataclass
 class OrderRequest:
     """订单请求"""
-    symbol: str                    # 币种交易对符号
-    direction: TradeDirection      # 交易方向
-    price: float                   # 价格
-    quantity: float                # 数量
-    leverage: int                  # 杠杆倍数
-    order_type: str = "limit"      # 订单类型："limit" | "market"
+
+    symbol: str  # 币种交易对符号
+    direction: TradeDirection  # 交易方向
+    price: float  # 价格
+    quantity: float  # 数量
+    leverage: int  # 杠杆倍数
+    order_type: str = "limit"  # 订单类型："limit" | "market"
 
 
 @dataclass
 class ValidationResult:
     """风控校验结果"""
-    passed: bool                   # 是否通过校验
-    reason: str = ""               # 拒绝原因（通过时为空）
+
+    passed: bool  # 是否通过校验
+    reason: str = ""  # 拒绝原因（通过时为空）
+
+
+@dataclass
+class ExposureCheck:
+    """总敞口检查结果"""
+
+    passed: bool  # 是否通过校验
+    current_exposure: float  # 当前总敞口（USDT）
+    exposure_limit: float  # 敞口上限（USDT）
+    largest_position_symbol: Optional[str] = None  # 最大敞口仓位符号
 
 
 # ============================================================
 # 核心计算函数
 # ============================================================
+
 
 def calculate_position_size(
     account_balance: float,
@@ -217,12 +247,6 @@ def calculate_position_size(
     # 转换为头寸规模百分比，检查风控上限
     position_value = position_size * entry_price
     position_pct = (position_value / account_balance) * 100
-
-    # 风控上限裁剪：单笔不超过 35%
-    if position_pct > 35.0:
-        position_pct = 35.0
-        position_size = (account_balance * 0.35) / entry_price
-        log.info(f"头寸规模超限，已裁剪至 35%: {position_size}")
 
     return position_size
 
@@ -306,8 +330,8 @@ def compute_evolution_adjustment(
     now = datetime.now(timezone.utc)
 
     # 判断本轮信号方向（扩大死区：38%/62%）
-    TIGHTEN_THRESHOLD = 38.0   # 低于此值才考虑收紧（原 40%）
-    LOOSEN_THRESHOLD = 62.0    # 高于此值才考虑放松（原 60%）
+    TIGHTEN_THRESHOLD = 38.0  # 低于此值才考虑收紧（原 40%）
+    LOOSEN_THRESHOLD = 62.0  # 高于此值才考虑放松（原 60%）
 
     if win_rate < TIGHTEN_THRESHOLD:
         signal_direction = "tighten"

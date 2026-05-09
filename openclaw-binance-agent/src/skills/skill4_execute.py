@@ -757,6 +757,23 @@ class Skill4Execute(BaseSkill):
             current_price = pos_risk.mark_price
             position_amt = abs(pos_risk.position_amt)
 
+            # ── 总敞口超限检查 ────────────────────────────────────────
+            # 持续监控全账户总敞口，捕获持仓市值变化导致的超限
+            reduced_symbol = self._reduce_largest_exposure_position(
+                "exposure_over_limit", start_time
+            )
+            if reduced_symbol is not None:
+                log.warning(
+                    f"[{self.name}] {symbol} 检测到总敞口超限，已平掉 {reduced_symbol}"
+                )
+                return self._make_monitor_result(
+                    status=OrderStatus.EXECUTION_FAILED.value,
+                    close_price=0.0,
+                    fee=0.0,
+                    reason="exposure_over_limit",
+                    start_time=start_time,
+                )
+
             # ── BTC 市场熔断检查 ──────────────────────────────────────
             # BTC 急跌时分三级保护：收紧止损 → 减仓 → 强平
             # 使用 public_client（K 线专用）而非 fapi_client（账户操作）
@@ -1794,6 +1811,62 @@ class Skill4Execute(BaseSkill):
                 reason=f"{reason}_failed",
                 start_time=start_time,
             )
+
+    def _reduce_largest_exposure_position(
+        self, reason: str, start_time: float
+    ) -> Optional[str]:
+        """
+        检查总敞口，若超限则平掉最大敞口仓位。
+
+        返回被平仓的 symbol，若未超限或无持仓则返回 None。
+        若平仓失败返回 None（calling code 会继续 monitoring loop）。
+
+        注意：使用 exposure_check.largest_position_symbol 确定目标仓位，
+        确保与 check_total_exposure() 的判断保持一致（都用 current_price 计算）。
+        """
+        try:
+            account = self._account_state_provider()
+        except Exception as exc:
+            log.warning(f"[{self.name}] 获取账户状态失败，无法检查总敞口: {exc}")
+            return None
+
+        exposure_check = self._risk_controller.check_total_exposure(account)
+        if exposure_check.passed:
+            return None
+
+        target_symbol = exposure_check.largest_position_symbol
+        if not target_symbol:
+            return None
+
+        positions = self._binance_client.get_positions()
+        target_pos = next((p for p in positions if p.symbol == target_symbol), None)
+        if not target_pos:
+            log.warning(
+                f"[{self.name}] 总敞口超限但找不到目标仓位 {target_symbol}，跳过"
+            )
+            return None
+
+        position_amt = abs(target_pos.position_amt)
+        close_side = "BUY" if target_pos.position_amt < 0 else "SELL"
+
+        log.warning(
+            f"[{self.name}] 总敞口超限，平掉最大仓位: {target_symbol}, "
+            f"数量={position_amt}, 面值={target_pos.position_amt * target_pos.entry_price:.2f}"
+        )
+        try:
+            close_result = self._close_position(
+                target_symbol, close_side, position_amt, reason, start_time
+            )
+            if close_result.get("status") == OrderStatus.FILLED.value:
+                return target_symbol
+            log.warning(
+                f"[{self.name}] 总敞口超限平仓未成交: {target_symbol}, "
+                f"status={close_result.get('status')}"
+            )
+            return None
+        except Exception as exc:
+            log.error(f"[{self.name}] 平掉最大敞口仓位 {target_symbol} 失败: {exc}")
+            return None
 
     def _is_order_open(self, symbol: str, order_id: str) -> bool:
         """查询入场限价单是否仍在挂单。"""

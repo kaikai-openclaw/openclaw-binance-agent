@@ -21,6 +21,7 @@ from typing import Optional
 
 from src.models.types import (
     AccountState,
+    ExposureCheck,
     OrderRequest,
     ValidationResult,
 )
@@ -550,6 +551,52 @@ class RiskController:
                 )
             total += abs(quantity) * price
         return total
+
+    def check_total_exposure(self, account: AccountState) -> ExposureCheck:
+        """
+        持续检查总敞口是否超限。
+
+        与 validate_order() 的区别：此方法在 monitoring loop 中持续调用，
+        用于捕获持仓市值变化导致的超限（validate_order 仅在开仓时检查）。
+        """
+        total_exposure = self._get_total_exposure(account)
+        limit = account.total_balance * self.MAX_TOTAL_EXPOSURE_RATIO
+
+        if total_exposure > limit:
+            largest_symbol = None
+            largest_value = 0.0
+            for pos in account.positions:
+                if isinstance(pos, dict):
+                    quantity = pos.get("quantity", 0)
+                    price = pos.get("current_price", 0) or pos.get("entry_price", 0)
+                    symbol = pos.get("symbol", "UNKNOWN")
+                else:
+                    quantity = getattr(pos, "quantity", 0)
+                    price = getattr(pos, "current_price", 0) or getattr(
+                        pos, "entry_price", 0
+                    )
+                    symbol = getattr(pos, "symbol", "UNKNOWN")
+                value = abs(quantity) * price
+                if value > largest_value:
+                    largest_value = value
+                    largest_symbol = symbol
+
+            log.warning(
+                f"总敞口超限: current={total_exposure:.2f}, limit={limit:.2f}, "
+                f"largest={largest_symbol}({largest_value:.2f})"
+            )
+            return ExposureCheck(
+                passed=False,
+                current_exposure=total_exposure,
+                exposure_limit=limit,
+                largest_position_symbol=largest_symbol,
+            )
+        return ExposureCheck(
+            passed=True,
+            current_exposure=total_exposure,
+            exposure_limit=limit,
+            largest_position_symbol=None,
+        )
 
     def _is_in_cooldown(self, symbol: str, direction: str) -> bool:
         """

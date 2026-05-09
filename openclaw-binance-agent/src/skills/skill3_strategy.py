@@ -807,6 +807,10 @@ class Skill3Strategy(BaseSkill):
         这类币种即使把止损硬截到 max_stop_pct，也很容易被正常波动扫损；
         与其放大单笔尾部风险，不如本轮不生成交易计划。
 
+        注意：SHORT 策略使用更严格的 3% 阈值（DEFAULT_MAX_STOP_USDT），
+        LONG 策略使用 7% 阈值（_max_stop_pct）。
+        这是因为做空时向下波动通常更剧烈，需要更紧的止损保护。
+
         P0-1 改造：做空增加硬顶止损距离（entry_price × 3%），防止趋势反转时亏损无限。
         """
         if atr_pct is None or atr_pct <= 0:

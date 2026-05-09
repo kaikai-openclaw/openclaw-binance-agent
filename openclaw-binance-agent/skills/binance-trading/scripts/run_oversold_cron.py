@@ -216,9 +216,8 @@ def render_markdown(report: dict) -> str:
         ]
     )
     for item in execution["this_run"]:
-        backup_marker = "[替补] " if item.get("is_backup") else ""
         lines.append(
-            f"- {backup_marker}{item.get('symbol')} {item.get('direction')} → {item.get('status')} "
+            f"- {item.get('symbol')} {item.get('direction')} → {item.get('status')} "
             f"数量 {item.get('executed_quantity', 0)} 价格 {item.get('executed_price', 0)} "
             f"原因 {item.get('reason', '')}"
         )

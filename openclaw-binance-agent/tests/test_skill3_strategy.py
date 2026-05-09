@@ -43,6 +43,7 @@ from src.skills.skill3_strategy import (
 
 # ── 加载 Schema ──────────────────────────────────────────
 
+
 def _load_schema(name: str) -> dict:
     path = os.path.join("config", "schemas", name)
     with open(path) as f:
@@ -54,6 +55,7 @@ OUTPUT_SCHEMA = _load_schema("skill3_output.json")
 
 
 # ── Fixtures ──────────────────────────────────────────────
+
 
 @pytest.fixture
 def state_store(tmp_path):
@@ -120,14 +122,22 @@ def _make_skill(
 # 1. 正常执行流程
 # ══════════════════════════════════════════════════════════
 
+
 class TestNormalExecution:
     """测试正常执行流程。"""
 
     def test_basic_long_trade_plan(self, state_store):
         """做多信号应生成有效的交易计划。"""
-        upstream = _make_upstream_data([
-            {"symbol": "BTCUSDT", "rating_score": 8, "signal": "long", "confidence": 80.0},
-        ])
+        upstream = _make_upstream_data(
+            [
+                {
+                    "symbol": "BTCUSDT",
+                    "rating_score": 8,
+                    "signal": "long",
+                    "confidence": 80.0,
+                },
+            ]
+        )
         state_id = state_store.save("skill2_analyze", upstream)
 
         skill = _make_skill(state_store)
@@ -150,9 +160,16 @@ class TestNormalExecution:
 
     def test_basic_short_trade_plan(self, state_store):
         """做空信号应生成有效的交易计划。"""
-        upstream = _make_upstream_data([
-            {"symbol": "ETHUSDT", "rating_score": 7, "signal": "short", "confidence": 70.0},
-        ])
+        upstream = _make_upstream_data(
+            [
+                {
+                    "symbol": "ETHUSDT",
+                    "rating_score": 7,
+                    "signal": "short",
+                    "confidence": 70.0,
+                },
+            ]
+        )
         state_id = state_store.save("skill2_analyze", upstream)
 
         skill = _make_skill(state_store)
@@ -183,9 +200,16 @@ class TestNormalExecution:
 
     def test_quantity_is_floored_by_lot_size(self, state_store):
         """stepSize=1 的币种应输出整数 quantity。"""
-        upstream = _make_upstream_data([
-            {"symbol": "APEUSDT", "rating_score": 8, "signal": "long", "confidence": 80.0},
-        ])
+        upstream = _make_upstream_data(
+            [
+                {
+                    "symbol": "APEUSDT",
+                    "rating_score": 8,
+                    "signal": "long",
+                    "confidence": 80.0,
+                },
+            ]
+        )
         state_id = state_store.save("skill2_analyze", upstream)
         account = _make_account(total_balance=1234.0, available_margin=1000.0)
         rule = SymbolTradingRule(
@@ -208,9 +232,16 @@ class TestNormalExecution:
 
     def test_quantity_below_min_notional_is_rejected(self, state_store):
         """规整后名义金额低于 5 USDT 时不应生成交易计划。"""
-        upstream = _make_upstream_data([
-            {"symbol": "PULUSDT", "rating_score": 8, "signal": "long", "confidence": 80.0},
-        ])
+        upstream = _make_upstream_data(
+            [
+                {
+                    "symbol": "PULUSDT",
+                    "rating_score": 8,
+                    "signal": "long",
+                    "confidence": 80.0,
+                },
+            ]
+        )
         state_id = state_store.save("skill2_analyze", upstream)
         account = _make_account(total_balance=20.0, available_margin=20.0)
         rule = SymbolTradingRule(
@@ -232,9 +263,16 @@ class TestNormalExecution:
 
     def test_long_sl_tp_direction(self, state_store):
         """做多方向：止损 < 入场价，止盈 > 入场价。"""
-        upstream = _make_upstream_data([
-            {"symbol": "BTCUSDT", "rating_score": 8, "signal": "long", "confidence": 80.0},
-        ])
+        upstream = _make_upstream_data(
+            [
+                {
+                    "symbol": "BTCUSDT",
+                    "rating_score": 8,
+                    "signal": "long",
+                    "confidence": 80.0,
+                },
+            ]
+        )
         state_id = state_store.save("skill2_analyze", upstream)
 
         skill = _make_skill(state_store)
@@ -247,9 +285,16 @@ class TestNormalExecution:
 
     def test_short_sl_tp_direction(self, state_store):
         """做空方向：止损 > 入场价，止盈 < 入场价。"""
-        upstream = _make_upstream_data([
-            {"symbol": "ETHUSDT", "rating_score": 7, "signal": "short", "confidence": 70.0},
-        ])
+        upstream = _make_upstream_data(
+            [
+                {
+                    "symbol": "ETHUSDT",
+                    "rating_score": 7,
+                    "signal": "short",
+                    "confidence": 70.0,
+                },
+            ]
+        )
         state_id = state_store.save("skill2_analyze", upstream)
 
         skill = _make_skill(state_store)
@@ -261,15 +306,17 @@ class TestNormalExecution:
 
     def test_excessive_atr_volatility_is_skipped(self, state_store):
         """ATR 推导止损超过上限时，应跳过高波动币而不是硬截断进场。"""
-        upstream = _make_upstream_data([
-            {
-                "symbol": "MEMEUSDT",
-                "rating_score": 9,
-                "signal": "long",
-                "confidence": 90.0,
-                "atr_pct": 10.0,  # raw_sl = 10% * 1.5 = 15%，超过默认 8% 上限
-            },
-        ])
+        upstream = _make_upstream_data(
+            [
+                {
+                    "symbol": "MEMEUSDT",
+                    "rating_score": 9,
+                    "signal": "long",
+                    "confidence": 90.0,
+                    "atr_pct": 10.0,  # raw_sl = 10% * 1.5 = 15%，超过默认 8% 上限
+                },
+            ]
+        )
         state_id = state_store.save("skill2_analyze", upstream)
 
         skill = _make_skill(state_store)
@@ -280,15 +327,17 @@ class TestNormalExecution:
 
     def test_atr_within_volatility_limit_generates_plan(self, state_store):
         """ATR 推导止损未超过上限时，仍应生成 ATR 动态止损计划。"""
-        upstream = _make_upstream_data([
-            {
-                "symbol": "BTCUSDT",
-                "rating_score": 8,
-                "signal": "long",
-                "confidence": 80.0,
-                "atr_pct": 2.0,  # raw_sl = 3%，未超过默认 8% 上限
-            },
-        ])
+        upstream = _make_upstream_data(
+            [
+                {
+                    "symbol": "BTCUSDT",
+                    "rating_score": 8,
+                    "signal": "long",
+                    "confidence": 80.0,
+                    "atr_pct": 2.0,  # raw_sl = 3%，未超过默认 8% 上限
+                },
+            ]
+        )
         state_id = state_store.save("skill2_analyze", upstream)
 
         skill = _make_skill(state_store)
@@ -301,6 +350,7 @@ class TestNormalExecution:
 # ══════════════════════════════════════════════════════════
 # 2. 空评级列表场景
 # ══════════════════════════════════════════════════════════
+
 
 class TestEmptyRatings:
     """测试空评级列表场景。"""
@@ -329,10 +379,22 @@ class TestEmptyRatings:
 
     def test_all_hold_signals_no_opportunity(self, state_store):
         """所有信号都是 hold 时应标记为 no_opportunity。"""
-        upstream = _make_upstream_data([
-            {"symbol": "BTCUSDT", "rating_score": 8, "signal": "hold", "confidence": 80.0},
-            {"symbol": "ETHUSDT", "rating_score": 7, "signal": "hold", "confidence": 70.0},
-        ])
+        upstream = _make_upstream_data(
+            [
+                {
+                    "symbol": "BTCUSDT",
+                    "rating_score": 8,
+                    "signal": "hold",
+                    "confidence": 80.0,
+                },
+                {
+                    "symbol": "ETHUSDT",
+                    "rating_score": 7,
+                    "signal": "hold",
+                    "confidence": 70.0,
+                },
+            ]
+        )
         state_id = state_store.save("skill2_analyze", upstream)
 
         skill = _make_skill(state_store)
@@ -346,14 +408,22 @@ class TestEmptyRatings:
 # 3. 风控预校验与头寸裁剪
 # ══════════════════════════════════════════════════════════
 
+
 class TestRiskPrecheck:
     """测试风控预校验与头寸裁剪。"""
 
     def test_position_size_capped_at_20_pct(self, state_store):
         """头寸规模百分比不应超过 20%。"""
-        upstream = _make_upstream_data([
-            {"symbol": "BTCUSDT", "rating_score": 9, "signal": "long", "confidence": 90.0},
-        ])
+        upstream = _make_upstream_data(
+            [
+                {
+                    "symbol": "BTCUSDT",
+                    "rating_score": 9,
+                    "signal": "long",
+                    "confidence": 90.0,
+                },
+            ]
+        )
         state_id = state_store.save("skill2_analyze", upstream)
 
         skill = _make_skill(state_store)
@@ -365,15 +435,22 @@ class TestRiskPrecheck:
     def test_risk_controller_rejection_with_adjustment(self, state_store):
         """风控拒绝后应尝试裁剪头寸。"""
         rc = MagicMock(spec=RiskController)
-        # 前几次拒绝，裁剪后通过
+        rc._get_position_value.return_value = 0
         rc.validate_order.side_effect = [
             ValidationResult(passed=False, reason="单笔保证金超限"),
             ValidationResult(passed=True),
         ]
 
-        upstream = _make_upstream_data([
-            {"symbol": "BTCUSDT", "rating_score": 8, "signal": "long", "confidence": 80.0},
-        ])
+        upstream = _make_upstream_data(
+            [
+                {
+                    "symbol": "BTCUSDT",
+                    "rating_score": 8,
+                    "signal": "long",
+                    "confidence": 80.0,
+                },
+            ]
+        )
         state_id = state_store.save("skill2_analyze", upstream)
 
         skill = _make_skill(state_store, risk_controller=rc)
@@ -385,14 +462,21 @@ class TestRiskPrecheck:
     def test_risk_controller_rejection_no_adjustment(self, state_store):
         """风控持续拒绝且无法裁剪时应跳过该币种。"""
         rc = MagicMock(spec=RiskController)
-        # 始终拒绝（如止损冷却期）
+        rc._get_position_value.return_value = 0
         rc.validate_order.return_value = ValidationResult(
             passed=False, reason="止损冷却期内禁止同方向开仓"
         )
 
-        upstream = _make_upstream_data([
-            {"symbol": "BTCUSDT", "rating_score": 8, "signal": "long", "confidence": 80.0},
-        ])
+        upstream = _make_upstream_data(
+            [
+                {
+                    "symbol": "BTCUSDT",
+                    "rating_score": 8,
+                    "signal": "long",
+                    "confidence": 80.0,
+                },
+            ]
+        )
         state_id = state_store.save("skill2_analyze", upstream)
 
         skill = _make_skill(state_store, risk_controller=rc)
@@ -403,9 +487,16 @@ class TestRiskPrecheck:
 
     def test_all_positive_values_in_plan(self, state_store):
         """交易计划中所有数值字段应为正数。"""
-        upstream = _make_upstream_data([
-            {"symbol": "BTCUSDT", "rating_score": 8, "signal": "long", "confidence": 80.0},
-        ])
+        upstream = _make_upstream_data(
+            [
+                {
+                    "symbol": "BTCUSDT",
+                    "rating_score": 8,
+                    "signal": "long",
+                    "confidence": 80.0,
+                },
+            ]
+        )
         state_id = state_store.save("skill2_analyze", upstream)
 
         skill = _make_skill(state_store)
@@ -424,16 +515,34 @@ class TestRiskPrecheck:
 # 4. 多币种混合场景
 # ══════════════════════════════════════════════════════════
 
+
 class TestMultipleCoins:
     """测试多币种混合场景。"""
 
     def test_mixed_signals(self, state_store):
         """混合信号（long/short/hold）应正确处理。"""
-        upstream = _make_upstream_data([
-            {"symbol": "BTCUSDT", "rating_score": 9, "signal": "long", "confidence": 90.0},
-            {"symbol": "ETHUSDT", "rating_score": 7, "signal": "hold", "confidence": 60.0},
-            {"symbol": "SOLUSDT", "rating_score": 8, "signal": "short", "confidence": 75.0},
-        ])
+        upstream = _make_upstream_data(
+            [
+                {
+                    "symbol": "BTCUSDT",
+                    "rating_score": 9,
+                    "signal": "long",
+                    "confidence": 90.0,
+                },
+                {
+                    "symbol": "ETHUSDT",
+                    "rating_score": 7,
+                    "signal": "hold",
+                    "confidence": 60.0,
+                },
+                {
+                    "symbol": "SOLUSDT",
+                    "rating_score": 8,
+                    "signal": "short",
+                    "confidence": 75.0,
+                },
+            ]
+        )
         state_id = state_store.save("skill2_analyze", upstream)
 
         skill = _make_skill(state_store)
@@ -448,10 +557,22 @@ class TestMultipleCoins:
 
     def test_multiple_long_plans(self, state_store):
         """多个做多信号应各自生成独立的交易计划。"""
-        upstream = _make_upstream_data([
-            {"symbol": "BTCUSDT", "rating_score": 9, "signal": "long", "confidence": 90.0},
-            {"symbol": "ETHUSDT", "rating_score": 8, "signal": "long", "confidence": 80.0},
-        ])
+        upstream = _make_upstream_data(
+            [
+                {
+                    "symbol": "BTCUSDT",
+                    "rating_score": 9,
+                    "signal": "long",
+                    "confidence": 90.0,
+                },
+                {
+                    "symbol": "ETHUSDT",
+                    "rating_score": 8,
+                    "signal": "long",
+                    "confidence": 80.0,
+                },
+            ]
+        )
         state_id = state_store.save("skill2_analyze", upstream)
 
         skill = _make_skill(state_store)
@@ -466,14 +587,22 @@ class TestMultipleCoins:
 # 5. 自定义参数
 # ══════════════════════════════════════════════════════════
 
+
 class TestCustomParameters:
     """测试自定义参数。"""
 
     def test_custom_max_hold_hours(self, state_store):
         """自定义持仓时间上限应生效。"""
-        upstream = _make_upstream_data([
-            {"symbol": "BTCUSDT", "rating_score": 8, "signal": "long", "confidence": 80.0},
-        ])
+        upstream = _make_upstream_data(
+            [
+                {
+                    "symbol": "BTCUSDT",
+                    "rating_score": 8,
+                    "signal": "long",
+                    "confidence": 80.0,
+                },
+            ]
+        )
         state_id = state_store.save("skill2_analyze", upstream)
 
         skill = _make_skill(state_store, max_hold_hours=48.0)
@@ -483,9 +612,16 @@ class TestCustomParameters:
 
     def test_custom_risk_ratio(self, state_store):
         """自定义风险比例应影响头寸规模。"""
-        upstream = _make_upstream_data([
-            {"symbol": "BTCUSDT", "rating_score": 8, "signal": "long", "confidence": 80.0},
-        ])
+        upstream = _make_upstream_data(
+            [
+                {
+                    "symbol": "BTCUSDT",
+                    "rating_score": 8,
+                    "signal": "long",
+                    "confidence": 80.0,
+                },
+            ]
+        )
         state_id = state_store.save("skill2_analyze", upstream)
 
         # 较小的风险比例应产生较小的头寸
@@ -506,15 +642,23 @@ class TestCustomParameters:
 # 6. Schema 集成验证
 # ══════════════════════════════════════════════════════════
 
+
 class TestSchemaIntegration:
     """测试通过 BaseSkill.execute() 的完整 Schema 校验流程。"""
 
     def test_execute_with_valid_input(self, state_store):
         """通过 execute() 执行应通过 Schema 校验。"""
         # 准备上游数据
-        upstream = _make_upstream_data([
-            {"symbol": "BTCUSDT", "rating_score": 8, "signal": "long", "confidence": 80.0},
-        ])
+        upstream = _make_upstream_data(
+            [
+                {
+                    "symbol": "BTCUSDT",
+                    "rating_score": 8,
+                    "signal": "long",
+                    "confidence": 80.0,
+                },
+            ]
+        )
         upstream_state_id = state_store.save("skill2_analyze", upstream)
 
         # 准备 Skill-3 输入数据（符合 skill3_input.json Schema）
@@ -549,14 +693,22 @@ class TestSchemaIntegration:
 # 7. 入场区间计算
 # ══════════════════════════════════════════════════════════
 
+
 class TestEntryRange:
     """测试入场价格区间计算。"""
 
     def test_high_confidence_narrow_range(self, state_store):
         """高置信度应产生较窄的入场区间。"""
-        upstream = _make_upstream_data([
-            {"symbol": "BTCUSDT", "rating_score": 9, "signal": "long", "confidence": 95.0},
-        ])
+        upstream = _make_upstream_data(
+            [
+                {
+                    "symbol": "BTCUSDT",
+                    "rating_score": 9,
+                    "signal": "long",
+                    "confidence": 95.0,
+                },
+            ]
+        )
         state_id = state_store.save("skill2_analyze", upstream)
 
         skill = _make_skill(state_store)
@@ -566,9 +718,16 @@ class TestEntryRange:
         spread_high = plan["entry_price_upper"] - plan["entry_price_lower"]
 
         # 低置信度
-        upstream2 = _make_upstream_data([
-            {"symbol": "ETHUSDT", "rating_score": 7, "signal": "long", "confidence": 20.0},
-        ])
+        upstream2 = _make_upstream_data(
+            [
+                {
+                    "symbol": "ETHUSDT",
+                    "rating_score": 7,
+                    "signal": "long",
+                    "confidence": 20.0,
+                },
+            ]
+        )
         state_id2 = state_store.save("skill2_analyze", upstream2)
 
         result2 = skill.run({"input_state_id": state_id2})
@@ -580,9 +739,16 @@ class TestEntryRange:
 
     def test_entry_upper_greater_than_lower(self, state_store):
         """入场区间上限应大于下限。"""
-        upstream = _make_upstream_data([
-            {"symbol": "BTCUSDT", "rating_score": 8, "signal": "long", "confidence": 50.0},
-        ])
+        upstream = _make_upstream_data(
+            [
+                {
+                    "symbol": "BTCUSDT",
+                    "rating_score": 8,
+                    "signal": "long",
+                    "confidence": 50.0,
+                },
+            ]
+        )
         state_id = state_store.save("skill2_analyze", upstream)
 
         skill = _make_skill(state_store)

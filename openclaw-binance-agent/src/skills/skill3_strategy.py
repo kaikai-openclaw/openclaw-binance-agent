@@ -131,6 +131,7 @@ class Skill3Strategy(BaseSkill):
         trading_rule_provider: Optional[TradingRuleProvider] = None,
         memory_store: Optional[MemoryStore] = None,
         max_trades: int = 4,
+        backup_trades: int = 2,
         trailing_stop_ratio: float = DEFAULT_TRAILING_STOP_RATIO,
         trailing_activation_mult: float = DEFAULT_TRAILING_ACTIVATION_MULT,
         trailing_activation_mult_hv: float = DEFAULT_TRAILING_ACTIVATION_MULT_HV,
@@ -169,6 +170,9 @@ class Skill3Strategy(BaseSkill):
                 并校验最小名义金额（至少 5 USDT）
             memory_store: 可选，注入后每轮从最新反思日志动态读取
                 risk_ratio，无需重启即可感知 Skill-5 的进化结果
+            max_trades: 单轮最多交易数量，默认 4
+            backup_trades: 备选池数量，默认 2。当主池中某笔被风控拒绝时，
+                从备选池按评分排序递补执行。只递补 1 轮，不递归。
             max_position_pct: 单笔持仓占账户资金的上限百分比，默认 20%。
                 1h 等高频策略建议设为 2-5% 以控制总敞口。
             max_margin_usdt: 单笔保证金绝对金额上限（USDT）。设置后优先于
@@ -194,6 +198,7 @@ class Skill3Strategy(BaseSkill):
         self._fee_vip_discount = fee_vip_discount
         self._min_net_rr_ratio = min_net_rr_ratio
         self._max_trades = max_trades
+        self._backup_trades = backup_trades
         self._trailing_stop_ratio = trailing_stop_ratio
         self._trailing_activation_mult = trailing_activation_mult
         self._trailing_activation_mult_hv = trailing_activation_mult_hv
@@ -270,25 +275,28 @@ class Skill3Strategy(BaseSkill):
         # 步骤 3：获取当前账户状态
         account = self._account_state_provider()
 
-        # 步骤 3.5：按评分+置信度排序，只取前 max_trades 个
-        if len(ratings) > self._max_trades:
-            ratings_sorted = sorted(
-                ratings,
-                key=lambda r: r.get("rating_score", 0),
-                reverse=True,
-            )
-            skipped = ratings_sorted[self._max_trades :]
-            ratings = ratings_sorted[: self._max_trades]
+        # 步骤 3.5：按评分+置信度排序，取前 max_trades + backup_trades 个
+        total_to_generate = self._max_trades + self._backup_trades
+        ratings_sorted = sorted(
+            ratings,
+            key=lambda r: r.get("rating_score", 0),
+            reverse=True,
+        )
+        ratings = ratings_sorted
+        skipped = ratings_sorted[total_to_generate:]
+        if skipped:
             skipped_symbols = [r.get("symbol", "") for r in skipped]
             log.info(
-                f"[{self.name}] 评级通过 {len(ratings) + len(skipped)} 个，"
-                f"只取评分最高的 {self._max_trades} 个，"
+                f"[{self.name}] 评级共 {len(ratings_sorted)} 个，"
+                f"取评分最高的 {self._max_trades} 个主池 + {self._backup_trades} 个备选池，"
                 f"跳过: {', '.join(skipped_symbols)}"
             )
 
         # 步骤 4 & 5：为每个目标币种生成交易计划（使用热更新后的 risk_ratio）
+        # 预校验通过的分为：主池（最多 max_trades 个）和备选池（最多 backup_trades 个）
         trade_plans: List[Dict[str, Any]] = []
         rejected_symbols: List[Dict[str, str]] = []
+
         for rating in ratings:
             plan, rejection_reason = self._generate_trade_plan(
                 rating, account, effective_risk_ratio
@@ -305,8 +313,16 @@ class Skill3Strategy(BaseSkill):
                     }
                 )
 
+        # 拆分主池和备选池：主池取前 max_trades 个，备选池取接下来的 backup_trades 个
+        primary_plans = trade_plans[: self._max_trades]
+        backup_plans = trade_plans[self._max_trades :]
+
+        # 备选池传递完整计划（方案 A）
+        # Skill4 递补时会重新做风控验证，数据仍是新鲜的
+        backup_strategies = backup_plans
+
         # 判断 pipeline_status
-        if trade_plans:
+        if primary_plans:
             pipeline_status = PipelineStatus.HAS_TRADES.value
         else:
             pipeline_status = PipelineStatus.NO_OPPORTUNITY.value
@@ -314,14 +330,16 @@ class Skill3Strategy(BaseSkill):
 
         output = {
             "state_id": str(uuid.uuid4()),
-            "trade_plans": trade_plans,
+            "trade_plans": primary_plans,
+            "backup_strategies": backup_strategies,
             "rejected_symbols": rejected_symbols,
             "pipeline_status": pipeline_status,
         }
 
         log.info(
             f"[{self.name}] 策略制定完成: "
-            f"输入={len(ratings)}, 输出={len(trade_plans)}, "
+            f"输入={len(ratings)}, 主池={len(primary_plans)}, "
+            f"备选池={len(backup_strategies)}, "
             f"状态={pipeline_status}"
         )
 

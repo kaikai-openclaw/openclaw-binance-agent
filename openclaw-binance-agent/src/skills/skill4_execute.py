@@ -162,9 +162,11 @@ class Skill4Execute(BaseSkill):
         # 步骤 1：从 State_Store 读取交易计划
         upstream_data = self.state_store.load(input_state_id)
         trade_plans = upstream_data.get("trade_plans", [])
+        backup_strategies = upstream_data.get("backup_strategies", [])
 
         log.info(
             f"[{self.name}] 读取到 {len(trade_plans)} 笔交易计划，"
+            f"备选池 {len(backup_strategies)} 个，"
             f"input_state_id={input_state_id}"
         )
 
@@ -184,10 +186,10 @@ class Skill4Execute(BaseSkill):
         # 对已经存在的实盘持仓补齐交易所侧保护，避免无 SL/TP 裸奔。
         self._protect_existing_positions(account)
 
-        # 步骤 3：并发执行交易计划
+        # 步骤 3：并发执行交易计划（含备选池递补逻辑）
         # monitor_until_close=True 时每笔交易可能阻塞数小时，必须并发；
         # monitor_until_close=False 时单次调用极短，并发收益有限但无害。
-        execution_results = self._execute_plans_concurrent(trade_plans)
+        execution_results = self._execute_with_backup(trade_plans, backup_strategies)
 
         is_paper = self._risk_controller.is_paper_mode()
 
@@ -256,6 +258,108 @@ class Skill4Execute(BaseSkill):
                     )
 
         return results
+
+    def _execute_with_backup(
+        self, trade_plans: List[dict], backup_strategies: List[dict]
+    ) -> List[dict]:
+        """
+        执行主池计划，并对被 REJECTED_BY_RISK 的 slot 从备选池递补。
+
+        流程：
+        1. 并发执行主池
+        2. 扫描被拒绝的 slot
+        3. 备选池按评分排序
+        4. 对每个被拒绝 slot，尝试用备选池递补（只 1 轮）
+
+        参数:
+            trade_plans: 主池完整计划列表
+            backup_strategies: 备选池完整计划列表（来自 Skill3）
+
+        返回:
+            执行结果列表（顺序与 trade_plans 一致）
+        """
+        if not trade_plans:
+            return []
+
+        # 执行主池
+        primary_results = self._execute_plans_concurrent(trade_plans)
+
+        # 没有被拒绝的 or 没有备选池，直接返回
+        rejected_indices = [
+            i
+            for i, r in enumerate(primary_results)
+            if r.get("status") == OrderStatus.REJECTED_BY_RISK.value
+        ]
+        if not rejected_indices or not backup_strategies:
+            return primary_results
+
+        # 备选池按评分排序（高→低）
+        sorted_backups = sorted(
+            backup_strategies,
+            key=lambda x: x.get("rating_score", 0),
+            reverse=True,
+        )
+
+        backup_iter = iter(sorted_backups)
+        replaced_count = 0
+
+        for idx in rejected_indices:
+            backup_plan = None
+
+            # 遍历备选池，找一个能通过风控的
+            while True:
+                try:
+                    b = next(backup_iter)
+                except StopIteration:
+                    # 备选池已耗尽
+                    log.info(f"[{self.name}] 备选池已用尽，slot[{idx}] 保持拒绝状态")
+                    break
+
+                # 重新获取账户状态（可能已变化）
+                account = self._account_state_provider()
+
+                # 重新风控验证
+                direction = TradeDirection(b.get("direction", "long"))
+                order_request = OrderRequest(
+                    symbol=b.get("symbol", ""),
+                    direction=direction,
+                    price=(
+                        b.get("entry_price_upper", 0) + b.get("entry_price_lower", 0)
+                    )
+                    / 2,
+                    quantity=b.get("quantity", 0),
+                    leverage=self._leverage,
+                )
+                validation = self._risk_controller.validate_order(
+                    order_request,
+                    account,
+                    strategy_tag=b.get("strategy_tag", "unknown"),
+                )
+                if validation.passed:
+                    backup_plan = b
+                    break
+                else:
+                    log.info(
+                        f"[{self.name}] 备选 {b.get('symbol')} 风控预校验失败: "
+                        f"{validation.reason}，尝试下一个备选"
+                    )
+
+            if backup_plan is None:
+                continue
+
+            # 执行递补计划
+            log.info(
+                f"[{self.name}] 备选 {backup_plan.get('symbol')} 替换 slot[{idx}] 执行"
+            )
+            backup_result = self._execute_single_trade(backup_plan)
+            backup_result["is_backup"] = True
+            primary_results[idx] = backup_result
+            replaced_count += 1
+
+        log.info(
+            f"[{self.name}] 备选递补完成: {replaced_count}/{len(rejected_indices)} 个被拒绝 slot 成功递补"
+        )
+        return primary_results
 
     def _execute_single_trade(self, plan: dict) -> dict:
         """

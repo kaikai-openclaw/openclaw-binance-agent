@@ -219,8 +219,9 @@ def render_markdown(report: dict) -> str:
         ]
     )
     for item in execution["this_run"]:
+        backup_marker = "[替补] " if item.get("is_backup") else ""
         lines.append(
-            f"- {item.get('symbol')} {item.get('direction')} → {item.get('status')} "
+            f"- {backup_marker}{item.get('symbol')} {item.get('direction')} → {item.get('status')} "
             f"数量 {item.get('executed_quantity', 0)} 价格 {item.get('executed_price', 0)} "
             f"原因 {item.get('reason', '')}"
         )
@@ -407,7 +408,7 @@ def run_report(args: argparse.Namespace) -> dict:
                     trailing_activation_mult_hv=2.0 if args.mode == "1h" else 1.5,
                     # P1-3: max_position_pct 和 max_margin_usdt 一致性
                     # 1h: 5%仓位 / 5U保证金；4h: 10%仓位 / 10U保证金；1d: 10%仓位
-                    max_trades=2 if args.mode == "1h" else 4,
+                    max_trades=2 if args.mode == "1h" else 3,
                     max_position_pct=5.0
                     if args.mode == "1h"
                     else (10.0 if args.mode == "4h" else 10.0),

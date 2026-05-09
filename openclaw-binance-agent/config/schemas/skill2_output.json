@@ -1,0 +1,155 @@
+{
+  "title": "Skill2Output",
+  "type": "object",
+  "properties": {
+    "state_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "ratings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "pattern": "^[A-Z0-9]{1,20}USDT$"
+          },
+          "rating_score": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10
+          },
+          "signal": {
+            "type": "string",
+            "enum": [
+              "long",
+              "short",
+              "hold"
+            ]
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "comment": {
+            "type": "string",
+            "description": "TradingAgents 分析摘要点评"
+          },
+          "atr_pct": {
+            "type": ["number", "null"],
+            "description": "Skill-1 透传的 ATR 百分比，供 Skill-3 动态止损使用"
+          },
+          "strategy_tag": {
+            "type": "string",
+            "description": "上游策略标签，用于独立胜率统计"
+          },
+          "wick_tip_price": {
+            "type": ["number", "null"],
+            "description": "插针 Skill 透传的影线尖端价，供 Skill-3 作为天然止损位"
+          },
+          "signal_direction": {
+            "type": "string",
+            "description": "扫描层预期方向（long/short），供 Skill-3 在 LLM 返回 hold 时使用"
+          }
+        },
+        "required": [
+          "symbol",
+          "rating_score",
+          "signal",
+          "confidence"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "all_ratings": {
+      "type": "array",
+      "description": "所有成功完成分析的评级结果，包含未达到过滤阈值的币种，用于定时任务报告展示",
+      "items": {
+        "type": "object",
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "pattern": "^[A-Z0-9]{1,20}USDT$"
+          },
+          "rating_score": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10
+          },
+          "signal": {
+            "type": "string",
+            "enum": [
+              "long",
+              "short",
+              "hold"
+            ]
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "comment": {
+            "type": "string",
+            "description": "TradingAgents 分析摘要点评"
+          },
+          "atr_pct": {
+            "type": ["number", "null"],
+            "description": "Skill-1 透传的 ATR 百分比，供 Skill-3 动态止损使用"
+          },
+          "strategy_tag": {
+            "type": "string",
+            "description": "上游策略标签，用于独立胜率统计"
+          },
+          "wick_tip_price": {
+            "type": ["number", "null"],
+            "description": "插针 Skill 透传的影线尖端价，供 Skill-3 作为天然止损位"
+          },
+          "signal_direction": {
+            "type": "string",
+            "description": "扫描层预期方向（long/short），供 Skill-3 在 LLM 返回 hold 时使用"
+          }
+        },
+        "required": [
+          "symbol",
+          "rating_score",
+          "signal",
+          "confidence"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "filtered_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "failed_symbols": {
+      "type": "array",
+      "description": "分析失败的币种列表",
+      "items": {
+        "type": "object",
+        "properties": {
+          "symbol": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": ["symbol", "reason"]
+      }
+    },
+    "analysis_summary": {
+      "type": "string",
+      "description": "本轮分析汇总"
+    }
+  },
+  "required": [
+    "state_id",
+    "ratings",
+    "filtered_count"
+  ],
+  "additionalProperties": false
+}

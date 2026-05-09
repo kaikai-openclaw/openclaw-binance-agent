@@ -1,0 +1,3 @@
+[submodule "vendor/TradingAgents-Coin"]
+	path = vendor/TradingAgents-Coin
+	url = https://github.com/kaikai-openclaw/TradingAgents-Coin.git

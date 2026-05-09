@@ -1,0 +1,219 @@
+{
+  "title": "CryptoWickOutput",
+  "type": "object",
+  "properties": {
+    "state_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "candidates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "symbol": {
+            "type": "string"
+          },
+          "close": {
+            "type": "number"
+          },
+          "quote_volume_24h": {
+            "type": "number",
+            "minimum": 0
+          },
+          "price_change_pct": {
+            "type": "number"
+          },
+          "wick_type": {
+            "type": "string",
+            "enum": [
+              "lower_wick",
+              "upper_wick"
+            ]
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "long",
+              "short"
+            ]
+          },
+          "shadow_ratio": {
+            "type": "number",
+            "minimum": 0
+          },
+          "wick_depth_pct": {
+            "type": "number",
+            "minimum": 0
+          },
+          "body_ratio": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "wick_tip_price": {
+            "type": "number"
+          },
+          "volume_surge": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "funding_rate": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "atr_pct": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "atr_wick_mult": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "wick_score": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "signal_details": {
+            "type": "string"
+          },
+          "signal_direction": {
+            "type": "string"
+          },
+          "strategy_tag": {
+            "type": "string"
+          },
+          "collected_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "symbol",
+          "close",
+          "quote_volume_24h",
+          "price_change_pct",
+          "wick_type",
+          "direction",
+          "shadow_ratio",
+          "wick_depth_pct",
+          "body_ratio",
+          "wick_tip_price",
+          "volume_surge",
+          "funding_rate",
+          "atr_pct",
+          "atr_wick_mult",
+          "wick_score",
+          "signal_details",
+          "signal_direction",
+          "strategy_tag",
+          "collected_at"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "ratings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "symbol": {
+            "type": "string"
+          },
+          "rating_score": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10
+          },
+          "signal": {
+            "type": "string",
+            "enum": [
+              "long",
+              "short",
+              "hold"
+            ]
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "comment": {
+            "type": "string"
+          },
+          "atr_pct": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "strategy_tag": {
+            "type": "string"
+          },
+          "wick_tip_price": {
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "symbol",
+          "rating_score",
+          "signal",
+          "confidence"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "pipeline_run_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "filter_summary": {
+      "type": "object",
+      "properties": {
+        "total_tickers": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "after_base_filter": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "after_wick_filter": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "output_count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "total_tickers",
+        "after_base_filter",
+        "after_wick_filter",
+        "output_count"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "state_id",
+    "candidates",
+    "ratings",
+    "pipeline_run_id",
+    "filter_summary"
+  ],
+  "additionalProperties": false
+}

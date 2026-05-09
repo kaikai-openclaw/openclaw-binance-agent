@@ -1,0 +1,89 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Skill1Input",
+  "description": "Skill-1 量化数据采集触发输入",
+  "type": "object",
+  "properties": {
+    "trigger_time": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Pipeline 触发时间（ISO 8601）"
+    },
+    "min_quote_volume": {
+      "type": "number",
+      "minimum": 0,
+      "default": 30000000,
+      "description": "24h 最低成交额（USDT），默认 3000 万"
+    },
+    "min_amplitude_pct": {
+      "type": "number",
+      "minimum": 0,
+      "default": 5.0,
+      "description": "24h 最低振幅百分比，默认 5%"
+    },
+    "price_change_range": {
+      "type": "object",
+      "properties": {
+        "min_pct": {
+          "type": "number",
+          "default": 2.0
+        },
+        "max_pct": {
+          "type": "number",
+          "default": 20.0
+        }
+      },
+      "additionalProperties": false,
+      "description": "24h 绝对涨跌幅区间百分比（v2: 使用绝对值，同时纳入上涨和下跌标的）"
+    },
+    "volume_surge_ratio": {
+      "type": "number",
+      "minimum": 1.0,
+      "default": 1.5,
+      "description": "短期量比阈值（近期成交量/长期均量），默认 1.5 倍"
+    },
+    "min_signal_score": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100,
+      "default": 60,
+      "description": "技术信号最低得分，低于该分值的币种直接过滤"
+    },
+    "min_adx": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100,
+      "default": 20.0,
+      "description": "最低 ADX 趋势强度阈值，低于该值的币种直接过滤"
+    },
+    "kline_interval": {
+      "type": "string",
+      "enum": [
+        "15m",
+        "1h",
+        "4h",
+        "1d"
+      ],
+      "default": "4h",
+      "description": "技术指标计算用 K 线周期"
+    },
+    "max_candidates": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 20,
+      "default": 10,
+      "description": "最终输出候选数量上限"
+    },
+    "target_symbols": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "指定分析的币种列表（如 ['ONT', 'BTC']），传入后跳过大盘过滤，自动补全 USDT 后缀"
+    }
+  },
+  "required": [
+    "trigger_time"
+  ],
+  "additionalProperties": false
+}

@@ -1,0 +1,147 @@
+{
+  "title": "Skill3Output",
+  "description": "Skill-3 交易计划输出",
+  "type": "object",
+  "properties": {
+    "state_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "本次输出的状态 ID"
+    },
+    "trade_plans": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "pattern": "^[A-Z0-9]{1,20}USDT$"
+          },
+          "direction": {
+            "type": "string",
+            "enum": ["long", "short"],
+            "description": "交易方向"
+          },
+          "entry_price_upper": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "入场价格区间上限"
+          },
+          "entry_price_lower": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "入场价格区间下限"
+          },
+          "position_size_pct": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 20,
+            "description": "头寸规模百分比"
+          },
+          "quantity": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "按交易所 LOT_SIZE 规整后的计划下单数量"
+          },
+          "notional_value": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "计划名义金额（quantity × 入场基准价）"
+          },
+          "stop_loss_price": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "止损价格"
+          },
+          "take_profit_price": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "止盈价格"
+          },
+          "max_hold_hours": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "持仓时间上限（小时）"
+          },
+          "stop_loss_source": {
+            "type": "string",
+            "enum": ["atr", "fixed", "wick_tip"],
+            "description": "止损来源：ATR 动态 / 固定百分比回退 / 插针影线尖端"
+          },
+          "price_source": {
+            "type": "string",
+            "enum": ["market", "test_fallback"],
+            "description": "入场基准价来源：真实市场价 或 测试标准化价"
+          },
+          "round_trip_cost_pct": {
+            "type": "number",
+            "minimum": 0,
+            "description": "预估 round-trip 成本占名义金额比例（手续费+滑点）"
+          },
+          "net_rr_ratio": {
+            "type": "number",
+            "description": "扣费后净盈亏比 = (TP - cost) / (SL + cost)"
+          },
+          "strategy_tag": {
+            "type": "string",
+            "description": "策略标签，用于按策略独立统计胜率"
+          },
+          "trailing_stop": {
+            "type": "object",
+            "properties": {
+              "activation_price": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "trail_pct": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              }
+            },
+            "required": ["activation_price", "trail_pct"],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "symbol", "direction", "entry_price_upper", "entry_price_lower",
+          "position_size_pct", "stop_loss_price", "take_profit_price", "max_hold_hours"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "rejected_symbols": {
+      "type": "array",
+      "description": "筛选通过但未开仓的币种及原因",
+      "items": {
+        "type": "object",
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "description": "币种符号"
+          },
+          "reason": {
+            "type": "string",
+            "description": "拒绝原因"
+          },
+          "rating_score": {
+            "type": "number",
+            "description": "评级分数"
+          },
+          "signal": {
+            "type": "string",
+            "description": "交易信号"
+          }
+        },
+        "required": ["symbol", "reason"],
+        "additionalProperties": false
+      }
+    },
+    "pipeline_status": {
+      "type": "string",
+      "enum": ["has_trades", "no_opportunity"],
+      "description": "本轮是否有交易机会"
+    }
+  },
+  "required": ["state_id", "trade_plans", "rejected_symbols", "pipeline_status"],
+  "additionalProperties": false
+}

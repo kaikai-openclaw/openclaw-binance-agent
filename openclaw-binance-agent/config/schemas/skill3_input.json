@@ -1,0 +1,15 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Skill3Input",
+  "description": "Skill-3 策略制定输入（状态 ID 引用）",
+  "type": "object",
+  "properties": {
+    "input_state_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Skill-2 输出的状态 ID"
+    }
+  },
+  "required": ["input_state_id"],
+  "additionalProperties": false
+}

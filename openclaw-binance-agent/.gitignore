@@ -1,0 +1,48 @@
+# API keys & secrets
+.env
+*.env
+.env.*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.eggs/
+*.egg-info/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Hypothesis test cache
+.hypothesis/
+
+# Virtual environment
+.venv/
+
+# SQLite databases (runtime generated)
+*.db
+*.db-shm
+*.db-wal
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/*.json
+data/*.json-shm
+data/*.json-wal
+
+# pytest cache
+.pytest_cache/
+
+# OpenClaw
+.openclaw/
+
+# Eval results (runtime generated)
+eval_results/

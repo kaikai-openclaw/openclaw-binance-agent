@@ -1,0 +1,161 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Skill1BOutput",
+  "description": "Skill-1B 超跌反弹筛选输出",
+  "type": "object",
+  "properties": {
+    "state_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "candidates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "pattern": "^[0-9]{6}$"
+          },
+          "name": {
+            "type": "string"
+          },
+          "close": {
+            "type": "number"
+          },
+          "amount": {
+            "type": "number",
+            "minimum": 0
+          },
+          "rsi": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "RSI(14)"
+          },
+          "bias_20": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "20日乖离率（%）"
+          },
+          "consecutive_down": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "连续下跌天数"
+          },
+          "drop_pct": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "近N日累计跌幅（%）"
+          },
+          "below_boll_lower": {
+            "type": "boolean",
+            "description": "是否跌破布林带下轨"
+          },
+          "kdj_j": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "KDJ J值"
+          },
+          "macd_divergence": {
+            "type": "boolean",
+            "description": "MACD底背离"
+          },
+          "volume_surge": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "底部放量倍数（相对5日均量）"
+          },
+          "oversold_score": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100,
+            "description": "超跌综合评分"
+          },
+          "signal_details": {
+            "type": "string",
+            "description": "触发的信号明细"
+          },
+          "atr_pct": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "ATR/收盘价（%），波动率参考"
+          },
+          "collected_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "symbol",
+          "name",
+          "close",
+          "amount",
+          "rsi",
+          "bias_20",
+          "consecutive_down",
+          "drop_pct",
+          "below_boll_lower",
+          "kdj_j",
+          "macd_divergence",
+          "volume_surge",
+          "oversold_score",
+          "signal_details",
+          "atr_pct",
+          "collected_at"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "pipeline_run_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "filter_summary": {
+      "type": "object",
+      "properties": {
+        "total_tickers": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "after_base_filter": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "after_oversold_filter": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "output_count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "total_tickers",
+        "after_base_filter",
+        "after_oversold_filter",
+        "output_count"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "state_id",
+    "candidates",
+    "pipeline_run_id",
+    "filter_summary"
+  ],
+  "additionalProperties": false
+}

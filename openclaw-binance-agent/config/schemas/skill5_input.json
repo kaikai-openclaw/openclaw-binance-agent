@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Skill5Input",
+  "description": "Skill-5 展示与进化输入（状态 ID 引用）",
+  "type": "object",
+  "properties": {
+    "input_state_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Skill-4 输出的状态 ID（可选，定时触发时为空）"
+    }
+  },
+  "additionalProperties": false
+}

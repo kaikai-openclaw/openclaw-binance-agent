@@ -1,0 +1,56 @@
+{
+  "BASEDUSDT": {
+    "original_sl_dist": 0.007718675417699994,
+    "strategy_tag": "crypto_reversal_4h",
+    "original_tp": 0.1151,
+    "tp_decay_step": 2,
+    "sl_step": 0,
+    "open_ms": 1778209339409.115,
+    "direction": "LONG"
+  },
+  "1000SHIBUSDT": {
+    "original_sl_dist": 0.00014699999999999956,
+    "strategy_tag": "crypto_reversal_4h",
+    "original_tp": 0.006662,
+    "tp_decay_step": 0,
+    "sl_step": 0,
+    "open_ms": 1778243709346.782,
+    "direction": "LONG"
+  },
+  "BCHUSDT": {
+    "original_sl_dist": 8.20999999999998,
+    "strategy_tag": "crypto_reversal_4h",
+    "original_tp": 470.61,
+    "tp_decay_step": 0,
+    "sl_step": 0,
+    "open_ms": 1778272508800.451,
+    "direction": "LONG"
+  },
+  "SKYUSDT": {
+    "original_sl_dist": 0.002449999999999994,
+    "strategy_tag": "crypto_reversal_4h",
+    "original_tp": 0.08852,
+    "tp_decay_step": 0,
+    "sl_step": 0,
+    "open_ms": 1778286910977.182,
+    "direction": "LONG"
+  },
+  "OPGUSDT": {
+    "original_sl_dist": 0.01992072800809999,
+    "strategy_tag": "crypto_reversal_4h",
+    "original_tp": 0.3029,
+    "tp_decay_step": 0,
+    "sl_step": 0,
+    "open_ms": 1778297710984.205,
+    "direction": "LONG"
+  },
+  "EDGEUSDT": {
+    "original_sl_dist": 0.0675883838389999,
+    "strategy_tag": "crypto_reversal_4h",
+    "original_tp": 1.4807,
+    "tp_decay_step": 0,
+    "sl_step": 0,
+    "open_ms": 1778297710984.205,
+    "direction": "LONG"
+  }
+}

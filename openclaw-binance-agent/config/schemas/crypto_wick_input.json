@@ -1,0 +1,56 @@
+{
+  "title": "CryptoWickInput",
+  "description": "Crypto wick detection input",
+  "type": "object",
+  "properties": {
+    "trigger_time": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "target_symbols": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "min_quote_volume": {
+      "type": "number",
+      "minimum": 0,
+      "default": 10000000
+    },
+    "min_wick_score": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 100,
+      "default": 35
+    },
+    "max_candidates": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 50,
+      "default": 15
+    },
+    "max_spread_pct": {
+      "type": "number",
+      "minimum": 0,
+      "default": 0.25
+    },
+    "max_abs_funding_rate": {
+      "type": "number",
+      "minimum": 0,
+      "default": 0.01
+    },
+    "direction_filter": {
+      "type": "string",
+      "enum": [
+        "long",
+        "short"
+      ],
+      "description": "方向过滤：long = 仅下插针做多，short = 仅上插针做空，不传 = 不过滤"
+    }
+  },
+  "required": [
+    "trigger_time"
+  ],
+  "additionalProperties": false
+}

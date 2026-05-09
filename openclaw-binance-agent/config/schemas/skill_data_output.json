@@ -1,0 +1,122 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SkillDataProviderOutput",
+  "description": "A股历史数据服务标准化输出",
+  "type": "object",
+  "properties": {
+    "status_code": {
+      "type": "integer",
+      "enum": [
+        200,
+        400,
+        404,
+        500
+      ],
+      "description": "状态码：200成功, 400参数错误, 404无数据, 500内部错误"
+    },
+    "message": {
+      "type": "string",
+      "description": "状态描述"
+    },
+    "meta_info": {
+      "type": "object",
+      "properties": {
+        "symbol": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string",
+          "description": "股票名称"
+        },
+        "frequency": {
+          "type": "string",
+          "enum": [
+            "daily"
+          ]
+        },
+        "adjust": {
+          "type": "string",
+          "enum": [
+            "qfq",
+            "hfq",
+            "none"
+          ]
+        },
+        "data_source": {
+          "type": "string",
+          "enum": [
+            "local_cache",
+            "api",
+            "mixed",
+            "none"
+          ],
+          "description": "数据来源"
+        },
+        "row_count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "symbol",
+        "name",
+        "frequency",
+        "adjust",
+        "data_source",
+        "row_count"
+      ],
+      "additionalProperties": false
+    },
+    "data": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "date": {
+            "type": "string",
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+          },
+          "open": {
+            "type": "number"
+          },
+          "high": {
+            "type": "number"
+          },
+          "low": {
+            "type": "number"
+          },
+          "close": {
+            "type": "number"
+          },
+          "volume": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "成交量（手）"
+          },
+          "amount": {
+            "type": "number",
+            "minimum": 0,
+            "description": "成交额（元）"
+          }
+        },
+        "required": [
+          "date",
+          "open",
+          "high",
+          "low",
+          "close",
+          "volume",
+          "amount"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "status_code",
+    "message",
+    "meta_info",
+    "data"
+  ],
+  "additionalProperties": false
+}

@@ -114,15 +114,15 @@ ST_RALLY_LOOKBACK = 18  # 回看 18 根 4h = 3 天
 ST_RISE_LOOKBACK = 30  # 距低点涨幅回看 30 根 4h = 5 天
 
 # 短期评分权重（满分 100）
-ST_W_RSI = 15  # RSI 极端超买
-ST_W_FUNDING = 18  # 资金费率极端正值（短期做空最强信号）
+ST_W_RSI = 12  # RSI 极端超买
+ST_W_FUNDING = 15  # 资金费率极端正值（避免单独抬高弱顶部）
 ST_W_BIAS = 12  # 乖离率正向偏离
-ST_W_VOL_DIV = 12  # 量价背离
-ST_W_BOLL = 8  # 布林带突破上轨
-ST_W_RALLY = 10  # 连续暴涨
-ST_W_KDJ = 7  # KDJ 高位死叉
-ST_W_MACD_DIV = 5  # MACD 顶背离（4h 可靠性一般）
-ST_W_SHADOW = 5  # 长上影线
+ST_W_VOL_DIV = 15  # 量价背离
+ST_W_BOLL = 6  # 布林带突破上轨
+ST_W_RALLY = 6  # 连续暴涨
+ST_W_KDJ = 8  # KDJ 高位死叉
+ST_W_MACD_DIV = 8  # MACD / RSI 顶背离
+ST_W_SHADOW = 4  # 长上影线
 ST_W_SQUEEZE_RISK = -8  # 轧空风险扣分
 
 # ══════════════════════════════════════════════════════════
@@ -343,6 +343,27 @@ class _CryptoOverboughtBase(BaseSkill):
                 "recent_return_pct": round(recent_return_4h_pct, 4),
             }
 
+        ema5_series = calc_ema(closes_4h, 5)
+        ema20_series = calc_ema(closes_4h, 20)
+        ema5_4h = ema5_series[-1] if ema5_series else None
+        ema20_4h = ema20_series[-1] if ema20_series else None
+        if (
+            self.name == "crypto_overbought_4h"
+            and ema5_4h is not None
+            and ema20_4h is not None
+            and last_close_4h > ema20_4h
+            and ema5_4h > ema20_4h
+        ):
+            return {
+                "status": "blocked",
+                "reason": (
+                    f"BTC 4h 强趋势上涨 last={last_close_4h:.2f}>EMA20={ema20_4h:.2f}, "
+                    f"EMA5={ema5_4h:.2f}>EMA20，不做逆势短空"
+                ),
+                "symbol": symbol,
+                "recent_return_pct": round(recent_return_4h_pct, 4),
+            }
+
         # P2-7: 1d 级别趋势检查（克制做空）
         if klines_1d and len(klines_1d) >= 5:
             closes_1d = [float(k[4]) for k in klines_1d]
@@ -370,6 +391,92 @@ class _CryptoOverboughtBase(BaseSkill):
             "reason": "market_regime_ok",
             "symbol": symbol,
             "recent_return_pct": round(recent_return_4h_pct, 4),
+        }
+
+    @staticmethod
+    def _build_4h_confirmation(
+        closes: List[float],
+        highs: List[float],
+        lows: List[float],
+        klines_1h: List[list],
+        current_price: float,
+        rsi_1h: Optional[float],
+        rsi_1h_trend: Optional[float],
+        macd_divergence: bool,
+        rsi_divergence: bool,
+        volume_divergence: bool,
+        kdj_dead_cross: bool,
+        drawdown_from_high: Optional[float],
+    ) -> dict:
+        """构建 4h 超买做空顶部确认，至少一个动能信号。"""
+        reasons: List[str] = []
+        signal_count = 0
+        momentum_count = 0
+        structural_count = 0
+
+        if (
+            rsi_1h is not None
+            and rsi_1h_trend is not None
+            and 60 <= rsi_1h <= 85
+            and rsi_1h_trend < 0
+        ):
+            signal_count += 1
+            momentum_count += 1
+            reasons.append("1h RSI高位下拐")
+
+        if len(klines_1h) >= 3:
+            recent_1h_low = min(float(k[3]) for k in klines_1h[-3:-1])
+            if current_price < recent_1h_low:
+                signal_count += 1
+                momentum_count += 1
+                reasons.append("跌回近2根1h低点")
+
+        if len(closes) >= 20:
+            boll_mid = sum(closes[-20:]) / 20.0
+            if current_price < boll_mid:
+                signal_count += 1
+                momentum_count += 1
+                reasons.append("跌回4h中轨下方")
+
+        if macd_divergence:
+            signal_count += 1
+            structural_count += 1
+            reasons.append("MACD顶背离")
+
+        if rsi_divergence:
+            signal_count += 1
+            structural_count += 1
+            reasons.append("RSI顶背离")
+
+        if kdj_dead_cross:
+            signal_count += 1
+            structural_count += 1
+            reasons.append("KDJ高位死叉")
+
+        if volume_divergence:
+            signal_count += 1
+            structural_count += 1
+            reasons.append("量价背离")
+
+        if drawdown_from_high is not None and -10.0 <= drawdown_from_high <= -2.0:
+            signal_count += 1
+            structural_count += 1
+            reasons.append("已从高点回落")
+
+        passed = signal_count >= 2 and momentum_count >= 1
+        strong = signal_count >= 3 and momentum_count >= 1 and structural_count >= 1
+        very_strong = (
+            signal_count >= 4 and momentum_count >= 2 and structural_count >= 1
+        )
+        return {
+            "passed": passed,
+            "strong": strong,
+            "very_strong": very_strong,
+            "signal_count": signal_count,
+            "momentum_count": momentum_count,
+            "structural_count": structural_count,
+            "reasons": reasons,
+            "reason": " | ".join(reasons) if reasons else "顶部确认不足",
         }
 
     def _run_scan(
@@ -401,7 +508,9 @@ class _CryptoOverboughtBase(BaseSkill):
         funding_map = self._build_funding_map()
         tradable = self._get_tradable_symbols()
         market_regime = self._get_market_regime(input_data)
-        if market_regime.get("status") == "blocked":
+        if market_regime.get("status") == "blocked" or (
+            interval == "4h" and market_regime.get("status") != "enabled"
+        ):
             log.warning(
                 "[%s] 市场状态阻断做空交易: %s",
                 self.name,
@@ -545,13 +654,21 @@ class _CryptoOverboughtBase(BaseSkill):
                             if len(closes) >= 2 and closes[-2] > 0
                             else 0
                         )
-                        if price_drop > 2.0:  # 同时价格下跌>2%
+                        if price_drop < -2.0:  # 同时价格下跌>2%
                             short_squeeze_detected = True
 
                 # ── 实时价格组合分析 ──────────────────────────────────────
                 # 在已关闭 K 线形态判断基础上，叠加当前实时价格变动
                 # 判断：4h收盘后价格是否仍在继续上涨（追空风险高）
-                current_price = float(item.get("lastPrice", 0))
+                current_price_raw = item.get("lastPrice")
+                current_price = float(current_price_raw) if current_price_raw else 0.0
+                if current_price <= 0:
+                    log.info(
+                        "[%s] %s 缺少有效实时价格，跳过",
+                        self.name,
+                        symbol,
+                    )
+                    continue
                 last_closed_close = closes[-1]
                 price_change_since_close_pct = (
                     (current_price - last_closed_close) / last_closed_close * 100
@@ -572,6 +689,14 @@ class _CryptoOverboughtBase(BaseSkill):
                         price_change_since_close_pct,
                         momentum_penalty,
                     )
+                if interval == "4h" and price_change_since_close_pct > 1.5:
+                    log.info(
+                        "[%s] %s 4h收盘后继续上涨 %.2f%%，追空风险过高，跳过",
+                        self.name,
+                        symbol,
+                        price_change_since_close_pct,
+                    )
+                    continue
                 result["overbought_score"] = max(
                     1, result["overbought_score"] - momentum_penalty
                 )
@@ -732,10 +857,7 @@ class _CryptoOverboughtBase(BaseSkill):
 
                 # P2-7: 市场谨慎时提高 10 分门槛
                 effective_min_score = min_score + (10 if market_cautious else 0)
-                if (
-                    result["overbought_score"] < effective_min_score
-                    and not target_symbols
-                ):
+                if result["overbought_score"] < effective_min_score:
                     continue
 
                 # 顶部确认硬性门槛：价格必须已从近期高点回落 ≥ 2% 且 ≤ 12%（1h）/ ≤ 15%（4h/1d）
@@ -746,43 +868,69 @@ class _CryptoOverboughtBase(BaseSkill):
                 #   2. RSI 顶背离（短周期上比 MACD 更稳定）
                 #   3. KDJ 高位死叉（1h/4h 均用 80 阈值）
                 #   4. 量价背离（价涨量缩，动能衰竭的直接证据）
-                drawdown = _calc_drawdown_from_high(closes, rally_lookback, highs)
-                max_drawdown = (
-                    -8.0 if interval == H1_INTERVAL else -10.0
-                )  # 收紧：1h -12%→-8%，4h -15%→-10%
-                has_drawdown = drawdown is not None and max_drawdown <= drawdown <= -2.0
                 kdj_threshold = 80.0  # 4h 从 70 收紧至 80，1h 保持 80
-                reversal_signals = [
-                    result.get("macd_divergence"),
-                    result.get("rsi_divergence"),
-                    (
-                        result.get("kdj_j") is not None
-                        and result["kdj_j"] > 80
-                        and _check_kdj_dead_cross(
-                            closes, highs, lows, high_threshold=kdj_threshold
-                        )
-                    ),
-                    result.get("volume_divergence"),
-                ]
-                reversal_count = sum(1 for s in reversal_signals if s)
-                has_reversal_confirm = reversal_count >= 2  # 至少满足2个顶部确认信号
-                if not target_symbols and not (has_drawdown and has_reversal_confirm):
+                drawdown = _calc_drawdown_from_high(closes, rally_lookback, highs)
+                kdj_dead_cross = (
+                    result.get("kdj_j") is not None
+                    and result["kdj_j"] > 80
+                    and _check_kdj_dead_cross(
+                        closes, highs, lows, high_threshold=kdj_threshold
+                    )
+                )
+                confirmation = {
+                    "passed": True,
+                    "strong": False,
+                    "very_strong": False,
+                    "signal_count": 0,
+                    "momentum_count": 0,
+                    "structural_count": 0,
+                    "reasons": [],
+                    "reason": "not_required",
+                }
+                if interval == "4h":
+                    confirmation = self._build_4h_confirmation(
+                        closes=closes,
+                        highs=highs,
+                        lows=lows,
+                        klines_1h=klines_1h if "klines_1h" in locals() else [],
+                        current_price=current_price,
+                        rsi_1h=result.get("rsi_1h"),
+                        rsi_1h_trend=result.get("rsi_1h_trend"),
+                        macd_divergence=bool(result.get("macd_divergence")),
+                        rsi_divergence=bool(result.get("rsi_divergence")),
+                        volume_divergence=bool(result.get("volume_divergence")),
+                        kdj_dead_cross=bool(kdj_dead_cross),
+                        drawdown_from_high=drawdown,
+                    )
+                else:
+                    reversal_signals = [
+                        result.get("macd_divergence"),
+                        result.get("rsi_divergence"),
+                        kdj_dead_cross,
+                        result.get("volume_divergence"),
+                    ]
+                    max_drawdown = -8.0 if interval == H1_INTERVAL else -10.0
+                    has_drawdown = (
+                        drawdown is not None and max_drawdown <= drawdown <= -2.0
+                    )
+                    has_reversal_confirm = sum(1 for s in reversal_signals if s) >= 2
+                    confirmation["passed"] = has_drawdown and has_reversal_confirm
+                if not confirmation.get("passed"):
                     log.info(
-                        "[%s] %s 顶部未确认，跳过: drawdown=%.2f%%, macd_div=%s, rsi_div=%s, kdj_dead=%s, vol_div=%s",
+                        "[%s] %s 顶部未确认，跳过: drawdown=%.2f%%, reason=%s",
                         self.name,
                         symbol,
                         drawdown if drawdown is not None else 0.0,
-                        result.get("macd_divergence"),
-                        result.get("rsi_divergence"),
-                        _check_kdj_dead_cross(
-                            closes, highs, lows, high_threshold=kdj_threshold
-                        ),
-                        result.get("volume_divergence"),
+                        confirmation.get("reason", ""),
                     )
                     continue
+                if interval == "4h":
+                    result["overbought_score"] += (
+                        8 if confirmation.get("very_strong")
+                        else (5 if confirmation.get("strong") else 3)
+                    )
 
-                # P2-6: 高波动惩罚（ATR > 5% 的币种降低评分）
-                # 高波动币种止损距离大，盈亏比变差，需要更高评分才值得做空
+                # P2-6: 4h 高波动做空改为硬过滤 + 分级处理
                 atr_check_val = calc_atr(highs, lows, closes, ATR_PERIOD_FILTER)
                 last_close_for_atr = closes[-1]
                 atr_check_pct = (
@@ -790,19 +938,36 @@ class _CryptoOverboughtBase(BaseSkill):
                     if (atr_check_val and last_close_for_atr > 0)
                     else None
                 )
-                if atr_check_pct is not None and atr_check_pct > 5.0:
-                    vol_penalty = min(10.0, (atr_check_pct - 5.0) * 2.0)
-                    result["overbought_score"] = max(
-                        1, result["overbought_score"] - vol_penalty
-                    )
-                    result["vol_penalty"] = vol_penalty
-                    log.info(
-                        "[%s] %s ATR%.2f%%>5%% 高波动，评分扣减 %.1f",
-                        self.name,
-                        symbol,
-                        atr_check_pct,
-                        vol_penalty,
-                    )
+                volatility_action = "allow"
+                if interval == "4h" and atr_check_pct is not None:
+                    if atr_check_pct > 6.0:
+                        log.info(
+                            "[%s] %s ATR%.2f%%>6%%，4h 做空直接跳过",
+                            self.name,
+                            symbol,
+                            atr_check_pct,
+                        )
+                        continue
+                    if 5.0 < atr_check_pct <= 6.0:
+                        if not confirmation.get("very_strong"):
+                            log.info(
+                                "[%s] %s ATR%.2f%% 位于 5-6%%，需要极强顶部确认，跳过",
+                                self.name,
+                                symbol,
+                                atr_check_pct,
+                            )
+                            continue
+                        volatility_action = "reduce_size_strict"
+                    elif 4.0 < atr_check_pct <= 5.0:
+                        if not confirmation.get("strong"):
+                            log.info(
+                                "[%s] %s ATR%.2f%% 位于 4-5%%，需要强顶部确认，跳过",
+                                self.name,
+                                symbol,
+                                atr_check_pct,
+                            )
+                            continue
+                        volatility_action = "reduce_size"
 
                 returns_map[symbol] = calc_returns(closes)
                 atr_val = calc_atr(highs, lows, closes, ATR_PERIOD)
@@ -853,6 +1018,8 @@ class _CryptoOverboughtBase(BaseSkill):
                         "short_squeeze_detected": short_squeeze_detected,
                         "short_squeeze_bonus": result.get("short_squeeze_bonus", 0),
                         "resistance_bonus": result.get("resistance_bonus", 0),
+                        "overbought_confirmation": confirmation,
+                        "volatility_action": volatility_action,
                         # ── 原有字段 ───────────────────────────────────
                         "rsi": result["rsi"],
                         "bias_20": result["bias_20"],

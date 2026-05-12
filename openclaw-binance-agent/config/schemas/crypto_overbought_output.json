@@ -1,1 +1,168 @@
-{"$schema":"http://json-schema.org/draft-07/schema#","title":"CryptoOverboughtOutput","description":"加密货币合约超买做空筛选输出","type":"object","properties":{"state_id":{"type":"string","format":"uuid"},"candidates":{"type":"array","items":{"type":"object","properties":{"symbol":{"type":"string"},"close":{"type":"number"},"quote_volume_24h":{"type":"number","minimum":0},"price_change_pct":{"type":"number"},"rsi":{"type":["number","null"]},"bias_20":{"type":["number","null"]},"consecutive_up":{"type":"integer","minimum":0},"rally_pct":{"type":["number","null"]},"above_boll_upper":{"type":"boolean"},"kdj_j":{"type":["number","null"]},"macd_divergence":{"type":"boolean"},"volume_divergence":{"type":"boolean"},"funding_rate":{"type":["number","null"]},"oi_value_usdt":{"type":["number","null"]},"squeeze_risk":{"type":"boolean"},"rise_from_low_pct":{"type":["number","null"]},"overbought_score":{"type":"integer","minimum":0,"maximum":100},"signal_details":{"type":"string"},"atr_pct":{"type":["number","null"]},"collected_at":{"type":"string","format":"date-time"}},"required":["symbol","close","quote_volume_24h","price_change_pct","rsi","bias_20","consecutive_up","rally_pct","above_boll_upper","kdj_j","macd_divergence","volume_divergence","funding_rate","oi_value_usdt","squeeze_risk","rise_from_low_pct","overbought_score","signal_details","atr_pct","collected_at"],"additionalProperties":false}},"pipeline_run_id":{"type":"string","format":"uuid"},"filter_summary":{"type":"object","properties":{"total_tickers":{"type":"integer","minimum":0},"after_base_filter":{"type":"integer","minimum":0},"after_overbought_filter":{"type":"integer","minimum":0},"output_count":{"type":"integer","minimum":0}},"required":["total_tickers","after_base_filter","after_overbought_filter","output_count"],"additionalProperties":false}},"required":["state_id","candidates","pipeline_run_id","filter_summary"],"additionalProperties":false}
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CryptoOverboughtOutput",
+  "description": "加密货币合约超买做空筛选输出",
+  "type": "object",
+  "properties": {
+    "state_id": { "type": "string", "format": "uuid" },
+    "candidates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "symbol": { "type": "string" },
+          "close": { "type": "number" },
+          "current_price": { "type": "number" },
+          "quote_volume_24h": { "type": "number", "minimum": 0 },
+          "price_change_pct": { "type": "number" },
+          "price_change_since_close_pct": { "type": "number" },
+          "momentum_penalty": { "type": "number" },
+          "rsi_1h": { "type": ["number", "null"] },
+          "rsi_1h_trend": { "type": ["number", "null"] },
+          "rsi_1h_bonus": { "type": "number" },
+          "hour_candles_in_4h": { "type": "integer", "minimum": 0 },
+          "elapsed_ratio": { "type": "number" },
+          "closing_period_bonus": { "type": "number" },
+          "resistance_distance_pct": { "type": ["number", "null"] },
+          "is_near_resistance": { "type": "boolean" },
+          "fomo_detected": { "type": "boolean" },
+          "fomo_bonus": { "type": "number" },
+          "short_squeeze_detected": { "type": "boolean" },
+          "short_squeeze_bonus": { "type": "number" },
+          "resistance_bonus": { "type": "number" },
+          "overbought_confirmation": {
+            "type": "object",
+            "properties": {
+              "passed": { "type": "boolean" },
+              "strong": { "type": "boolean" },
+              "very_strong": { "type": "boolean" },
+              "signal_count": { "type": "integer", "minimum": 0 },
+              "momentum_count": { "type": "integer", "minimum": 0 },
+              "structural_count": { "type": "integer", "minimum": 0 },
+              "reasons": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "reason": { "type": "string" }
+            },
+            "required": [
+              "passed",
+              "strong",
+              "very_strong",
+              "signal_count",
+              "momentum_count",
+              "structural_count",
+              "reasons",
+              "reason"
+            ],
+            "additionalProperties": false
+          },
+          "volatility_action": { "type": "string" },
+          "rsi": { "type": ["number", "null"] },
+          "bias_20": { "type": ["number", "null"] },
+          "consecutive_up": { "type": "integer", "minimum": 0 },
+          "rally_pct": { "type": ["number", "null"] },
+          "above_boll_upper": { "type": "boolean" },
+          "kdj_j": { "type": ["number", "null"] },
+          "macd_divergence": { "type": "boolean" },
+          "rsi_divergence": { "type": "boolean" },
+          "volume_divergence": { "type": "boolean" },
+          "funding_rate": { "type": ["number", "null"] },
+          "oi_value_usdt": { "type": ["number", "null"] },
+          "squeeze_risk": { "type": "boolean" },
+          "rise_from_low_pct": { "type": ["number", "null"] },
+          "overbought_score": { "type": "integer", "minimum": 0, "maximum": 100 },
+          "signal_details": { "type": "string" },
+          "atr_pct": { "type": ["number", "null"] },
+          "atr_filter_pct": { "type": ["number", "null"] },
+          "signal_direction": { "type": "string" },
+          "strategy_tag": { "type": "string" },
+          "collected_at": { "type": "string", "format": "date-time" },
+          "delivery_week": { "type": "boolean" }
+        },
+        "required": [
+          "symbol",
+          "close",
+          "current_price",
+          "quote_volume_24h",
+          "price_change_pct",
+          "price_change_since_close_pct",
+          "momentum_penalty",
+          "rsi_1h",
+          "rsi_1h_trend",
+          "rsi_1h_bonus",
+          "hour_candles_in_4h",
+          "elapsed_ratio",
+          "resistance_distance_pct",
+          "is_near_resistance",
+          "fomo_detected",
+          "fomo_bonus",
+          "short_squeeze_detected",
+          "short_squeeze_bonus",
+          "resistance_bonus",
+          "overbought_confirmation",
+          "volatility_action",
+          "rsi",
+          "bias_20",
+          "consecutive_up",
+          "rally_pct",
+          "above_boll_upper",
+          "kdj_j",
+          "macd_divergence",
+          "rsi_divergence",
+          "volume_divergence",
+          "funding_rate",
+          "oi_value_usdt",
+          "squeeze_risk",
+          "rise_from_low_pct",
+          "overbought_score",
+          "signal_details",
+          "atr_pct",
+          "atr_filter_pct",
+          "signal_direction",
+          "strategy_tag",
+          "collected_at",
+          "delivery_week"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "pipeline_run_id": { "type": "string", "format": "uuid" },
+    "market_regime": {
+      "type": "object",
+      "properties": {
+        "status": { "type": "string" },
+        "reason": { "type": "string" },
+        "symbol": { "type": "string" },
+        "recent_return_pct": { "type": "number" },
+        "daily_return_5d_pct": { "type": "number" }
+      },
+      "required": ["status", "reason"],
+      "additionalProperties": false
+    },
+    "filter_summary": {
+      "type": "object",
+      "properties": {
+        "total_tickers": { "type": "integer", "minimum": 0 },
+        "after_base_filter": { "type": "integer", "minimum": 0 },
+        "after_overbought_filter": { "type": "integer", "minimum": 0 },
+        "output_count": { "type": "integer", "minimum": 0 }
+      },
+      "required": [
+        "total_tickers",
+        "after_base_filter",
+        "after_overbought_filter",
+        "output_count"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "state_id",
+    "candidates",
+    "pipeline_run_id",
+    "market_regime",
+    "filter_summary"
+  ],
+  "additionalProperties": false
+}

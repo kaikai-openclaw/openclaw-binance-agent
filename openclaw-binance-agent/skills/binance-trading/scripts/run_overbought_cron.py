@@ -317,9 +317,10 @@ def run_report(args: argparse.Namespace) -> dict:
 
         scan_input = {
             "trigger_time": started_at,
-            "min_overbought_score": args.min_score,
             "max_candidates": args.max_candidates,
         }
+        if args.min_score is not None:
+            scan_input["min_overbought_score"] = args.min_score
         if args.symbols:
             scan_input["target_symbols"] = [
                 s.strip().upper() for s in args.symbols.split(",") if s.strip()
@@ -551,7 +552,12 @@ def run_report(args: argparse.Namespace) -> dict:
             "protection_orders": protection,
             "account": account_summary,
             "risk": {
-                "single_trade_margin_limit_pct": 35,
+                "max_margin_usdt": (
+                    5.0 if args.mode == "1h" else (10.0 if args.mode == "4h" else None)
+                ),
+                "max_notional_usdt": (
+                    50.0 if args.mode == "1h" else (100.0 if args.mode == "4h" else None)
+                ),
                 "single_symbol_position_limit_pct": 40,
                 "daily_loss_stop_pct": 5,
                 "risk_status": "paper_mode" if paper_mode else "normal",
@@ -577,7 +583,7 @@ def run_report(args: argparse.Namespace) -> dict:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="超买交易定时任务固定报告")
     parser.add_argument("--mode", choices=["1h", "4h", "1d"], default="4h")
-    parser.add_argument("--min-score", type=int, default=25)
+    parser.add_argument("--min-score", type=int, default=None)
     parser.add_argument("--max-candidates", type=int, default=20)
     parser.add_argument("--symbols", type=str, default="")
     parser.add_argument("--fast", action="store_true", help="使用快速 LLM 分析")

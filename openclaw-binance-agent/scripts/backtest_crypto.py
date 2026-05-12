@@ -40,6 +40,7 @@ from src.skills.crypto_oversold import (
 )
 from src.skills.skill1_collect import calc_rsi
 from src.skills.crypto_overbought import (
+    ShortTermOverboughtSkill,
     calc_overbought_score,
     ST_RSI_THRESHOLD as OB_ST_RSI,
     ST_BIAS_THRESHOLD as OB_ST_BIAS,
@@ -236,6 +237,33 @@ def score_overbought_4h(klines: List[dict]) -> Optional[float]:
     return float(r["overbought_score"])
 
 
+def score_overbought_4h_detail(klines: List[dict]) -> Optional[dict]:
+    """返回 4h 超买评分和执行过滤所需字段。"""
+    if len(klines) < 60:
+        return None
+    c = [k["close"] for k in klines]
+    h = [k["high"] for k in klines]
+    lo = [k["low"] for k in klines]
+    o = [k["open"] for k in klines]
+    v = [k["volume"] for k in klines]
+    result = calc_overbought_score(
+        c, h, lo, o, v,
+        None,
+        None,
+        1e8,
+        OB_ST_RSI, OB_ST_BIAS, OB_ST_CONSEC,
+        OB_ST_RALLY_PCT, OB_ST_RALLY_LB, OB_ST_RISE_LB,
+        {"rsi": OB_ST_W_RSI, "funding": OB_ST_W_FUND,
+         "bias": OB_ST_W_BIAS, "vol_div": OB_ST_W_VDIV,
+         "boll": OB_ST_W_BOLL, "rally": OB_ST_W_RALLY,
+         "kdj": OB_ST_W_KDJ, "macd_div": OB_ST_W_MACD,
+         "shadow": OB_ST_W_SHAD, "squeeze_risk": OB_ST_W_SQZ},
+    )
+    atr_filter_pct = _calc_simple_atr_pct(klines, 14)
+    result["atr_filter_pct"] = round(atr_filter_pct, 2) if atr_filter_pct else None
+    return result
+
+
 def score_overbought_1h(klines: List[dict]) -> Optional[float]:
     if len(klines) < 60:
         return None
@@ -427,6 +455,53 @@ def backtest_symbol(
                     )
                     i += step
                     continue
+        if execution_sim and strategy == "overbought_4h":
+            if _overbought_4h_market_regime_blocked(conn, klines[i]["open_time"]):
+                rejection_counts["market_regime_blocked"] = (
+                    rejection_counts.get("market_regime_blocked", 0) + 1
+                )
+                i += step
+                continue
+            detail = score_overbought_4h_detail(window)
+            if not detail or detail["overbought_score"] < 45:
+                rejection_counts["score_below_threshold"] = (
+                    rejection_counts.get("score_below_threshold", 0) + 1
+                )
+                i += step
+                continue
+            passed, strong, very_strong = _passes_overbought_4h_execution_filters(
+                window
+            )
+            if not passed:
+                rejection_counts["confirmation_failed"] = (
+                    rejection_counts.get("confirmation_failed", 0) + 1
+                )
+                i += step
+                continue
+            if detail.get("atr_filter_pct") is not None:
+                atr_filter_pct = detail["atr_filter_pct"]
+                if atr_filter_pct > 6.0:
+                    rejection_counts["atr_gt_6"] = rejection_counts.get("atr_gt_6", 0) + 1
+                    i += step
+                    continue
+                if atr_filter_pct > 5.0 and not very_strong:
+                    rejection_counts["atr_gt_5_without_very_strong_confirmation"] = (
+                        rejection_counts.get(
+                            "atr_gt_5_without_very_strong_confirmation", 0
+                        )
+                        + 1
+                    )
+                    i += step
+                    continue
+                if atr_filter_pct > 4.0 and not strong:
+                    rejection_counts["atr_gt_4_without_strong_confirmation"] = (
+                        rejection_counts.get(
+                            "atr_gt_4_without_strong_confirmation", 0
+                        )
+                        + 1
+                    )
+                    i += step
+                    continue
 
         entry_close = klines[i]["close"]
         exit_close  = klines[i + hold_bars]["close"]
@@ -447,6 +522,15 @@ def backtest_symbol(
                 continue
         elif execution_sim and strategy == "oversold_4h":
             ret_pct, exit_reason = simulate_oversold_4h_execution(
+                window,
+                klines[i + 1: i + hold_bars + 1],
+                entry_close,
+            )
+            if exit_reason == "skip_high_atr":
+                i += step
+                continue
+        elif execution_sim and strategy == "overbought_4h":
+            ret_pct, exit_reason = simulate_overbought_4h_execution(
                 window,
                 klines[i + 1: i + hold_bars + 1],
                 entry_close,
@@ -581,6 +665,109 @@ def _passes_oversold_4h_execution_filters(history: List[dict]) -> tuple[bool, bo
     passed = signals >= 2 and momentum >= 1
     strong = signals >= 3 and momentum >= 1
     return passed, strong
+
+
+def _passes_overbought_4h_execution_filters(history: List[dict]) -> tuple[bool, bool, bool]:
+    """近似模拟 4h 超买实盘过滤。"""
+    if len(history) < 30:
+        return False, False, False
+    closes = [k["close"] for k in history]
+    highs = [k["high"] for k in history]
+    lows = [k["low"] for k in history]
+    detail = score_overbought_4h_detail(history) or {}
+    rsi_now = calc_rsi(closes, 14)
+    rsi_prev = calc_rsi(closes[:-1], 14)
+    rsi_trend = (
+        (rsi_now - rsi_prev)
+        if rsi_now is not None and rsi_prev is not None
+        else None
+    )
+    confirmation = ShortTermOverboughtSkill._build_4h_confirmation(
+        closes=closes,
+        highs=highs,
+        lows=lows,
+        klines_1h=[],
+        current_price=closes[-1],
+        rsi_1h=rsi_now,
+        rsi_1h_trend=rsi_trend,
+        macd_divergence=bool(detail.get("macd_divergence")),
+        rsi_divergence=bool(detail.get("rsi_divergence")),
+        volume_divergence=bool(detail.get("volume_divergence")),
+        kdj_dead_cross=False,
+        drawdown_from_high=None,
+    )
+    return (
+        confirmation["passed"],
+        confirmation["strong"],
+        confirmation["very_strong"],
+    )
+
+
+def _overbought_4h_market_regime_blocked(
+    conn: sqlite3.Connection,
+    entry_open_time: int,
+) -> bool:
+    """近似模拟 overbought_4h 的 BTC 市场过滤。"""
+    lookback_ms = 80 * _interval_ms("4h")
+    btc_klines = get_klines(
+        conn,
+        "BTCUSDT",
+        "4h",
+        entry_open_time - lookback_ms,
+        entry_open_time,
+    )
+    if len(btc_klines) < 60:
+        return True
+    closes = [k["close"] for k in btc_klines]
+    last_close = closes[-1]
+    recent_return_4h_pct = (
+        (last_close - closes[-6]) / closes[-6] * 100
+        if len(closes) > 6 and closes[-6] > 0
+        else 0.0
+    )
+    if recent_return_4h_pct <= -8.0:
+        return True
+    ema5_series = calc_ema(closes, 5)
+    ema20_series = calc_ema(closes, 20)
+    ema5 = ema5_series[-1] if ema5_series else None
+    ema20 = ema20_series[-1] if ema20_series else None
+    return bool(
+        ema5 is not None
+        and ema20 is not None
+        and last_close > ema20
+        and ema5 > ema20
+    )
+
+
+def simulate_overbought_4h_execution(
+    history: List[dict],
+    future: List[dict],
+    entry: float,
+) -> tuple[float, str]:
+    """近似模拟 4h 超买实盘执行：ATR SL/TP + 24h 持仓 + taker/slippage 成本。"""
+    atr_pct = _calc_simple_atr_pct(history, 20)
+    if atr_pct is None or atr_pct <= 0:
+        sl_pct = 0.03
+        tp_pct = 0.0875
+    else:
+        raw_sl = atr_pct / 100.0 * 1.2
+        if raw_sl > 0.06:
+            return 0.0, "skip_high_atr"
+        sl_pct = max(0.005, min(0.05, raw_sl))
+        tp_pct = sl_pct * (3.5 / 1.2)
+
+    stop = entry * (1 + sl_pct)
+    take_profit = entry * (1 - tp_pct)
+    round_trip_cost_pct = 0.12
+    for bar in future:
+        if bar["high"] >= stop:
+            return ((entry - stop) / entry * 100) - round_trip_cost_pct, "stop_loss"
+        if bar["low"] <= take_profit:
+            return ((entry - take_profit) / entry * 100) - round_trip_cost_pct, "take_profit"
+    if not future:
+        return -round_trip_cost_pct, "no_future"
+    exit_close = future[-1]["close"]
+    return ((entry - exit_close) / entry * 100) - round_trip_cost_pct, "time_exit"
 
 
 def simulate_oversold_4h_execution(
@@ -1001,7 +1188,7 @@ def optimize_params(samples: List[dict], strategy: str) -> None:
         print(f"  {thresh:>6} {n:>7,} {wr:>6.1f}% {avg:>+8.2f}% {med:>+8.2f}% {ir:>8.3f} {composite:>9.4f}{marker}")
 
     print(f"\n  🎯 建议入场门槛: 评分 ≥ {best_thresh}  (综合评分最优)")
-    print(f"     当前代码默认门槛: oversold=40, overbought=40, reversal=55")
+    print(f"     当前代码默认门槛: oversold=40, overbought=45, reversal=55")
     print()
 
 
@@ -1050,7 +1237,7 @@ def main():
     )
     parser.add_argument(
         "--execution-sim", action="store_true",
-        help="使用 ATR SL/TP、手续费/滑点和实盘过滤近似模拟 oversold_4h/reversal_4h 执行",
+        help="使用 ATR SL/TP、手续费/滑点和实盘过滤近似模拟 oversold_4h/overbought_4h/reversal_4h 执行",
     )
     args = parser.parse_args()
 
@@ -1082,7 +1269,7 @@ def main():
     for strategy in strategies:
         interval  = INTERVALS[strategy]
         hold_bars = args.hold if args.hold else HOLD_BARS[strategy]
-        if args.execution_sim and strategy in ("oversold_4h", "reversal_4h") and args.hold is None:
+        if args.execution_sim and strategy in ("oversold_4h", "overbought_4h", "reversal_4h") and args.hold is None:
             hold_bars = 6
 
         all_symbols = get_all_symbols(conn, interval)
@@ -1097,7 +1284,7 @@ def main():
             print(f"   全量回测: {len(symbols)} 个")
 
         print(f"\n⏳ 回测策略: {strategy}（持有 {hold_bars} 根K线）...")
-        if args.execution_sim and strategy in ("oversold_4h", "reversal_4h"):
+        if args.execution_sim and strategy in ("oversold_4h", "overbought_4h", "reversal_4h"):
             print("   执行近似: 实盘过滤 + ATR SL/TP + 24h max hold + 0.12% 成本")
 
         all_samples = []

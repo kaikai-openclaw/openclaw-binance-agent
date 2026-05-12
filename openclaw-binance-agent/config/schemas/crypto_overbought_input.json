@@ -17,15 +17,15 @@
     "min_quote_volume": {
       "type": "number",
       "minimum": 0,
-      "default": 10000000,
-      "description": "最低 24h 成交额（USDT），默认 1000 万"
+      "default": 20000000,
+      "description": "最低 24h 成交额（USDT），默认 2000 万"
     },
     "rsi_threshold": {
       "type": "number",
       "minimum": 60,
       "maximum": 95,
-      "default": 80,
-      "description": "RSI(14) 超买阈值（默认 80）"
+      "default": 75,
+      "description": "RSI(14) 超买阈值（默认 75）"
     },
     "bias_threshold": {
       "type": "number",
@@ -38,7 +38,7 @@
       "type": "integer",
       "minimum": 0,
       "maximum": 100,
-      "default": 25,
+      "default": 45,
       "description": "超买综合评分最低阈值"
     },
     "max_candidates": {

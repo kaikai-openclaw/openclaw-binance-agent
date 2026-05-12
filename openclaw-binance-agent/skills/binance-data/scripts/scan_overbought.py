@@ -53,8 +53,8 @@ def main():
                         help="扫描模式：short=短期4h超买, long=长期1d超买（默认 short）")
     parser.add_argument("--symbols", type=str, default="",
                         help="指定币种，逗号分隔（如 BTC,ETH,SOL）")
-    parser.add_argument("--min-score", type=int, default=25,
-                        help="最低超买评分（默认 25）")
+    parser.add_argument("--min-score", type=int, default=None,
+                        help="最低超买评分（默认使用策略内部门槛）")
     parser.add_argument("--max-candidates", type=int, default=20,
                         help="最大输出数量（默认 20）")
     parser.add_argument("--json", action="store_true",
@@ -81,9 +81,10 @@ def main():
     try:
         input_data = {
             "trigger_time": datetime.now(timezone.utc).isoformat(),
-            "min_overbought_score": args.min_score,
             "max_candidates": args.max_candidates,
         }
+        if args.min_score is not None:
+            input_data["min_overbought_score"] = args.min_score
         if args.symbols:
             input_data["target_symbols"] = [
                 s.strip().upper() for s in args.symbols.split(",") if s.strip()

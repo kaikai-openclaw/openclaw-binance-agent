@@ -172,13 +172,16 @@ def render_markdown(report: dict) -> str:
     ]
 
     for item in scan["candidates"][:3]:
+        confirmation = item.get("oversold_confirmation") or {}
+        confirm = confirmation.get("reason", "未记录")
         lines.append(
-            "- {symbol}: {score}/100, 24h {change:+.2f}%, RSI {rsi}, 费率 {funding}, {sig}".format(
+            "- {symbol}: {score}/100, 24h {change:+.2f}%, RSI {rsi}, ATR {atr}, 确认 {confirm}, {sig}".format(
                 symbol=item.get("symbol", ""),
                 score=item.get("oversold_score", 0),
                 change=safe_float(item.get("price_change_pct")),
                 rsi=_fmt_optional(item.get("rsi")),
-                funding=_fmt_optional(item.get("funding_rate"), suffix="%"),
+                atr=_fmt_optional(item.get("atr_filter_pct"), suffix="%"),
+                confirm=confirm,
                 sig=item.get("signal_details", "")[:50],
             )
         )
@@ -306,9 +309,10 @@ def run_report(args: argparse.Namespace) -> dict:
 
         scan_input = {
             "trigger_time": started_at,
-            "min_oversold_score": args.min_score,
             "max_candidates": args.max_candidates,
         }
+        if args.min_score is not None:
+            scan_input["min_oversold_score"] = args.min_score
         if args.symbols:
             scan_input["target_symbols"] = [
                 s.strip().upper() for s in args.symbols.split(",") if s.strip()
@@ -383,7 +387,7 @@ def run_report(args: argparse.Namespace) -> dict:
                     max_trades=1
                     if args.mode == "1d"
                     else 4,  # P1-2: 1d 波段限制交易数量
-                    max_hold_hours=48.0 if args.mode == "1d" else 12.0,
+                    max_hold_hours=48.0 if args.mode == "1d" else 24.0,
                     max_stop_pct=0.07 if args.mode == "1d" else 0.05,
                     atr_stop_mult=1.2 if args.mode == "1d" else 1.0,
                     atr_tp_mult=4.5 if args.mode == "1d" else 2.5,
@@ -529,7 +533,8 @@ def run_report(args: argparse.Namespace) -> dict:
             "protection_orders": protection,
             "account": account_summary,
             "risk": {
-                "single_trade_margin_limit_pct": 35,
+                "max_margin_usdt": 15.0 if args.mode == "1d" else 2.0,
+                "max_notional_usdt": 150.0 if args.mode == "1d" else 20.0,
                 "single_symbol_position_limit_pct": 40,
                 "daily_loss_stop_pct": 5,
                 "risk_status": "paper_mode" if paper_mode else "normal",
@@ -555,7 +560,12 @@ def run_report(args: argparse.Namespace) -> dict:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="超跌交易定时任务固定报告")
     parser.add_argument("--mode", choices=["4h", "1d"], default="4h")
-    parser.add_argument("--min-score", type=int, default=25)
+    parser.add_argument(
+        "--min-score",
+        type=int,
+        default=None,
+        help="超跌扫描评分门槛；不传时使用各周期策略默认值（4h=40, 1d=50）",
+    )
     parser.add_argument("--max-candidates", type=int, default=20)
     parser.add_argument("--symbols", type=str, default="")
     parser.add_argument("--fast", action="store_true", help="使用快速 LLM 分析")

@@ -12,8 +12,38 @@
         "properties": {
           "symbol": { "type": "string" },
           "close": { "type": "number" },
+          "current_price": { "type": "number" },
           "quote_volume_24h": { "type": "number", "minimum": 0 },
           "price_change_pct": { "type": "number" },
+          "price_change_since_close_pct": { "type": "number" },
+          "momentum_penalty": { "type": "number" },
+          "rsi_1h": { "type": ["number", "null"] },
+          "rsi_1h_trend": { "type": ["number", "null"] },
+          "rsi_1h_bonus": { "type": "number" },
+          "hour_candles_in_4h": { "type": "integer", "minimum": 0 },
+          "elapsed_ratio": { "type": "number" },
+          "closing_period_bonus": { "type": "number" },
+          "support_distance_pct": { "type": ["number", "null"] },
+          "is_near_support": { "type": "boolean" },
+          "panic_selling_detected": { "type": "boolean" },
+          "panic_penalty": { "type": "number" },
+          "oversold_confirmation": {
+            "type": "object",
+            "properties": {
+              "passed": { "type": "boolean" },
+              "strong": { "type": "boolean" },
+              "signal_count": { "type": "integer", "minimum": 0 },
+              "momentum_count": { "type": "integer", "minimum": 0 },
+              "reasons": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "reason": { "type": "string" }
+            },
+            "required": ["passed", "strong", "signal_count", "momentum_count", "reasons", "reason"],
+            "additionalProperties": false
+          },
+          "volatility_action": { "type": "string" },
           "rsi": { "type": ["number", "null"] },
           "bias_20": { "type": ["number", "null"] },
           "consecutive_down": { "type": "integer", "minimum": 0 },
@@ -28,14 +58,31 @@
           "oversold_score": { "type": "integer", "minimum": 0, "maximum": 100 },
           "signal_details": { "type": "string" },
           "atr_pct": { "type": ["number", "null"] },
+          "atr_filter_pct": { "type": ["number", "null"] },
+          "signal_direction": { "type": "string" },
           "strategy_tag": { "type": "string" },
-          "collected_at": { "type": "string", "format": "date-time" }
+          "collected_at": { "type": "string", "format": "date-time" },
+          "delivery_week": { "type": "boolean" }
         },
         "required": [
           "symbol",
           "close",
+          "current_price",
           "quote_volume_24h",
           "price_change_pct",
+          "price_change_since_close_pct",
+          "momentum_penalty",
+          "rsi_1h",
+          "rsi_1h_trend",
+          "rsi_1h_bonus",
+          "hour_candles_in_4h",
+          "elapsed_ratio",
+          "support_distance_pct",
+          "is_near_support",
+          "panic_selling_detected",
+          "panic_penalty",
+          "oversold_confirmation",
+          "volatility_action",
           "rsi",
           "bias_20",
           "consecutive_down",
@@ -50,8 +97,11 @@
           "oversold_score",
           "signal_details",
           "atr_pct",
+          "atr_filter_pct",
+          "signal_direction",
           "strategy_tag",
-          "collected_at"
+          "collected_at",
+          "delivery_week"
         ],
         "additionalProperties": false
       }

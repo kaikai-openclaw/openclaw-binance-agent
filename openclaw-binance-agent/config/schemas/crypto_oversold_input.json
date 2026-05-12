@@ -64,7 +64,7 @@
       "type": "integer",
       "minimum": 0,
       "maximum": 100,
-      "default": 25,
+      "default": 40,
       "description": "超跌综合评分最低阈值"
     },
     "max_candidates": {

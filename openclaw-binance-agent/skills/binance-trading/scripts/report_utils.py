@@ -534,9 +534,16 @@ def render_account_markdown(account: dict, risk: Optional[dict] = None) -> list[
     if risk:
         status = risk.get("risk_status", "normal")
         status_icon = "🟡" if status == "paper_mode" else "🟢"
-        lines.append(
-            f"{status_icon} 风控: SL上限{risk['single_trade_margin_limit_pct']}% | 单币{risk['single_symbol_position_limit_pct']}% | 日损{risk['daily_loss_stop_pct']}%"
-        )
+        if risk.get("max_margin_usdt") is not None:
+            lines.append(
+                f"{status_icon} 风控: 单笔保证金≤{risk['max_margin_usdt']:.2f}U "
+                f"(名义≤{risk.get('max_notional_usdt', 0):.2f}U) | "
+                f"单币{risk['single_symbol_position_limit_pct']}% | 日损{risk['daily_loss_stop_pct']}%"
+            )
+        else:
+            lines.append(
+                f"{status_icon} 风控: SL上限{risk['single_trade_margin_limit_pct']}% | 单币{risk['single_symbol_position_limit_pct']}% | 日损{risk['daily_loss_stop_pct']}%"
+            )
 
     return lines
 

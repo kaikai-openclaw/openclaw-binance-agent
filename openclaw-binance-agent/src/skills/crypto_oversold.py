@@ -91,16 +91,17 @@ ST_VOL_SURGE_THRESHOLD = 2.0  # 底部放量 ≥ 2x
 #   有效维度：RSI超卖(+1.04%) BIAS乖离(+1.04%) 布林下轨(+0.56%) 距高点回撤(+0.46%)
 #   无效维度：连续杀跌(-0.33%) MACD背离(-0.06%) 底部放量(-0.00%)
 #   弱有效：KDJ极值(+0.14%)
-ST_W_RSI = 22  # RSI 极端超卖（有效，升权 18→22）
-ST_W_BIAS = 16  # 乖离率（有效，升权 12→16）
+ST_W_RSI = 24  # RSI 极端超卖（有效，继续升权）
+ST_W_BIAS = 18  # 乖离率（有效，继续升权）
 ST_W_DROP = 4  # 连续杀跌（回测无效，降权 10→4）
-ST_W_BOLL = 10  # 布林带（有效，升权 8→10）
+ST_W_BOLL = 12  # 布林带（有效，升权）
 ST_W_MACD_DIV = 2  # MACD 背离（回测无效，降权 5→2）
 ST_W_KDJ = 4  # KDJ（弱有效，降权 7→4）
-ST_W_FUNDING = 20  # 资金费率（实盘最强信号，保持不变）
+ST_W_FUNDING = 12  # 资金费率只作为确认项，避免弱形态被过度加分
 ST_W_DRAWDOWN = 12  # 距高点回撤（有效，升权 10→12）
 ST_W_VOLUME = 4  # 底部放量（回测无效，降权 10→4）
-# 总计：22+16+4+10+2+4+20+12+4 = 94（资金费率实盘补足至 100）
+ST_W_CONFIRMATION = 8  # 1h/4h 右侧确认
+# 总计：24+18+4+12+2+4+12+12+4+8 = 100
 
 # ══════════════════════════════════════════════════════════
 # 长期超跌参数（1d K 线）
@@ -337,10 +338,10 @@ class _CryptoOversoldBase(BaseSkill):
 
         closes = [float(k[4]) for k in klines]
         last_close = closes[-1]
-        ema_fast_series = calc_ema(closes, EMA_FAST)
-        ema_slow_series = calc_ema(closes, EMA_SLOW)
-        ema_fast = ema_fast_series[-1] if ema_fast_series else None
-        ema_slow = ema_slow_series[-1] if ema_slow_series else None
+        ema5_series = calc_ema(closes, 5)
+        ema20_series = calc_ema(closes, 20)
+        ema5 = ema5_series[-1] if ema5_series else None
+        ema20 = ema20_series[-1] if ema20_series else None
         lookback = input_data.get(
             "market_regime_downtrend_lookback",
             MARKET_REGIME_DOWNTREND_LOOKBACK,
@@ -354,7 +355,6 @@ class _CryptoOversoldBase(BaseSkill):
             "market_regime_panic_drop_pct",
             MARKET_REGIME_PANIC_DROP_PCT,
         )
-        # 移除 BTC 均线空头阻断，仅防范短期暴跌(瀑布)接刀风险
         panic_drop = recent_return_pct <= panic_drop_pct
         if panic_drop:
             reasons = [f"BTC recent_return={recent_return_pct:.2f}%"]
@@ -364,12 +364,81 @@ class _CryptoOversoldBase(BaseSkill):
                 "symbol": symbol,
                 "recent_return_pct": round(recent_return_pct, 4),
             }
+        weak_trend = (
+            ema5 is not None
+            and ema20 is not None
+            and last_close < ema20
+            and ema5 < ema20
+        )
+        if weak_trend:
+            return {
+                "status": "blocked",
+                "reason": "BTC 4h weak trend",
+                "symbol": symbol,
+                "recent_return_pct": round(recent_return_pct, 4),
+            }
 
         return {
             "status": "enabled",
             "reason": "market_regime_ok",
             "symbol": symbol,
             "recent_return_pct": round(recent_return_pct, 4),
+        }
+
+    @staticmethod
+    def _build_4h_confirmation(
+        current_price: float,
+        lows: List[float],
+        klines_1h: List[list],
+        rsi_1h: Optional[float],
+        rsi_1h_trend: Optional[float],
+        support_distance_pct: Optional[float],
+        panic_selling_detected: bool,
+    ) -> dict:
+        """构建 4h 超跌右侧确认。"""
+        reasons: List[str] = []
+        signal_count = 0
+        momentum_count = 0
+
+        if (
+            rsi_1h is not None
+            and rsi_1h_trend is not None
+            and 30 <= rsi_1h < 50
+            and rsi_1h_trend > 0
+        ):
+            signal_count += 1
+            momentum_count += 1
+            reasons.append("1h RSI回升")
+
+        recent_4h_low = min(lows[-2:]) if len(lows) >= 2 else None
+        if recent_4h_low is not None and current_price >= recent_4h_low:
+            signal_count += 1
+            reasons.append("未破近4h低点")
+
+        if len(klines_1h) >= 3:
+            recent_1h_high = max(float(k[2]) for k in klines_1h[-3:-1])
+            if current_price > recent_1h_high:
+                signal_count += 1
+                momentum_count += 1
+                reasons.append("站回近2根1h高点")
+
+        if (
+            support_distance_pct is not None
+            and 0 <= support_distance_pct <= 3.0
+            and not panic_selling_detected
+        ):
+            signal_count += 1
+            reasons.append("支撑附近未放量破位")
+
+        passed = signal_count >= 2 and momentum_count >= 1
+        strong = signal_count >= 3 and momentum_count >= 1
+        return {
+            "passed": passed,
+            "strong": strong,
+            "signal_count": signal_count,
+            "momentum_count": momentum_count,
+            "reasons": reasons,
+            "reason": " | ".join(reasons) if reasons else "右侧确认不足",
         }
 
     def _run_scan(
@@ -408,7 +477,9 @@ class _CryptoOversoldBase(BaseSkill):
         funding_map = self._build_funding_map()
         tradable = self._get_tradable_symbols()
         market_regime = self._get_market_regime(input_data)
-        if market_regime.get("status") == "blocked":
+        if market_regime.get("status") == "blocked" or (
+            interval == "4h" and market_regime.get("status") != "enabled"
+        ):
             log.warning(
                 "[%s] 市场状态阻断超跌交易: %s",
                 self.name,
@@ -465,7 +536,7 @@ class _CryptoOversoldBase(BaseSkill):
                 # 超跌策略适合在下跌中进场，若24h已大幅反弹说明错过了最佳时机
                 _price_change_pct = float(item.get("priceChangePercent", 0))
                 _chase_threshold = 10.0  # 24h涨幅超过10%视为追高
-                if _price_change_pct > _chase_threshold and not target_symbols:
+                if _price_change_pct > _chase_threshold:
                     log.info(
                         "[%s] %s 24h涨幅 %.2f%% 超过 %.0f%%，跳过（反弹已走完，追高风险）",
                         self.name,
@@ -605,6 +676,7 @@ class _CryptoOversoldBase(BaseSkill):
                 # RSI < 30: 仍在极超卖，可能继续跌，-3分
                 # RSI > 50: 已进入正常/偏强，可能已反弹过多，-3分
                 # 恐慌抛售检测到时，RSI低位但仍在恶化，额外扣分
+                klines_1h: List[list] = []
                 try:
                     klines_1h = self._fetch_klines(symbol, "1h", 20)
                     if klines_1h:
@@ -709,7 +781,41 @@ class _CryptoOversoldBase(BaseSkill):
                         result["hour_candles_in_4h"] = 0
                         result["elapsed_ratio"] = 1.0
 
-                if result["oversold_score"] < min_score and not target_symbols:
+                confirmation = {
+                    "passed": True,
+                    "strong": True,
+                    "signal_count": 0,
+                    "momentum_count": 0,
+                    "reasons": [],
+                    "reason": "非4h模式不要求右侧确认",
+                }
+                if interval == "4h":
+                    confirmation = self._build_4h_confirmation(
+                        current_price=current_price,
+                        lows=lows,
+                        klines_1h=klines_1h,
+                        rsi_1h=result.get("rsi_1h"),
+                        rsi_1h_trend=result.get("rsi_1h_trend"),
+                        support_distance_pct=support_distance_pct,
+                        panic_selling_detected=panic_selling_detected,
+                    )
+                    if confirmation["passed"]:
+                        result["oversold_score"] += ST_W_CONFIRMATION
+                        result["signal_details"] = (
+                            f"{result['signal_details']} | {confirmation['reason']}"
+                        )
+                    else:
+                        log.info(
+                            "[%s] %s 4h 右侧确认不足: %s",
+                            self.name,
+                            symbol,
+                            confirmation["reason"],
+                        )
+                        continue
+
+                result["oversold_score"] = min(100, round(result["oversold_score"]))
+
+                if result["oversold_score"] < min_score:
                     continue
 
                 returns_map[symbol] = calc_returns(closes)
@@ -726,6 +832,28 @@ class _CryptoOversoldBase(BaseSkill):
                     if (atr_filter_val and last_close > 0)
                     else None
                 )
+                volatility_action = "normal"
+                if interval == "4h" and atr_filter_pct is not None:
+                    if atr_filter_pct > 7.0:
+                        log.info(
+                            "[%s] %s ATR %.2f%% > 7%%，跳过",
+                            self.name,
+                            symbol,
+                            atr_filter_pct,
+                        )
+                        continue
+                    if atr_filter_pct > 5.0 and not confirmation.get("strong"):
+                        log.info(
+                            "[%s] %s ATR %.2f%% > 5%% 且右侧确认不强，跳过",
+                            self.name,
+                            symbol,
+                            atr_filter_pct,
+                        )
+                        continue
+                    if atr_filter_pct > 5.0:
+                        volatility_action = "allow_strong_confirmation"
+                    elif atr_filter_pct > 4.0:
+                        volatility_action = "half_size"
 
                 # P2-1: 季度交割周检测
                 now_utc = datetime.now(timezone.utc)
@@ -758,6 +886,8 @@ class _CryptoOversoldBase(BaseSkill):
                         "is_near_support": is_near_support,
                         "panic_selling_detected": panic_selling_detected,
                         "panic_penalty": result.get("panic_penalty", 0),
+                        "oversold_confirmation": confirmation,
+                        "volatility_action": volatility_action,
                         # ── 原有字段 ───────────────────────────────────
                         "rsi": result["rsi"],
                         "bias_20": result["bias_20"],

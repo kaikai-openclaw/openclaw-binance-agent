@@ -38,6 +38,7 @@ from src.skills.crypto_oversold import (
     ST_W_RSI, ST_W_BIAS, ST_W_DROP, ST_W_BOLL, ST_W_MACD_DIV, ST_W_KDJ,
     ST_W_FUNDING, ST_W_DRAWDOWN, ST_W_VOLUME,
 )
+from src.skills.skill1_collect import calc_rsi
 from src.skills.crypto_overbought import (
     calc_overbought_score,
     ST_RSI_THRESHOLD as OB_ST_RSI,
@@ -352,6 +353,7 @@ def backtest_symbol(
     results = []
     step = SAMPLE_INTERVAL[interval]
     i = start_idx
+    rejection_counts: Dict[str, int] = {}
 
     while i < len(klines) - hold_bars:
         window = klines[max(0, i - 200): i + 1]
@@ -372,6 +374,9 @@ def backtest_symbol(
         if execution_sim and strategy == "reversal_4h":
             detail = score_reversal_4h_detail(window)
             if not detail or detail["reversal_score"] < 55:
+                rejection_counts["score_below_threshold"] = (
+                    rejection_counts.get("score_below_threshold", 0) + 1
+                )
                 i += step
                 continue
             closes = [k["close"] for k in window]
@@ -387,8 +392,41 @@ def backtest_symbol(
                 rsi_1h=None,
             )
             if not confirmation["passed"]:
+                rejection_counts["confirmation_failed"] = (
+                    rejection_counts.get("confirmation_failed", 0) + 1
+                )
                 i += step
                 continue
+        if execution_sim and strategy == "oversold_4h":
+            detail = score_oversold_4h_detail(window)
+            if not detail or detail["oversold_score"] < 40:
+                rejection_counts["score_below_threshold"] = (
+                    rejection_counts.get("score_below_threshold", 0) + 1
+                )
+                i += step
+                continue
+            passed, strong = _passes_oversold_4h_execution_filters(window)
+            if not passed:
+                rejection_counts["confirmation_failed"] = (
+                    rejection_counts.get("confirmation_failed", 0) + 1
+                )
+                i += step
+                continue
+            if detail.get("atr_filter_pct") is not None:
+                atr_filter_pct = detail["atr_filter_pct"]
+                if atr_filter_pct > 7.0:
+                    rejection_counts["atr_gt_7"] = rejection_counts.get("atr_gt_7", 0) + 1
+                    i += step
+                    continue
+                if atr_filter_pct > 5.0 and not strong:
+                    rejection_counts["atr_gt_5_without_strong_confirmation"] = (
+                        rejection_counts.get(
+                            "atr_gt_5_without_strong_confirmation", 0
+                        )
+                        + 1
+                    )
+                    i += step
+                    continue
 
         entry_close = klines[i]["close"]
         exit_close  = klines[i + hold_bars]["close"]
@@ -400,6 +438,15 @@ def backtest_symbol(
         # 收益率（做多/做空方向）
         if execution_sim and strategy == "reversal_4h":
             ret_pct, exit_reason = simulate_reversal_4h_execution(
+                window,
+                klines[i + 1: i + hold_bars + 1],
+                entry_close,
+            )
+            if exit_reason == "skip_high_atr":
+                i += step
+                continue
+        elif execution_sim and strategy == "oversold_4h":
+            ret_pct, exit_reason = simulate_oversold_4h_execution(
                 window,
                 klines[i + 1: i + hold_bars + 1],
                 entry_close,
@@ -441,6 +488,18 @@ def backtest_symbol(
         })
         i += step
 
+    if execution_sim and rejection_counts:
+        results.append({
+            "symbol": symbol,
+            "date": "summary",
+            "score": -1,
+            "ret_pct": 0.0,
+            "max_drawdown": 0.0,
+            "win": False,
+            "exit_reason": "summary",
+            "rejection_counts": rejection_counts,
+        })
+
     return results
 
 
@@ -460,6 +519,100 @@ def _calc_simple_atr_pct(klines: List[dict], period: int = 20) -> Optional[float
     if close <= 0:
         return None
     return (sum(trs[-period:]) / period) / close * 100
+
+
+def score_oversold_4h_detail(klines: List[dict]) -> Optional[dict]:
+    """返回 4h 超跌评分和回测执行过滤所需字段。"""
+    if len(klines) < 60:
+        return None
+    c = [k["close"] for k in klines]
+    h = [k["high"] for k in klines]
+    lo = [k["low"] for k in klines]
+    v = [k["volume"] for k in klines]
+    result = calc_oversold_score(
+        c, h, lo, v,
+        ST_RSI_THRESHOLD, ST_BIAS_THRESHOLD, ST_CONSECUTIVE_DOWN,
+        ST_DROP_PCT, ST_DROP_LOOKBACK,
+        ST_DRAWDOWN_THRESHOLD, ST_DRAWDOWN_LOOKBACK,
+        ST_VOL_SURGE_THRESHOLD,
+        None,
+        {"rsi": ST_W_RSI, "bias": ST_W_BIAS, "drop": ST_W_DROP,
+         "boll": ST_W_BOLL, "macd_div": ST_W_MACD_DIV, "kdj": ST_W_KDJ,
+         "funding": ST_W_FUNDING, "drawdown": ST_W_DRAWDOWN, "volume": ST_W_VOLUME},
+    )
+    atr_filter_pct = _calc_simple_atr_pct(klines, 14)
+    result["atr_filter_pct"] = round(atr_filter_pct, 2) if atr_filter_pct else None
+    return result
+
+
+def _passes_oversold_4h_execution_filters(history: List[dict]) -> tuple[bool, bool]:
+    """
+    近似模拟 4h 超跌实盘过滤。
+
+    历史缓存没有 1h K 线，这里用 4h 收盘动能近似替代 1h RSI/突破确认：
+    必须至少有一个动能信号，再叠加结构信号。
+    """
+    if len(history) < 30:
+        return False, False
+    closes = [k["close"] for k in history]
+    lows = [k["low"] for k in history]
+    current = closes[-1]
+    recent_support = min(lows[-20:])
+    support_distance_pct = (
+        (current - recent_support) / recent_support * 100
+        if recent_support > 0
+        else None
+    )
+    rsi_now = calc_rsi(closes, 14)
+    rsi_prev = calc_rsi(closes[:-1], 14)
+
+    signals = 0
+    momentum = 0
+    if rsi_now is not None and rsi_prev is not None and 30 <= rsi_now < 50 and rsi_now > rsi_prev:
+        signals += 1
+        momentum += 1
+    if current > max(history[-3]["high"], history[-2]["high"]):
+        signals += 1
+        momentum += 1
+    if current >= min(lows[-2:]):
+        signals += 1
+    if support_distance_pct is not None and 0 <= support_distance_pct <= 3.0:
+        signals += 1
+    passed = signals >= 2 and momentum >= 1
+    strong = signals >= 3 and momentum >= 1
+    return passed, strong
+
+
+def simulate_oversold_4h_execution(
+    history: List[dict],
+    future: List[dict],
+    entry: float,
+) -> tuple[float, str]:
+    """近似模拟 4h 超跌实盘执行：ATR SL/TP + 24h 持仓 + taker/slippage 成本。"""
+    atr_pct = _calc_simple_atr_pct(history, 20)
+    if atr_pct is None or atr_pct <= 0:
+        sl_pct = 0.03
+        tp_pct = 0.075
+    else:
+        raw_sl = atr_pct / 100.0
+        if raw_sl > 0.07:
+            return 0.0, "skip_high_atr"
+        sl_pct = max(0.005, min(0.05, raw_sl))
+        tp_mult = 3.0 if atr_pct >= 5.0 else 2.5
+        tp_pct = sl_pct * tp_mult
+
+    stop = entry * (1 - sl_pct)
+    take_profit = entry * (1 + tp_pct)
+    round_trip_cost_pct = 0.12
+    for bar in future:
+        if bar["low"] <= stop:
+            return ((stop - entry) / entry * 100) - round_trip_cost_pct, "stop_loss"
+        if bar["high"] >= take_profit:
+            return ((take_profit - entry) / entry * 100) - round_trip_cost_pct, "take_profit"
+    if not future:
+        return -round_trip_cost_pct, "no_future"
+    exit_close = future[-1]["close"]
+    return ((exit_close - entry) / entry * 100) - round_trip_cost_pct, "time_exit"
 
 
 def simulate_reversal_4h_execution(
@@ -501,8 +654,19 @@ def simulate_reversal_4h_execution(
 
 def analyze_results(samples: List[dict], strategy: str, hold_bars: int) -> None:
     """按评分分组统计，输出回测报告。"""
+    summary_rows = [s for s in samples if s.get("exit_reason") == "summary"]
+    samples = [s for s in samples if s.get("exit_reason") != "summary"]
+
     if not samples:
         print("  ⚠️  无有效样本")
+        if summary_rows:
+            totals: Dict[str, int] = {}
+            for row in summary_rows:
+                for key, value in row.get("rejection_counts", {}).items():
+                    totals[key] = totals.get(key, 0) + value
+            print("  过滤统计:")
+            for key, value in sorted(totals.items()):
+                print(f"     {key}: {value:,}")
         return
 
     total    = len(samples)
@@ -595,6 +759,15 @@ def analyze_results(samples: List[dict], strategy: str, hold_bars: int) -> None:
             wr = sum(1 for s in grp if s["win"]) / len(grp) * 100
             avg = sum(s["ret_pct"] for s in grp) / len(grp)
             print(f"     {reason}: {len(grp):,} 笔，胜率 {wr:.1f}%，均收益 {avg:+.2f}%")
+
+    if summary_rows:
+        totals: Dict[str, int] = {}
+        for row in summary_rows:
+            for key, value in row.get("rejection_counts", {}).items():
+                totals[key] = totals.get(key, 0) + value
+        print(f"\n  🧱 过滤统计:")
+        for key, value in sorted(totals.items()):
+            print(f"     {key}: {value:,}")
 
     print()
 
@@ -828,7 +1001,7 @@ def optimize_params(samples: List[dict], strategy: str) -> None:
         print(f"  {thresh:>6} {n:>7,} {wr:>6.1f}% {avg:>+8.2f}% {med:>+8.2f}% {ir:>8.3f} {composite:>9.4f}{marker}")
 
     print(f"\n  🎯 建议入场门槛: 评分 ≥ {best_thresh}  (综合评分最优)")
-    print(f"     当前代码默认门槛: oversold=25, overbought=40, reversal=55")
+    print(f"     当前代码默认门槛: oversold=40, overbought=40, reversal=55")
     print()
 
 
@@ -877,7 +1050,7 @@ def main():
     )
     parser.add_argument(
         "--execution-sim", action="store_true",
-        help="使用 ATR SL/TP、手续费/滑点和 24h 持仓近似模拟 reversal_4h 实盘执行",
+        help="使用 ATR SL/TP、手续费/滑点和实盘过滤近似模拟 oversold_4h/reversal_4h 执行",
     )
     args = parser.parse_args()
 
@@ -909,7 +1082,7 @@ def main():
     for strategy in strategies:
         interval  = INTERVALS[strategy]
         hold_bars = args.hold if args.hold else HOLD_BARS[strategy]
-        if args.execution_sim and strategy == "reversal_4h" and args.hold is None:
+        if args.execution_sim and strategy in ("oversold_4h", "reversal_4h") and args.hold is None:
             hold_bars = 6
 
         all_symbols = get_all_symbols(conn, interval)
@@ -924,8 +1097,8 @@ def main():
             print(f"   全量回测: {len(symbols)} 个")
 
         print(f"\n⏳ 回测策略: {strategy}（持有 {hold_bars} 根K线）...")
-        if args.execution_sim and strategy == "reversal_4h":
-            print("   执行近似: ATR SL/TP + 24h max hold + 0.12% 成本")
+        if args.execution_sim and strategy in ("oversold_4h", "reversal_4h"):
+            print("   执行近似: 实盘过滤 + ATR SL/TP + 24h max hold + 0.12% 成本")
 
         all_samples = []
         for idx, symbol in enumerate(symbols):
@@ -943,15 +1116,19 @@ def main():
             except Exception as e:
                 pass
             if (idx + 1) % 50 == 0:
-                print(f"   进度: {idx+1}/{len(symbols)}，样本: {len(all_samples):,}")
+                trade_count = sum(
+                    1 for row in all_samples if row.get("exit_reason") != "summary"
+                )
+                print(f"   进度: {idx+1}/{len(symbols)}，样本: {trade_count:,}")
 
-        print(f"   完成，共 {len(all_samples):,} 个样本点")
+        trade_samples = [s for s in all_samples if s.get("exit_reason") != "summary"]
+        print(f"   完成，共 {len(trade_samples):,} 个样本点")
         analyze_results(all_samples, strategy, hold_bars)
 
-        if args.optimize and all_samples:
-            optimize_params(all_samples, strategy)
+        if args.optimize and trade_samples:
+            optimize_params(trade_samples, strategy)
 
-        if args.dim_analysis and all_samples:
+        if args.dim_analysis and trade_samples:
             analyze_dimensions(conn, symbols, strategy, start_ms, end_ms, hold_bars)
 
     conn.close()

@@ -64,6 +64,7 @@ from src.skills.crypto_overbought import (
     H1_W_SHADOW as OB_H1_W_SHAD, H1_W_SQUEEZE_RISK as OB_H1_W_SQZ,
 )
 from src.skills.crypto_reversal import (
+    ShortTermReversalSkill,
     calc_reversal_score,
     ST_BOTTOM_LOOKBACK as REV_ST_BOT_LB,
     ST_PRICE_STABLE_WINDOW as REV_ST_STABLE_W,
@@ -257,6 +258,11 @@ def score_overbought_1h(klines: List[dict]) -> Optional[float]:
 
 
 def score_reversal_4h(klines: List[dict]) -> Optional[float]:
+    result = score_reversal_4h_detail(klines)
+    return float(result["reversal_score"]) if result else None
+
+
+def score_reversal_4h_detail(klines: List[dict]) -> Optional[dict]:
     if len(klines) < 80:
         return None
     c  = [k["close"]  for k in klines]
@@ -264,7 +270,7 @@ def score_reversal_4h(klines: List[dict]) -> Optional[float]:
     lo = [k["low"]    for k in klines]
     o  = [k["open"]   for k in klines]
     v  = [k["volume"] for k in klines]
-    r = calc_reversal_score(
+    return calc_reversal_score(
         c, h, lo, o, v,
         None,  # funding_rate
         REV_ST_BOT_LB, REV_ST_STABLE_W, REV_ST_DROP_LB,
@@ -276,7 +282,6 @@ def score_reversal_4h(klines: List[dict]) -> Optional[float]:
          "prior_drop": REV_ST_W_DROP, "kdj_cross": REV_ST_W_KDJ,
          "shadow": REV_ST_W_SHAD},
     )
-    return float(r["reversal_score"])
 
 
 def score_reversal_1h(klines: List[dict]) -> Optional[float]:
@@ -323,6 +328,7 @@ def backtest_symbol(
     start_ms: int,
     end_ms: int,
     hold_bars: int,
+    execution_sim: bool = False,
 ) -> List[dict]:
     """对单个交易对做滑动窗口回测，返回样本点列表。"""
     interval  = INTERVALS[strategy]
@@ -363,14 +369,45 @@ def backtest_symbol(
             i += step
             continue
 
+        if execution_sim and strategy == "reversal_4h":
+            detail = score_reversal_4h_detail(window)
+            if not detail or detail["reversal_score"] < 55:
+                i += step
+                continue
+            closes = [k["close"] for k in window]
+            highs = [k["high"] for k in window]
+            lows = [k["low"] for k in window]
+            confirmation = ShortTermReversalSkill._build_4h_confirmation(
+                closes=closes,
+                highs=highs,
+                lows=lows,
+                current_price=klines[i]["close"],
+                dist_bottom_pct=detail.get("dist_bottom_pct"),
+                kdj_score=detail.get("kdj_score", 0),
+                rsi_1h=None,
+            )
+            if not confirmation["passed"]:
+                i += step
+                continue
+
         entry_close = klines[i]["close"]
         exit_close  = klines[i + hold_bars]["close"]
         if entry_close <= 0:
             i += step
             continue
 
+        exit_reason = "time_exit"
         # 收益率（做多/做空方向）
-        if direction == "long":
+        if execution_sim and strategy == "reversal_4h":
+            ret_pct, exit_reason = simulate_reversal_4h_execution(
+                window,
+                klines[i + 1: i + hold_bars + 1],
+                entry_close,
+            )
+            if exit_reason == "skip_high_atr":
+                i += step
+                continue
+        elif direction == "long":
             ret_pct = (exit_close - entry_close) / entry_close * 100
         else:
             ret_pct = (entry_close - exit_close) / entry_close * 100
@@ -400,10 +437,62 @@ def backtest_symbol(
             "ret_pct":      round(ret_pct, 2),
             "max_drawdown": round(max_drawdown, 2),
             "win":          ret_pct > 0,
+            "exit_reason":  exit_reason,
         })
         i += step
 
     return results
+
+
+def _calc_simple_atr_pct(klines: List[dict], period: int = 20) -> Optional[float]:
+    """计算回测用 ATR 百分比。"""
+    if len(klines) < period + 1:
+        return None
+    trs = []
+    for idx in range(1, len(klines)):
+        high = klines[idx]["high"]
+        low = klines[idx]["low"]
+        prev_close = klines[idx - 1]["close"]
+        trs.append(max(high - low, abs(high - prev_close), abs(low - prev_close)))
+    if len(trs) < period:
+        return None
+    close = klines[-1]["close"]
+    if close <= 0:
+        return None
+    return (sum(trs[-period:]) / period) / close * 100
+
+
+def simulate_reversal_4h_execution(
+    history: List[dict],
+    future: List[dict],
+    entry: float,
+) -> tuple[float, str]:
+    """近似模拟 4h 反转实盘执行：ATR SL/TP + 24h 持仓 + taker/slippage 成本。"""
+    atr_pct = _calc_simple_atr_pct(history, 20)
+    if atr_pct is None or atr_pct <= 0:
+        sl_pct = 0.03
+        tp_pct = 0.06
+    else:
+        raw_sl = atr_pct / 100.0 * 1.5
+        if raw_sl > 0.10:
+            return 0.0, "skip_high_atr"
+        sl_pct = max(0.005, min(0.10, raw_sl))
+        tp_mult = 4.0 if atr_pct >= 5.0 else 3.5
+        tp_pct = sl_pct * (tp_mult / 1.5)
+
+    stop = entry * (1 - sl_pct)
+    take_profit = entry * (1 + tp_pct)
+    round_trip_cost_pct = 0.12
+    for bar in future:
+        # 同一根 K 线同时触发时按保守顺序：先止损。
+        if bar["low"] <= stop:
+            return ((stop - entry) / entry * 100) - round_trip_cost_pct, "stop_loss"
+        if bar["high"] >= take_profit:
+            return ((take_profit - entry) / entry * 100) - round_trip_cost_pct, "take_profit"
+    if not future:
+        return -round_trip_cost_pct, "no_future"
+    exit_close = future[-1]["close"]
+    return ((exit_close - entry) / entry * 100) - round_trip_cost_pct, "time_exit"
 
 
 # ══════════════════════════════════════════════════════════
@@ -495,6 +584,17 @@ def analyze_results(samples: List[dict], strategy: str, hold_bars: int) -> None:
             else:
                 high_str = "  无样本"
             print(f"  {yr:>6} {len(yr_all):>7,} {wr_all:>6.1f}% {avg_all:>+8.2f}%{high_str}")
+
+    if any("exit_reason" in s for s in samples):
+        print(f"\n  🚪 退出原因分布:")
+        reasons = sorted(set(s.get("exit_reason", "time_exit") for s in samples))
+        for reason in reasons:
+            grp = [s for s in samples if s.get("exit_reason", "time_exit") == reason]
+            if not grp:
+                continue
+            wr = sum(1 for s in grp if s["win"]) / len(grp) * 100
+            avg = sum(s["ret_pct"] for s in grp) / len(grp)
+            print(f"     {reason}: {len(grp):,} 笔，胜率 {wr:.1f}%，均收益 {avg:+.2f}%")
 
     print()
 
@@ -775,6 +875,10 @@ def main():
         "--dim-analysis", action="store_true",
         help="开启子维度预测力分析",
     )
+    parser.add_argument(
+        "--execution-sim", action="store_true",
+        help="使用 ATR SL/TP、手续费/滑点和 24h 持仓近似模拟 reversal_4h 实盘执行",
+    )
     args = parser.parse_args()
 
     from datetime import timezone as _tz
@@ -805,6 +909,8 @@ def main():
     for strategy in strategies:
         interval  = INTERVALS[strategy]
         hold_bars = args.hold if args.hold else HOLD_BARS[strategy]
+        if args.execution_sim and strategy == "reversal_4h" and args.hold is None:
+            hold_bars = 6
 
         all_symbols = get_all_symbols(conn, interval)
         print(f"\n   [{strategy}] 可用交易对: {len(all_symbols):,} 个 (interval={interval})")
@@ -818,11 +924,21 @@ def main():
             print(f"   全量回测: {len(symbols)} 个")
 
         print(f"\n⏳ 回测策略: {strategy}（持有 {hold_bars} 根K线）...")
+        if args.execution_sim and strategy == "reversal_4h":
+            print("   执行近似: ATR SL/TP + 24h max hold + 0.12% 成本")
 
         all_samples = []
         for idx, symbol in enumerate(symbols):
             try:
-                s = backtest_symbol(conn, symbol, strategy, start_ms, end_ms, hold_bars)
+                s = backtest_symbol(
+                    conn,
+                    symbol,
+                    strategy,
+                    start_ms,
+                    end_ms,
+                    hold_bars,
+                    execution_sim=args.execution_sim,
+                )
                 all_samples.extend(s)
             except Exception as e:
                 pass

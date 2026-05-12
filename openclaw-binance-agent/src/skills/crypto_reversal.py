@@ -109,21 +109,20 @@ ST_DIST_BOTTOM_IDEAL_MIN = 3.0  # 距底部理想距离下限（%）
 ST_DIST_BOTTOM_IDEAL_MAX = 12.0  # 距底部理想距离上限（%，币圈波动大）
 ST_SHADOW_RATIO_THRESHOLD = 2.0  # 下影线长度 / 实体长度 ≥ 2 倍
 
-# 短期评分权重（满分 100）— 回测优化后 v2
-# 回测结论（200币 × 6个月，持有 18 根 4h）：
-#   弱有效：底部放量(+0.24%) 距底部距离(+0.17%) KDJ金叉(+0.21%) 前期跌幅(+0.06%)
-#   反效果：价格企稳(-0.54%) MACD反转(-0.71%) 长下影线(-0.36%) 均线拐头(-0.31%)
-#   无数据：资金费率（实盘有效，保留高权重）
-ST_W_VOLUME_SURGE = 22  # 底部放量（弱有效，升权 18→22，是最可靠的信号）
-ST_W_PRICE_STABLE = 6  # 价格企稳（反效果，降权 15→6，保留少量因为逻辑上合理）
-ST_W_MA_TURN = 5  # 均线拐头（反效果，降权 12→5）
-ST_W_FUNDING = 20  # 资金费率回归（实盘有效，升权 15→20）
-ST_W_MACD_REVERSAL = 3  # MACD 反转（最差维度，降权 8→3）
-ST_W_DIST_BOTTOM = 14  # 距底部距离（弱有效，升权 10→14）
-ST_W_PRIOR_DROP = 12  # 前期跌幅深度（弱有效，升权 7→12）
-ST_W_KDJ_CROSS = 13  # KDJ 低位金叉（弱有效，升权 8→13）
-ST_W_SHADOW = 3  # 长下影线（反效果，降权 7→3）
-# 总计：22+6+5+20+3+14+12+13+3 = 98（资金费率实盘补足）
+# 短期评分权重（满分 100）— 右侧确认 v3
+# 最新本地回测（2025-11-01~2026-05-12）显示：
+#   有效：距底部距离、KDJ 金叉；弱有效：前期跌幅。
+#   反效果：底部放量、价格企稳、均线拐头、MACD、长下影线。
+# 因此 4h 模式改成“少交易、高确认”：形态类反效果维度只保留少量参考分。
+ST_W_VOLUME_SURGE = 6
+ST_W_PRICE_STABLE = 2
+ST_W_MA_TURN = 2
+ST_W_FUNDING = 8
+ST_W_MACD_REVERSAL = 2
+ST_W_DIST_BOTTOM = 35
+ST_W_PRIOR_DROP = 18
+ST_W_KDJ_CROSS = 25
+ST_W_SHADOW = 2
 
 # ══════════════════════════════════════════════════════════
 # 超短期反转参数（1h K 线）
@@ -292,7 +291,7 @@ class _CryptoReversalBase(BaseSkill):
             return self._client.get_klines_cached(symbol, interval, limit)
         return self._client.get_klines(symbol, interval, limit)
 
-    def _get_market_regime(self, input_data: dict) -> dict:
+    def _get_market_regime(self, input_data: dict, tickers: Optional[list] = None) -> dict:
         """
         判断当前市场是否适合做趋势反转。
 
@@ -309,28 +308,129 @@ class _CryptoReversalBase(BaseSkill):
             return {"status": "unknown", "reason": f"fetch_failed:{exc}"}
 
         if not klines or len(klines) < 60:
-            return {"status": "unknown", "reason": "insufficient_market_klines"}
+            return {"status": "blocked", "reason": "insufficient_market_klines"}
 
         closes = [float(k[4]) for k in klines]
         last_close = closes[-1]
+        ema5 = calc_ema(closes, 5)[-1]
+        ema20 = calc_ema(closes, 20)[-1]
         lookback = 6
         recent_return_pct = (
             (last_close - closes[-lookback]) / closes[-lookback] * 100
             if len(closes) > lookback and closes[-lookback] > 0
             else 0.0
         )
+        breadth_pct = None
+        if tickers:
+            valid_changes = []
+            for ticker in tickers:
+                sym = ticker.get("symbol", "")
+                if not sym.endswith("USDT"):
+                    continue
+                try:
+                    valid_changes.append(float(ticker.get("priceChangePercent", 0)))
+                except (TypeError, ValueError):
+                    continue
+            if valid_changes:
+                breadth_pct = sum(1 for x in valid_changes if x > 0) / len(valid_changes) * 100
+
         if recent_return_pct <= -5.0:
             return {
                 "status": "blocked",
                 "reason": f"BTC 短期暴跌 {recent_return_pct:.2f}%，反转信号不可靠",
                 "symbol": symbol,
                 "recent_return_pct": round(recent_return_pct, 4),
+                "breadth_pct": round(breadth_pct, 2) if breadth_pct is not None else None,
+            }
+        if (
+            not math.isnan(ema5)
+            and not math.isnan(ema20)
+            and last_close < ema20
+            and ema5 < ema20 * 0.995
+        ):
+            return {
+                "status": "blocked",
+                "reason": "BTC 4h 短期趋势偏弱，暂停右侧反转做多",
+                "symbol": symbol,
+                "recent_return_pct": round(recent_return_pct, 4),
+                "btc_ema5": round(ema5, 4),
+                "btc_ema20": round(ema20, 4),
+                "breadth_pct": round(breadth_pct, 2) if breadth_pct is not None else None,
+            }
+        if breadth_pct is not None and breadth_pct < 45.0:
+            return {
+                "status": "blocked",
+                "reason": f"全市场上涨广度 {breadth_pct:.1f}% 过低，暂停右侧反转做多",
+                "symbol": symbol,
+                "recent_return_pct": round(recent_return_pct, 4),
+                "btc_ema5": round(ema5, 4) if not math.isnan(ema5) else None,
+                "btc_ema20": round(ema20, 4) if not math.isnan(ema20) else None,
+                "breadth_pct": round(breadth_pct, 2),
             }
         return {
             "status": "enabled",
             "reason": "market_regime_ok",
             "symbol": symbol,
             "recent_return_pct": round(recent_return_pct, 4),
+            "btc_ema5": round(ema5, 4) if not math.isnan(ema5) else None,
+            "btc_ema20": round(ema20, 4) if not math.isnan(ema20) else None,
+            "breadth_pct": round(breadth_pct, 2) if breadth_pct is not None else None,
+        }
+
+    @staticmethod
+    def _build_4h_confirmation(
+        closes: List[float],
+        highs: List[float],
+        lows: List[float],
+        current_price: float,
+        dist_bottom_pct: Optional[float],
+        kdj_score: float,
+        rsi_1h: Optional[float],
+    ) -> dict:
+        """构建 4h 右侧入场二次确认。"""
+        cond_dist = (
+            dist_bottom_pct is not None
+            and ST_DIST_BOTTOM_IDEAL_MIN <= dist_bottom_pct <= ST_DIST_BOTTOM_IDEAL_MAX
+        )
+        cond_kdj = kdj_score > 0
+        cond_rsi_1h = rsi_1h is not None and 50.0 <= rsi_1h < 70.0
+
+        recent_high = max(highs[-3:-1]) if len(highs) >= 3 else 0.0
+        breakout = current_price > 0 and recent_high > 0 and current_price > recent_high
+
+        ema5 = calc_ema(closes, 5)[-1] if len(closes) >= 5 else float("nan")
+        ema10 = calc_ema(closes, 10)[-1] if len(closes) >= 10 else float("nan")
+        pullback_hold = False
+        if current_price > 0 and not math.isnan(ema5) and not math.isnan(ema10):
+            support = min(ema5, ema10)
+            resistance = max(ema5, ema10)
+            pullback_hold = (
+                current_price >= support * 0.995
+                and current_price <= resistance * 1.02
+                and lows[-1] >= support * 0.985
+            )
+
+        passed = cond_dist and (cond_kdj or cond_rsi_1h) and (breakout or pullback_hold)
+        reasons = []
+        if cond_dist:
+            reasons.append("距底理想")
+        if cond_kdj:
+            reasons.append("KDJ确认")
+        if cond_rsi_1h:
+            reasons.append("1h RSI确认")
+        if breakout:
+            reasons.append("突破近2根4h高点")
+        if pullback_hold:
+            reasons.append("回踩EMA不破")
+
+        return {
+            "passed": passed,
+            "cond_dist": cond_dist,
+            "cond_kdj": cond_kdj,
+            "cond_rsi_1h": cond_rsi_1h,
+            "breakout": breakout,
+            "pullback_hold": pullback_hold,
+            "reason": " | ".join(reasons) if reasons else "二次确认不足",
         }
 
     def _run_scan(
@@ -360,8 +460,8 @@ class _CryptoReversalBase(BaseSkill):
         total_count = len(tickers)
         funding_map = self._build_funding_map()
         tradable = self._get_tradable_symbols()
-        market_regime = self._get_market_regime(input_data)
-        if market_regime.get("status") == "blocked":
+        market_regime = self._get_market_regime(input_data, tickers=tickers)
+        if market_regime.get("status") != "enabled":
             log.warning(
                 "[%s] 市场状态阻断反转交易: %s",
                 self.name,
@@ -561,7 +661,7 @@ class _CryptoReversalBase(BaseSkill):
                         result["reversal_score"] -= 3
                         result["rsi_1h_bonus"] = -3
 
-                if result["reversal_score"] < min_score and not target_symbols:
+                if result["reversal_score"] < min_score:
                     continue
 
                 # 1h 模式放量软过滤：回测显示 1h 放量是反效果维度（-1.29%），
@@ -628,34 +728,23 @@ class _CryptoReversalBase(BaseSkill):
                         )
                         continue
 
-                # 4h 模式底部确认：至少满足2个条件（比1h宽松）
-                # 4h 策略已有盈利，但CHZ等币亏损较大，加底部确认减少接刀
-                # 条件：KDJ金叉 OR MACD底背离 OR 距底部在理想区间
-                if interval == "4h" and not target_symbols:
-                    dist_bottom_pct = result.get("dist_bottom_pct")
-                    if (
-                        dist_bottom_pct is None or dist_bottom_pct < 2.0
-                    ):  # 4h安全线略宽：2%
+                reversal_confirmation = None
+                if interval == "4h":
+                    reversal_confirmation = self._build_4h_confirmation(
+                        closes=closes,
+                        highs=highs,
+                        lows=lows,
+                        current_price=current_price,
+                        dist_bottom_pct=result.get("dist_bottom_pct"),
+                        kdj_score=result.get("kdj_score", 0),
+                        rsi_1h=rsi_1h,
+                    )
+                    if not reversal_confirmation["passed"]:
                         log.info(
-                            "[%s] %s 4h反弹不足2%%，跳过接刀: dist_bottom=%.2f%%",
+                            "[%s] %s 4h右侧二次确认不足，跳过: %s",
                             self.name,
                             symbol,
-                            dist_bottom_pct if dist_bottom_pct is not None else 0.0,
-                        )
-                        continue
-                    cond_dist_4h = 3.0 <= dist_bottom_pct <= 12.0
-                    cond_kdj_4h = result.get("kdj_score", 0) > 0
-                    cond_macd_4h = result.get("macd_reversal_score", 0) > 0
-                    confirm_count_4h = sum([cond_dist_4h, cond_kdj_4h, cond_macd_4h])
-                    if confirm_count_4h < 2:
-                        log.info(
-                            "[%s] %s 4h底部确认不足（%d/3）: dist=%.2f%% kdj=%s macd=%s",
-                            self.name,
-                            symbol,
-                            confirm_count_4h,
-                            dist_bottom_pct,
-                            cond_kdj_4h,
-                            cond_macd_4h,
+                            reversal_confirmation["reason"],
                         )
                         continue
 
@@ -717,6 +806,7 @@ class _CryptoReversalBase(BaseSkill):
                         "prior_drop_score": result["prior_drop_score"],
                         "kdj_score": result["kdj_score"],
                         "shadow_score": result["shadow_score"],
+                        "reversal_confirmation": reversal_confirmation,
                         "signal_details": result["signal_details"],
                         "atr_pct": atr_pct,
                         "atr_filter_pct": atr_filter_pct,

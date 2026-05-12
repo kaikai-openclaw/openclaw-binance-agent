@@ -2,6 +2,9 @@
 """
 完整 Pipeline 入口脚本（OpenClaw skill 调用入口）
 
+注意：这是通用候选 Pipeline，不是 4h 右侧反转专用入口。
+4h 反转实盘/定时任务应使用 run_reversal_cron.py --mode 4h。
+
 5 步流水线：信息收集 → 深度分析 → 策略制定 → 自动执行 → 展示进化
 
 用法:

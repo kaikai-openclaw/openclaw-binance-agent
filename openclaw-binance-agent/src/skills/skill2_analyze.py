@@ -25,7 +25,7 @@ log = logging.getLogger(__name__)
 AnalyzerFn = Callable[[str, Dict[str, Any]], Dict[str, Any]]
 
 # 默认评级过滤阈值
-DEFAULT_RATING_THRESHOLD = 7
+DEFAULT_RATING_THRESHOLD = 6
 
 # TradingAgents 分析超时（秒），30 分钟以满足多智能体深度辩论
 ANALYSIS_TIMEOUT = 1800
@@ -169,7 +169,7 @@ class Skill2Analyze(BaseSkill):
         upstream_strategy_tag = (
             upstream_data.get("strategy_tag")
             or input_data.get("strategy_tag")
-            or "crypto_reversal_4h"
+            or ""
         )
 
         log.info(
@@ -239,7 +239,7 @@ class Skill2Analyze(BaseSkill):
                     strategy_tag = (
                         candidate.get("strategy_tag") or upstream_strategy_tag
                     )
-                    rating["strategy_tag"] = strategy_tag
+                    rating["strategy_tag"] = strategy_tag or "crypto_generic"
                     # 透传扫描层预期方向，供 Skill3 在 hold 时使用
                     signal_direction = candidate.get("signal_direction")
                     if signal_direction:
@@ -249,7 +249,8 @@ class Skill2Analyze(BaseSkill):
                     # hold 信号不视为冲突（LLM 不确定时保留原始评分，靠门槛自然过滤）
                     # 只有反方向（预期 long 但 LLM 说 short，或反之）才强制降级
                     expected_signal = candidate.get("signal_direction")
-                    if expected_signal and expected_signal != "hold":
+                    enforce_direction = rating["strategy_tag"] != "crypto_generic"
+                    if enforce_direction and expected_signal and expected_signal != "hold":
                         opposite = {"long": "short", "short": "long"}
                         if rating["signal"] == opposite.get(expected_signal):
                             log.warning(

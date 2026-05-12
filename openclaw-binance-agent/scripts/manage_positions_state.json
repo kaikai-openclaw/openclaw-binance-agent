@@ -1,56 +1,56 @@
 {
-  "BASEDUSDT": {
-    "original_sl_dist": 0.007718675417699994,
+  "OPENUSDT": {
+    "original_sl_dist": 0.01369999999999999,
     "strategy_tag": "crypto_reversal_4h",
-    "original_tp": 0.1151,
+    "original_tp": 0.2294,
     "tp_decay_step": 2,
     "sl_step": 0,
-    "open_ms": 1778209339409.115,
+    "open_ms": 1778438105140.131,
     "direction": "LONG"
   },
-  "1000SHIBUSDT": {
-    "original_sl_dist": 0.00014699999999999956,
+  "XRPUSDT": {
+    "original_sl_dist": 0.02639999999999998,
     "strategy_tag": "crypto_reversal_4h",
-    "original_tp": 0.006662,
-    "tp_decay_step": 0,
+    "original_tp": 1.5236,
+    "tp_decay_step": 2,
     "sl_step": 0,
-    "open_ms": 1778243709346.782,
+    "open_ms": 1778452504888.0068,
     "direction": "LONG"
   },
-  "BCHUSDT": {
-    "original_sl_dist": 8.20999999999998,
+  "ZBTUSDT": {
+    "original_sl_dist": 0.011520000000000002,
     "strategy_tag": "crypto_reversal_4h",
-    "original_tp": 470.61,
+    "original_tp": 0.18484,
     "tp_decay_step": 0,
     "sl_step": 0,
-    "open_ms": 1778272508800.451,
+    "open_ms": 1778531706318.43,
     "direction": "LONG"
   },
-  "SKYUSDT": {
-    "original_sl_dist": 0.002449999999999994,
+  "LYNUSDT": {
+    "original_sl_dist": 0.00408,
     "strategy_tag": "crypto_reversal_4h",
-    "original_tp": 0.08852,
+    "original_tp": 0.06357,
     "tp_decay_step": 0,
     "sl_step": 0,
-    "open_ms": 1778286910977.182,
+    "open_ms": 1778531706318.43,
     "direction": "LONG"
   },
-  "OPGUSDT": {
-    "original_sl_dist": 0.01992072800809999,
+  "GENIUSUSDT": {
+    "original_sl_dist": 0.04400000000000004,
     "strategy_tag": "crypto_reversal_4h",
-    "original_tp": 0.3029,
+    "original_tp": 0.6702,
     "tp_decay_step": 0,
     "sl_step": 0,
-    "open_ms": 1778297710984.205,
+    "open_ms": 1778560505483.041,
     "direction": "LONG"
   },
-  "EDGEUSDT": {
-    "original_sl_dist": 0.0675883838389999,
+  "PROMPTUSDT": {
+    "original_sl_dist": 0.001993206616399998,
     "strategy_tag": "crypto_reversal_4h",
-    "original_tp": 1.4807,
+    "original_tp": 0.04505,
     "tp_decay_step": 0,
     "sl_step": 0,
-    "open_ms": 1778297710984.205,
+    "open_ms": 1778567706123.136,
     "direction": "LONG"
   }
 }

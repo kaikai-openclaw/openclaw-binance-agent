@@ -40,8 +40,8 @@ class RiskController:
 
     # 硬编码常量（不可配置）
     # 注意：以下常量与 SOUL.md / MEMORY.md 保持严格一致，修改前必须先更新文档。
-    # 单笔保证金 <= 总资金 20%（SOUL.md 红线，P0）
-    MAX_SINGLE_MARGIN_RATIO = 0.20
+    # 单笔保证金 <= 总资金 25%（SOUL.md 红线，P0）
+    MAX_SINGLE_MARGIN_RATIO = 0.25
     MAX_SINGLE_COIN_RATIO = 0.40  # 单币累计持仓 <= 总资金 40%
     DAILY_LOSS_THRESHOLD = 0.05  # 日亏损阈值 5%
     STOP_LOSS_COOLDOWN_HOURS = 24  # 止损后同方向冷却期（小时）

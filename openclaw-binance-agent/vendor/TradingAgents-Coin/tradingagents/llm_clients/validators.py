@@ -103,6 +103,8 @@ VALID_MODELS = {
     ],
     "zhipu": [
         # GLM-5 series
+        "glm-5.1",
+        "glm-5.1-flash",
         "glm-5",
         # GLM-4.5 series
         "glm-4.5",

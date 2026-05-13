@@ -190,6 +190,27 @@ DEFAULT_MIN_QUOTE_VOLUME = 10_000_000
 DEFAULT_MIN_REVERSAL_SCORE = 55  # 回测优化最优值：胜率60.3%，均收益+0.91%
 DEFAULT_MAX_CANDIDATES = 10
 
+MARKET_BREADTH_MIN_QUOTE_VOLUME = 20_000_000
+MARKET_BREADTH_MIN_SAMPLE_SIZE = 30
+MAJOR_BREADTH_MIN_SAMPLE_SIZE = 5
+MAJOR_BREADTH_BASES = {
+    "BTC",
+    "ETH",
+    "BNB",
+    "SOL",
+    "XRP",
+    "DOGE",
+    "ADA",
+    "AVAX",
+    "LINK",
+    "LTC",
+    "BCH",
+    "DOT",
+    "NEAR",
+    "AAVE",
+    "UNI",
+}
+
 
 # ══════════════════════════════════════════════════════════
 # 共享基类
@@ -291,6 +312,76 @@ class _CryptoReversalBase(BaseSkill):
             return self._client.get_klines_cached(symbol, interval, limit)
         return self._client.get_klines(symbol, interval, limit)
 
+    def _calculate_market_breadth(self, tickers: Optional[list]) -> dict:
+        """计算 24h/4h 全市场和主流币上涨广度。"""
+        breadth = {
+            "breadth_pct_24h": None,
+            "breadth_pct_4h": None,
+            "major_breadth_pct_4h": None,
+            "breadth_sample_size": 0,
+            "major_breadth_sample_size": 0,
+        }
+        if not tickers:
+            return breadth
+
+        universe = []
+        for ticker in tickers:
+            sym = ticker.get("symbol", "")
+            if not sym.endswith("USDT"):
+                continue
+            try:
+                quote_volume = float(ticker.get("quoteVolume", 0))
+                change_24h = float(ticker.get("priceChangePercent", 0))
+            except (TypeError, ValueError):
+                continue
+            if quote_volume < MARKET_BREADTH_MIN_QUOTE_VOLUME:
+                continue
+            universe.append((sym, change_24h))
+
+        if universe:
+            up_24h = sum(1 for _, change in universe if change > 0)
+            breadth["breadth_pct_24h"] = round(up_24h / len(universe) * 100, 2)
+
+        up_4h = 0
+        sample_4h = 0
+        major_up_4h = 0
+        major_sample_4h = 0
+        for symbol, _ in universe:
+            try:
+                klines_4h = self._fetch_klines(symbol, "4h", 2)
+            except Exception:
+                continue
+            if not klines_4h or len(klines_4h) < 2:
+                continue
+            try:
+                prev_close = float(klines_4h[-2][4])
+                last_close = float(klines_4h[-1][4])
+            except (TypeError, ValueError, IndexError):
+                continue
+            if prev_close <= 0:
+                continue
+
+            sample_4h += 1
+            is_up = last_close > prev_close
+            if is_up:
+                up_4h += 1
+
+            base = symbol[:-4]
+            if base in MAJOR_BREADTH_BASES:
+                major_sample_4h += 1
+                if is_up:
+                    major_up_4h += 1
+
+        breadth["breadth_sample_size"] = sample_4h
+        breadth["major_breadth_sample_size"] = major_sample_4h
+        if sample_4h:
+            breadth["breadth_pct_4h"] = round(up_4h / sample_4h * 100, 2)
+        if major_sample_4h:
+            breadth["major_breadth_pct_4h"] = round(
+                major_up_4h / major_sample_4h * 100, 2
+            )
+        return breadth
+
     def _get_market_regime(self, input_data: dict, tickers: Optional[list] = None) -> dict:
         """
         判断当前市场是否适合做趋势反转。
@@ -320,27 +411,20 @@ class _CryptoReversalBase(BaseSkill):
             if len(closes) > lookback and closes[-lookback] > 0
             else 0.0
         )
-        breadth_pct = None
-        if tickers:
-            valid_changes = []
-            for ticker in tickers:
-                sym = ticker.get("symbol", "")
-                if not sym.endswith("USDT"):
-                    continue
-                try:
-                    valid_changes.append(float(ticker.get("priceChangePercent", 0)))
-                except (TypeError, ValueError):
-                    continue
-            if valid_changes:
-                breadth_pct = sum(1 for x in valid_changes if x > 0) / len(valid_changes) * 100
+        breadth = self._calculate_market_breadth(tickers)
+        breadth_pct_4h = breadth["breadth_pct_4h"]
+        major_breadth_pct_4h = breadth["major_breadth_pct_4h"]
 
         if recent_return_pct <= -5.0:
             return {
                 "status": "blocked",
+                "breadth_status": "blocked",
                 "reason": f"BTC 短期暴跌 {recent_return_pct:.2f}%，反转信号不可靠",
                 "symbol": symbol,
                 "recent_return_pct": round(recent_return_pct, 4),
-                "breadth_pct": round(breadth_pct, 2) if breadth_pct is not None else None,
+                "breadth_pct": breadth_pct_4h,
+                "score_adjustment": 0,
+                **breadth,
             }
         if (
             not math.isnan(ema5)
@@ -350,31 +434,87 @@ class _CryptoReversalBase(BaseSkill):
         ):
             return {
                 "status": "blocked",
+                "breadth_status": "blocked",
                 "reason": "BTC 4h 短期趋势偏弱，暂停右侧反转做多",
                 "symbol": symbol,
                 "recent_return_pct": round(recent_return_pct, 4),
                 "btc_ema5": round(ema5, 4),
                 "btc_ema20": round(ema20, 4),
-                "breadth_pct": round(breadth_pct, 2) if breadth_pct is not None else None,
+                "breadth_pct": breadth_pct_4h,
+                "score_adjustment": 0,
+                **breadth,
             }
-        if breadth_pct is not None and breadth_pct < 45.0:
+        if breadth["breadth_sample_size"] < MARKET_BREADTH_MIN_SAMPLE_SIZE:
             return {
                 "status": "blocked",
-                "reason": f"全市场上涨广度 {breadth_pct:.1f}% 过低，暂停右侧反转做多",
+                "breadth_status": "blocked",
+                "reason": (
+                    f"4h 广度样本不足 {breadth['breadth_sample_size']}，暂停右侧反转做多"
+                ),
                 "symbol": symbol,
                 "recent_return_pct": round(recent_return_pct, 4),
                 "btc_ema5": round(ema5, 4) if not math.isnan(ema5) else None,
                 "btc_ema20": round(ema20, 4) if not math.isnan(ema20) else None,
-                "breadth_pct": round(breadth_pct, 2),
+                "breadth_pct": breadth_pct_4h,
+                "score_adjustment": 0,
+                **breadth,
+            }
+        if breadth_pct_4h is not None and breadth_pct_4h < 35.0:
+            return {
+                "status": "blocked",
+                "breadth_status": "blocked",
+                "reason": f"全市场4h上涨广度 {breadth_pct_4h:.1f}% 过低，暂停右侧反转做多",
+                "symbol": symbol,
+                "recent_return_pct": round(recent_return_pct, 4),
+                "btc_ema5": round(ema5, 4) if not math.isnan(ema5) else None,
+                "btc_ema20": round(ema20, 4) if not math.isnan(ema20) else None,
+                "breadth_pct": breadth_pct_4h,
+                "score_adjustment": 0,
+                **breadth,
+            }
+        score_adjustment = 0
+        breadth_status = "enabled"
+        cautious_reasons = []
+        weak_4h_breadth = breadth_pct_4h is not None and breadth_pct_4h < 45.0
+        weak_major_breadth = (
+            major_breadth_pct_4h is not None
+            and breadth["major_breadth_sample_size"] >= MAJOR_BREADTH_MIN_SAMPLE_SIZE
+            and major_breadth_pct_4h < 40.0
+        )
+        if weak_4h_breadth:
+            breadth_status = "cautious"
+            cautious_reasons.append(f"全市场4h上涨广度 {breadth_pct_4h:.1f}% 偏低")
+        if weak_major_breadth:
+            breadth_status = "cautious"
+            cautious_reasons.append(f"主流币4h上涨广度 {major_breadth_pct_4h:.1f}% 偏低")
+        if weak_4h_breadth and weak_major_breadth:
+            score_adjustment = 15
+        elif weak_4h_breadth or weak_major_breadth:
+            score_adjustment = 10
+        if breadth_status == "cautious":
+            return {
+                "status": "cautious",
+                "breadth_status": "cautious",
+                "reason": "；".join(cautious_reasons),
+                "symbol": symbol,
+                "recent_return_pct": round(recent_return_pct, 4),
+                "btc_ema5": round(ema5, 4) if not math.isnan(ema5) else None,
+                "btc_ema20": round(ema20, 4) if not math.isnan(ema20) else None,
+                "breadth_pct": breadth_pct_4h,
+                "score_adjustment": score_adjustment,
+                **breadth,
             }
         return {
             "status": "enabled",
+            "breadth_status": "enabled",
             "reason": "market_regime_ok",
             "symbol": symbol,
             "recent_return_pct": round(recent_return_pct, 4),
             "btc_ema5": round(ema5, 4) if not math.isnan(ema5) else None,
             "btc_ema20": round(ema20, 4) if not math.isnan(ema20) else None,
-            "breadth_pct": round(breadth_pct, 2) if breadth_pct is not None else None,
+            "breadth_pct": breadth_pct_4h,
+            "score_adjustment": 0,
+            **breadth,
         }
 
     @staticmethod
@@ -461,7 +601,7 @@ class _CryptoReversalBase(BaseSkill):
         funding_map = self._build_funding_map()
         tradable = self._get_tradable_symbols()
         market_regime = self._get_market_regime(input_data, tickers=tickers)
-        if market_regime.get("status") != "enabled":
+        if market_regime.get("status") not in {"enabled", "cautious"}:
             log.warning(
                 "[%s] 市场状态阻断反转交易: %s",
                 self.name,
@@ -479,6 +619,17 @@ class _CryptoReversalBase(BaseSkill):
                 },
                 "market_regime": market_regime,
             }
+        score_adjustment = int(market_regime.get("score_adjustment", 0) or 0)
+        effective_min_score = min_score + score_adjustment
+        market_regime["base_min_reversal_score"] = min_score
+        market_regime["effective_min_reversal_score"] = effective_min_score
+        if market_regime.get("status") == "cautious":
+            log.warning(
+                "[%s] 市场广度谨慎，反转评分门槛提高 %d 分: %s",
+                self.name,
+                score_adjustment,
+                market_regime.get("reason", ""),
+            )
 
         if target_symbols:
             pool = self._build_target_pool(tickers, target_symbols)
@@ -661,7 +812,7 @@ class _CryptoReversalBase(BaseSkill):
                         result["reversal_score"] -= 3
                         result["rsi_1h_bonus"] = -3
 
-                if result["reversal_score"] < min_score:
+                if result["reversal_score"] < effective_min_score:
                     continue
 
                 # 1h 模式放量软过滤：回测显示 1h 放量是反效果维度（-1.29%），
@@ -683,7 +834,7 @@ class _CryptoReversalBase(BaseSkill):
                 # 收紧追高阈值：4h 25%→15%，1h 15%→12%（减少追涨被套）
                 _price_change_pct = float(item.get("priceChangePercent", 0))
                 _chase_threshold = 12.0 if interval == "1h" else 15.0
-                if _price_change_pct > _chase_threshold and not target_symbols:
+                if _price_change_pct > _chase_threshold:
                     log.info(
                         "[%s] %s 24h 涨幅 %.2f%% 超过 %.0f%%，跳过（追高风险）",
                         self.name,

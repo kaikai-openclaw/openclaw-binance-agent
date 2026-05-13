@@ -97,6 +97,7 @@ def _make_skill(
     max_hold_hours=DEFAULT_MAX_HOLD_HOURS,
     leverage=DEFAULT_LEVERAGE,
     trading_rule_provider=None,
+    max_margin_usdt=None,
 ) -> Skill3Strategy:
     """创建 Skill3Strategy 实例的辅助函数。"""
     if risk_controller is None:
@@ -114,6 +115,7 @@ def _make_skill(
         max_hold_hours=max_hold_hours,
         leverage=leverage,
         trading_rule_provider=trading_rule_provider,
+        max_margin_usdt=max_margin_usdt,
         require_market_price=False,  # 测试路径：无 provider 时回退到 TEST_FALLBACK_PRICE
     )
 
@@ -431,6 +433,35 @@ class TestRiskPrecheck:
 
         if result["trade_plans"]:
             assert result["trade_plans"][0]["position_size_pct"] <= 20.0
+
+    def test_max_margin_usdt_applies_after_position_pct_cap(self, state_store):
+        """固定保证金上限应基于百分比裁剪后的真实名义值计算。"""
+        upstream = _make_upstream_data(
+            [
+                {
+                    "symbol": "BTCUSDT",
+                    "rating_score": 9,
+                    "signal": "long",
+                    "confidence": 90.0,
+                },
+            ]
+        )
+        state_id = state_store.save("skill2_analyze", upstream)
+        account = _make_account(total_balance=10_000.0, available_margin=8_000.0)
+
+        skill = _make_skill(
+            state_store,
+            account=account,
+            risk_ratio=0.02,
+            leverage=10,
+            max_margin_usdt=10.0,
+        )
+        result = skill.run({"input_state_id": state_id})
+
+        assert len(result["trade_plans"]) == 1
+        plan = result["trade_plans"][0]
+        assert plan["notional_value"] <= 100.0
+        assert plan["position_size_pct"] <= 1.0
 
     def test_risk_controller_rejection_with_adjustment(self, state_store):
         """风控拒绝后应尝试裁剪头寸。"""

@@ -488,6 +488,7 @@ class Skill3Strategy(BaseSkill):
             )
             position_size_pct = cap
             position_size = (account.total_balance * cap / 100.0) / entry_price
+            position_value = position_size * entry_price
 
         # 固定保证金金额上限：max_margin_usdt 优先于 max_position_pct
         if self._max_margin_usdt is not None and self._max_margin_usdt > 0:

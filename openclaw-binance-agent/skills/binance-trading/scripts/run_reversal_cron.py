@@ -158,6 +158,22 @@ def render_markdown(report: dict) -> str:
     new_positions = report.get("new_positions", [])
     all_positions = report.get("positions", [])
     existing_positions = [pos for pos in all_positions if pos not in new_positions]
+    regime = scan.get("market_regime", {})
+    breadth_4h = regime.get("breadth_pct_4h")
+    breadth_24h = regime.get("breadth_pct_24h")
+    major_breadth_4h = regime.get("major_breadth_pct_4h")
+    breadth_line = (
+        f"- 广度: 4h {breadth_4h if breadth_4h is not None else 'N/A'}%, "
+        f"24h {breadth_24h if breadth_24h is not None else 'N/A'}%, "
+        f"主流4h {major_breadth_4h if major_breadth_4h is not None else 'N/A'}%, "
+        f"样本 {regime.get('breadth_sample_size', 0)}"
+    )
+    if regime.get("score_adjustment"):
+        breadth_line += f", 门槛 +{regime.get('score_adjustment')}分"
+    score_line = (
+        f"- 反转分数门槛: 基础 {regime.get('base_min_reversal_score', 'N/A')}, "
+        f"实际 {regime.get('effective_min_reversal_score', 'N/A')}"
+    )
     lines = [
         f"🔄 *趋势反转报告* ({report['mode']})",
         "",
@@ -167,8 +183,10 @@ def render_markdown(report: dict) -> str:
         f"Paper Mode: {str(account['paper_mode']).lower()}",
         "",
         "扫描结果:",
-        f"- 市场状态: {scan.get('market_regime', {}).get('status', 'unknown')} "
-        f"({scan.get('market_regime', {}).get('reason', '')})",
+        f"- 市场状态: {regime.get('status', 'unknown')} "
+        f"({regime.get('reason', '')})",
+        breadth_line,
+        score_line,
         f"- 全部交易对: {scan['filter_summary'].get('total_tickers', 0)}",
         f"- 基础过滤后: {scan['filter_summary'].get('after_base_filter', 0)}",
         f"- 趋势反转候选: {scan['filter_summary'].get('after_reversal_filter', 0)}",
@@ -343,8 +361,15 @@ def run_report(args: argparse.Namespace) -> dict:
         rating_threshold, risk_ratio = memory_store.get_evolved_params(
             strategy_tag=strategy_tag,
         )
-        # 强制将评级门槛提到 6，减少低质量交易（2026-05-07）
-        rating_threshold = max(rating_threshold, 6)
+        market_status = scan_data.get("market_regime", {}).get("status")
+        if args.mode == "4h":
+            if market_status == "cautious":
+                rating_threshold = max(rating_threshold, 8)
+            else:
+                rating_threshold = min(max(rating_threshold, 6), 7)
+        else:
+            # 强制将评级门槛提到 6，减少低质量交易（2026-05-07）
+            rating_threshold = max(rating_threshold, 6)
         # 1h 反转信号噪音大，用小仓位 + 宽止损策略
         # 单笔持仓上限 6%，2 笔最多 12% 总敞口
         if args.mode == "1h":
@@ -414,7 +439,9 @@ def run_report(args: argparse.Namespace) -> dict:
                     high_vol_tp_mult=3.5 if args.mode == "1h" else 4.0,
                     max_trades=2 if args.mode == "1h" else 4,
                     max_position_pct=6.0 if args.mode == "1h" else 18.0,
-                    max_margin_usdt=10.0 if args.mode == "1h" else None,
+                    max_margin_usdt=10.0
+                    if args.mode in ("1h", "4h")
+                    else None,
                     max_hold_hours=12.0 if args.mode == "1h" else 24.0,
                 )
                 s3_input_id = state_store.save(
@@ -550,7 +577,8 @@ def run_report(args: argparse.Namespace) -> dict:
             "protection_orders": protection,
             "account": account_summary,
             "risk": {
-                "single_trade_margin_limit_pct": 35,
+                "max_margin_usdt": 10.0 if args.mode in ("1h", "4h") else None,
+                "max_notional_usdt": 100.0 if args.mode in ("1h", "4h") else None,
                 "single_symbol_position_limit_pct": 40,
                 "daily_loss_stop_pct": 5,
                 "risk_status": "paper_mode" if paper_mode else "normal",

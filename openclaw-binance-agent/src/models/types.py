@@ -6,7 +6,7 @@
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import List, Optional
 import logging
@@ -316,8 +316,12 @@ def compute_evolution_adjustment(
     if len(trades) < 20:
         return None
 
-    # 取最近 50 笔
+    # 取最近 50 笔（仅保留 90 天内的交易，防止陈旧数据影响参数）
     recent = trades[:50]
+    cutoff = datetime.now(timezone.utc) - timedelta(days=90)
+    recent = [t for t in recent if t.closed_at and t.closed_at >= cutoff]
+    if len(recent) < 20:
+        return None
     winning = [t for t in recent if t.pnl_amount > 0]
     win_rate = len(winning) / len(recent) * 100
 

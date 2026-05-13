@@ -354,7 +354,9 @@ class _CryptoReversalBase(BaseSkill):
         major_sample_4h = 0
         for symbol, _ in universe:
             try:
-                klines_4h = self._fetch_klines(symbol, "4h", 2)
+                # 缓存层会剔除当前未闭合 K 线；取 3 根可确保剔除后仍保留
+                # 最近两根已闭合 4h K 线用于广度比较。
+                klines_4h = self._fetch_klines(symbol, "4h", 3)
             except Exception:
                 continue
             if not klines_4h or len(klines_4h) < 2:

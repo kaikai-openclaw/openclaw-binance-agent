@@ -148,6 +148,12 @@ DEFAULT_MAX_CANDIDATES = 10
 DEFAULT_MAX_SPREAD_PCT = 0.25
 DEFAULT_MAX_ABS_FUNDING_RATE = 0.01
 
+# BTC 短期趋势过滤（插针策略专用）
+BTC_TREND_SYMBOL = "BTCUSDT"
+BTC_TREND_INTERVAL = "1h"
+BTC_TREND_KLINE_LIMIT = 30
+BTC_TREND_DROP_THRESHOLD = -5.0  # BTC 1h 最近 12 根跌幅超过 5% 时阻断做多插针
+
 # 插针评级映射：wick_score → rating_score（0~10）
 # 插针 Skill 直接输出 ratings，跳过 Skill-2
 WICK_SCORE_TO_RATING = [
@@ -587,6 +593,31 @@ class _CryptoWickBase(BaseSkill):
         super().__init__(state_store, input_schema, output_schema)
         self._client = client
 
+    def _check_btc_short_term_trend(self, input_data: dict) -> Dict[str, Any]:
+        """检查 BTC 短期趋势，暴跌时阻断做多方向插针信号。"""
+        if input_data.get("ignore_btc_trend_filter"):
+            return {"status": "enabled"}
+        try:
+            klines = self._client.get_klines(
+                BTC_TREND_SYMBOL, BTC_TREND_INTERVAL, BTC_TREND_KLINE_LIMIT,
+            )
+            if not klines or len(klines) < 12:
+                return {"status": "enabled"}
+            first_close = float(klines[-12][4])
+            last_close = float(klines[-1][4])
+            if first_close <= 0:
+                return {"status": "enabled"}
+            ret_pct = (last_close - first_close) / first_close * 100
+            if ret_pct <= BTC_TREND_DROP_THRESHOLD:
+                return {
+                    "status": "blocked",
+                    "reason": f"BTC 12h 跌幅 {ret_pct:.1f}% ≤ {BTC_TREND_DROP_THRESHOLD}%",
+                    "btc_return_pct": ret_pct,
+                }
+        except Exception as exc:
+            log.warning("[%s] BTC 趋势检查失败: %s", self.name, exc)
+        return {"status": "enabled"}
+
     def _build_funding_map(self) -> Dict[str, float]:
         fr_map: Dict[str, float] = {}
         try:
@@ -760,6 +791,9 @@ class _CryptoWickBase(BaseSkill):
 
         log.info("[%s] Step1: %d/%d 通过基础过滤", self.name, len(pool), total_count)
 
+        # BTC 短期趋势过滤：暴跌时阻断做多方向插针
+        btc_trend = self._check_btc_short_term_trend(input_data)
+
         scored: List[dict] = []
         returns_map: Dict[str, List[float]] = {}
 
@@ -803,6 +837,18 @@ class _CryptoWickBase(BaseSkill):
                     continue
 
                 if result["wick_score"] < min_score and not target_symbols:
+                    continue
+
+                # BTC 暴跌时过滤做多插针（下影线做多在暴跌中通常是下跌中继）
+                if (
+                    btc_trend.get("status") == "blocked"
+                    and result["direction"] == "long"
+                    and not target_symbols
+                ):
+                    log.debug(
+                        "[%s] %s BTC趋势阻断做多插针: %s",
+                        self.name, symbol, btc_trend.get("reason"),
+                    )
                     continue
 
                 returns_map[symbol] = calc_returns(closes)

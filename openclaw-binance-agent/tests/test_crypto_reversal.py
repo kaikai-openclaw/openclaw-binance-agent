@@ -58,6 +58,14 @@ class TargetChaseClient(DummyClient):
         return []
 
 
+class TrimmedCurrentCandleClient(DummyClient):
+    def get_klines(self, symbol: str, interval: str, limit: int) -> List[list]:
+        rows = super().get_klines(symbol, interval, limit)
+        if symbol in self.symbol_klines and limit == 3 and len(rows) >= 3:
+            return rows[-3:-1]
+        return rows
+
+
 def _make_klines(closes: List[float]) -> List[list]:
     rows = []
     for idx, close in enumerate(closes):
@@ -182,6 +190,26 @@ def test_market_regime_uses_4h_breadth_over_24h_breadth() -> None:
     assert result["status"] == "enabled"
     assert result["breadth_pct_4h"] == 60.0
     assert result["breadth_pct_24h"] == 0.0
+
+
+def test_market_regime_fetches_extra_kline_for_closed_4h_breadth() -> None:
+    closes = [100.0 + i * 0.1 for i in range(80)]
+    tickers, klines_by_symbol = _make_breadth_fixture(60, 40)
+    for symbol, klines in list(klines_by_symbol.items()):
+        last_close = float(klines[-1][4])
+        klines_by_symbol[symbol] = klines + _make_klines([last_close])[-1:]
+    skill = ShortTermReversalSkill(
+        None,
+        {},
+        {},
+        TrimmedCurrentCandleClient(_make_klines(closes), klines_by_symbol),
+    )
+
+    result = skill._get_market_regime({}, tickers=tickers)
+
+    assert result["status"] == "enabled"
+    assert result["breadth_sample_size"] == 100
+    assert result["breadth_pct_4h"] == 60.0
 
 
 def test_market_regime_ignores_low_volume_breadth_symbols() -> None:

@@ -56,6 +56,7 @@ DEFAULT_MAX_HOLD_HOURS = 12.0  # 1h策略实际平均持仓<1h，统一缩短让
 
 # 默认杠杆倍数
 DEFAULT_LEVERAGE = 10
+DEFAULT_SHORT_LEVERAGE = 5
 
 # 止损止盈比例常量（仅在没有 ATR 时的回退路径使用）
 STOP_LOSS_PCT = 0.03  # 止损幅度 3%
@@ -119,6 +120,7 @@ class Skill3Strategy(BaseSkill):
         risk_ratio: float = DEFAULT_RISK_RATIO,
         max_hold_hours: float = DEFAULT_MAX_HOLD_HOURS,
         leverage: int = DEFAULT_LEVERAGE,
+        short_leverage: int = DEFAULT_SHORT_LEVERAGE,
         require_market_price: bool = True,
         atr_stop_mult: float = DEFAULT_ATR_STOP_MULT,
         atr_tp_mult: float = DEFAULT_ATR_TP_MULT,
@@ -151,7 +153,8 @@ class Skill3Strategy(BaseSkill):
                 - None 或返回 None/0/负数 时的行为由 require_market_price 决定
             risk_ratio: 账户风险比例，默认 0.02（2%）
             max_hold_hours: 默认持仓时间上限（小时），默认 24
-            leverage: 默认杠杆倍数，默认 10
+            leverage: 默认杠杆倍数（做多），默认 10
+            short_leverage: 做空杠杆倍数，默认 5
             require_market_price: 是否要求必须拿到真实市场价（P0-2）
                 - True（生产路径，默认）：provider 返回无效值时跳过该币种
                 - False（测试路径）：回退到 TEST_FALLBACK_PRICE=100.0，
@@ -185,6 +188,7 @@ class Skill3Strategy(BaseSkill):
         self._risk_ratio = risk_ratio
         self._max_hold_hours = max_hold_hours
         self._leverage = leverage
+        self._short_leverage = short_leverage
         self._require_market_price = require_market_price
         self._atr_stop_mult = atr_stop_mult
         self._atr_tp_mult = atr_tp_mult
@@ -377,6 +381,9 @@ class Skill3Strategy(BaseSkill):
 
         # 确定交易方向
         direction = TradeDirection.LONG if signal == "long" else TradeDirection.SHORT
+        effective_leverage = (
+            self._short_leverage if direction == TradeDirection.SHORT else self._leverage
+        )
 
         # 计算入场价格区间（P0-2：生产路径 fail-fast）
         entry_range = self._calculate_entry_range(confidence, symbol)
@@ -492,13 +499,13 @@ class Skill3Strategy(BaseSkill):
 
         # 固定保证金金额上限：max_margin_usdt 优先于 max_position_pct
         if self._max_margin_usdt is not None and self._max_margin_usdt > 0:
-            margin = position_value / self._leverage
+            margin = position_value / effective_leverage
             if margin > self._max_margin_usdt:
                 log.info(
                     f"[{self.name}] {symbol} 保证金 {margin:.2f} USDT "
                     f"超过上限 {self._max_margin_usdt:.2f} USDT，裁剪"
                 )
-                position_size = (self._max_margin_usdt * self._leverage) / entry_price
+                position_size = (self._max_margin_usdt * effective_leverage) / entry_price
                 position_value = position_size * entry_price
                 position_size_pct = (position_value / account.total_balance) * 100
 
@@ -527,7 +534,7 @@ class Skill3Strategy(BaseSkill):
             direction=direction,
             price=entry_price,
             quantity=position_size,
-            leverage=self._leverage,
+            leverage=effective_leverage,
         )
         validation = self._risk_controller.validate_order(order_request, account)
 
@@ -889,6 +896,9 @@ class Skill3Strategy(BaseSkill):
         if existing_value > 0:
             return None
 
+        effective_lev = (
+            self._short_leverage if direction == TradeDirection.SHORT else self._leverage
+        )
         quantity = current_quantity
         pct = current_pct
 
@@ -906,7 +916,7 @@ class Skill3Strategy(BaseSkill):
                 direction=direction,
                 price=entry_price,
                 quantity=quantity,
-                leverage=self._leverage,
+                leverage=effective_lev,
             )
             validation = self._risk_controller.validate_order(order_request, account)
 

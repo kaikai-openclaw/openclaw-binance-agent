@@ -400,6 +400,31 @@ class TestNormalExecution:
         assert result["execution_results"][0]["status"] == "filled"
         assert result["execution_results"][0]["direction"] == "short"
 
+    def test_short_uses_lower_leverage(
+        self, state_store, mock_binance, mock_risk_controller
+    ):
+        """做空交易应使用 5x 杠杆而非做多的 10x。"""
+        mock_binance.get_position_risk.return_value = _make_position_risk(
+            mark_price=90.0, position_amt=-10.0
+        )
+        mock_binance.place_market_order.return_value = _make_order_result(
+            price=90.0, status="FILLED"
+        )
+
+        plan = _make_trade_plan(
+            direction="short",
+            stop_loss_price=103.0,
+            take_profit_price=94.0,
+        )
+        upstream = _make_upstream_data([plan])
+        state_id = state_store.save("skill3_strategy", upstream)
+
+        skill = _make_skill(state_store, mock_binance, mock_risk_controller)
+        result = skill.run({"input_state_id": state_id})
+
+        assert result["execution_results"][0]["status"] == "filled"
+        mock_binance.set_leverage.assert_any_call("BTCUSDT", 5)
+
     def test_state_id_is_uuid(self, state_store, mock_binance, mock_risk_controller):
         """输出的 state_id 应为有效 UUID。"""
         mock_binance.get_position_risk.return_value = _make_position_risk(

@@ -134,6 +134,7 @@ DEFAULT_MIN_OVERSOLD_SCORE = 40  # 回测优化最优值
 DEFAULT_MAX_CANDIDATES = 10
 DEFAULT_MAX_SPREAD_PCT = 0.25
 DEFAULT_MAX_ABS_FUNDING_RATE = 0.01
+LIQUIDITY_VOLUME_RATIO_MIN = 0.50  # 最近 4h 成交量须 >= 24h 小时均值的 50%
 
 MARKET_REGIME_SYMBOL = "BTCUSDT"
 MARKET_REGIME_INTERVAL = "4h"
@@ -559,10 +560,27 @@ class _CryptoOversoldBase(BaseSkill):
                 opens = [float(k[1]) for k in klines]
                 current_price = float(item.get("lastPrice", 0))
 
+                # ── 流动性检查 ──────────────────────────────────────────────
+                # RSI 极端时流动性往往枯竭，避免高滑点入场
+                if interval == "4h" and len(volumes) >= 6:
+                    recent_4h_vol = volumes[-1]
+                    avg_4h_vol_24h = (
+                        sum(volumes[-6:]) / 6.0 if len(volumes) >= 6 else 0
+                    )
+                    if (
+                        avg_4h_vol_24h > 0
+                        and recent_4h_vol < avg_4h_vol_24h * LIQUIDITY_VOLUME_RATIO_MIN
+                    ):
+                        log.info(
+                            f"[{self.name}] {symbol} 流动性不足: "
+                            f"4h成交量={recent_4h_vol:.0f} < 24h均值*50%={avg_4h_vol_24h * LIQUIDITY_VOLUME_RATIO_MIN:.0f}"
+                        )
+                        continue
+
                 # ── 支撑位检测 ──────────────────────────────────────────────
-                # 查找近20根K线的局部低点作为支撑位参考
+                # 查找近60根K线的局部低点作为支撑位参考
                 recent_lows = []
-                lookback_support = 20
+                lookback_support = 60
                 for i in range(lookback_support, len(lows)):
                     window = lows[i - lookback_support : i]
                     if window:

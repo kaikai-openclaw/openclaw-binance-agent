@@ -40,13 +40,13 @@ class RiskController:
 
     # 硬编码常量（不可配置）
     # 注意：以下常量与 SOUL.md / MEMORY.md 保持严格一致，修改前必须先更新文档。
-    # 单笔保证金 <= 总资金 25%（SOUL.md 红线，P0）
-    MAX_SINGLE_MARGIN_RATIO = 0.25
+    # 单笔保证金 <= 总资金 20%（SOUL.md 红线，P0）
+    MAX_SINGLE_MARGIN_RATIO = 0.20
     MAX_SINGLE_COIN_RATIO = 0.40  # 单币累计持仓 <= 总资金 40%
     DAILY_LOSS_THRESHOLD = 0.05  # 日亏损阈值 5%
     STOP_LOSS_COOLDOWN_HOURS = 24  # 止损后同方向冷却期（小时）
     MAX_TOTAL_EXPOSURE_RATIO = 4.0  # 全账户总持仓名义价值 <= 总资金 × 4x（P0）
-    MAX_OPEN_POSITIONS = 15  # 同时持仓数量上限（P0，全账户总共）
+    MAX_OPEN_POSITIONS = 30  # 同时持仓数量上限（P0，全账户总共）
 
     # 策略级黑名单迁移：原硬编码在 crypto_*.py 中的黑名单合并至此
     # 首次运行时自动初始化到 SQLite，之后由运行时管理（add/remove）

@@ -44,6 +44,7 @@ DEFAULT_POLL_INTERVAL = 30
 
 # 默认杠杆倍数
 DEFAULT_LEVERAGE = 10
+DEFAULT_SHORT_LEVERAGE = 5
 
 # 多品种并发执行最大线程数（monitor_until_close=True 时生效）
 DEFAULT_MAX_CONCURRENT_TRADES = 8
@@ -83,6 +84,7 @@ class Skill4Execute(BaseSkill):
         account_state_provider: AccountStateProvider,
         poll_interval: float = DEFAULT_POLL_INTERVAL,
         leverage: int = DEFAULT_LEVERAGE,
+        short_leverage: int = DEFAULT_SHORT_LEVERAGE,
         trading_rule_provider: Optional[TradingRuleProvider] = None,
         monitor_until_close: bool = False,
         entry_confirm_timeout: float = DEFAULT_ENTRY_CONFIRM_TIMEOUT,
@@ -105,7 +107,8 @@ class Skill4Execute(BaseSkill):
             risk_controller: 风控拦截层（注入）
             account_state_provider: 账户状态提供回调
             poll_interval: 持仓监控轮询间隔（秒），默认 30，测试时可设为 0
-            leverage: 默认杠杆倍数
+            leverage: 默认杠杆倍数（做多）
+            short_leverage: 做空杠杆倍数
             trading_rule_provider: Binance 交易规则提供者；提供时执行前按 LOT_SIZE
                 兜底规整 quantity，并按 PRICE_FILTER.tickSize 规整触发价
             monitor_until_close: 是否在本轮阻塞监控到平仓；定时任务默认 False，
@@ -130,6 +133,7 @@ class Skill4Execute(BaseSkill):
         self._account_state_provider = account_state_provider
         self._poll_interval = poll_interval
         self._leverage = leverage
+        self._short_leverage = short_leverage
         self._trading_rule_provider = trading_rule_provider
         self._monitor_until_close = monitor_until_close
         self._entry_confirm_timeout = entry_confirm_timeout
@@ -325,12 +329,17 @@ class Skill4Execute(BaseSkill):
             quantity = normalized_quantity
 
         # 需求 4.2：风控校验
+        effective_leverage = (
+            self._short_leverage
+            if direction == TradeDirection.SHORT
+            else self._leverage
+        )
         order_request = OrderRequest(
             symbol=symbol,
             direction=direction,
             price=entry_price,
             quantity=quantity,
-            leverage=self._leverage,
+            leverage=effective_leverage,
         )
         validation = self._risk_controller.validate_order(
             order_request,
@@ -370,13 +379,13 @@ class Skill4Execute(BaseSkill):
                 strategy_tag=strategy_tag,
             )
 
-        if not self._ensure_symbol_leverage(symbol):
+        if not self._ensure_symbol_leverage(symbol, effective_leverage):
             return self._make_result(
                 symbol=symbol,
                 direction=direction_str,
                 status=OrderStatus.EXECUTION_FAILED.value,
                 executed_at=now_str,
-                reason=f"设置 {symbol} 杠杆为 {self._leverage}x 失败",
+                reason=f"设置 {symbol} 杠杆为 {effective_leverage}x 失败",
                 strategy_tag=strategy_tag,
             )
 
@@ -1298,12 +1307,13 @@ class Skill4Execute(BaseSkill):
             if candidate_sl is not None and candidate_sl <= current_sl_price:
                 return None, sl_step
         else:
+            # 做空方向：更快锁利（1.1/1.5/2.0），因上涨爆发力强于下跌
             profit = entry_price - current_price
-            if sl_step < 3 and profit >= sl_dist * 2.3:
+            if sl_step < 3 and profit >= sl_dist * 2.0:
                 candidate_sl, candidate_step = entry_price - sl_dist * 1.0, 3
-            elif sl_step < 2 and profit >= sl_dist * 1.8:
+            elif sl_step < 2 and profit >= sl_dist * 1.5:
                 candidate_sl, candidate_step = entry_price - sl_dist * 0.5, 2
-            elif sl_step < 1 and profit >= sl_dist * 1.3:
+            elif sl_step < 1 and profit >= sl_dist * 1.1:
                 candidate_sl, candidate_step = entry_price, 1
             # 安全校验：新止损价必须低于当前止损价（做空方向只能下移）
             if candidate_sl is not None and candidate_sl >= current_sl_price:
@@ -1978,7 +1988,10 @@ class Skill4Execute(BaseSkill):
             )
             close_side = "SELL" if direction == TradeDirection.LONG else "BUY"
 
-            self._ensure_symbol_leverage(symbol)
+            self._ensure_symbol_leverage(
+                symbol,
+                self._short_leverage if direction == TradeDirection.SHORT else None,
+            )
 
             stop_loss_price, take_profit_price = self._calculate_existing_sl_tp(
                 entry_price,
@@ -2191,15 +2204,16 @@ class Skill4Execute(BaseSkill):
                 symbols.add(symbol)
         return symbols
 
-    def _ensure_symbol_leverage(self, symbol: str) -> bool:
-        """将交易所侧 symbol 杠杆同步为 Skill-4 目标杠杆。"""
+    def _ensure_symbol_leverage(self, symbol: str, leverage: Optional[int] = None) -> bool:
+        """将交易所侧 symbol 杠杆同步为指定值，默认使用做多杠杆。"""
+        lev = leverage if leverage is not None else self._leverage
         try:
-            self._binance_client.set_leverage(symbol, self._leverage)
-            log.info(f"[{self.name}] {symbol} 杠杆已同步为 {self._leverage}x")
+            self._binance_client.set_leverage(symbol, lev)
+            log.info(f"[{self.name}] {symbol} 杠杆已同步为 {lev}x")
             return True
         except Exception as exc:
             log.warning(
-                f"[{self.name}] {symbol} 设置杠杆 {self._leverage}x 失败: {exc}"
+                f"[{self.name}] {symbol} 设置杠杆 {lev}x 失败: {exc}"
             )
             return False
 

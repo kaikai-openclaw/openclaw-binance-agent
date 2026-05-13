@@ -312,7 +312,11 @@ class _CryptoReversalBase(BaseSkill):
             return self._client.get_klines_cached(symbol, interval, limit)
         return self._client.get_klines(symbol, interval, limit)
 
-    def _calculate_market_breadth(self, tickers: Optional[list]) -> dict:
+    def _calculate_market_breadth(
+        self,
+        tickers: Optional[list],
+        tradable: Optional[set] = None,
+    ) -> dict:
         """计算 24h/4h 全市场和主流币上涨广度。"""
         breadth = {
             "breadth_pct_24h": None,
@@ -323,11 +327,13 @@ class _CryptoReversalBase(BaseSkill):
         }
         if not tickers:
             return breadth
+        if tradable is None:
+            tradable = self._get_tradable_symbols()
 
         universe = []
         for ticker in tickers:
             sym = ticker.get("symbol", "")
-            if not sym.endswith("USDT"):
+            if sym not in tradable:
                 continue
             try:
                 quote_volume = float(ticker.get("quoteVolume", 0))
@@ -382,7 +388,12 @@ class _CryptoReversalBase(BaseSkill):
             )
         return breadth
 
-    def _get_market_regime(self, input_data: dict, tickers: Optional[list] = None) -> dict:
+    def _get_market_regime(
+        self,
+        input_data: dict,
+        tickers: Optional[list] = None,
+        tradable: Optional[set] = None,
+    ) -> dict:
         """
         判断当前市场是否适合做趋势反转。
 
@@ -411,7 +422,7 @@ class _CryptoReversalBase(BaseSkill):
             if len(closes) > lookback and closes[-lookback] > 0
             else 0.0
         )
-        breadth = self._calculate_market_breadth(tickers)
+        breadth = self._calculate_market_breadth(tickers, tradable=tradable)
         breadth_pct_4h = breadth["breadth_pct_4h"]
         major_breadth_pct_4h = breadth["major_breadth_pct_4h"]
 
@@ -600,7 +611,11 @@ class _CryptoReversalBase(BaseSkill):
         total_count = len(tickers)
         funding_map = self._build_funding_map()
         tradable = self._get_tradable_symbols()
-        market_regime = self._get_market_regime(input_data, tickers=tickers)
+        market_regime = self._get_market_regime(
+            input_data,
+            tickers=tickers,
+            tradable=tradable,
+        )
         if market_regime.get("status") not in {"enabled", "cautious"}:
             log.warning(
                 "[%s] 市场状态阻断反转交易: %s",

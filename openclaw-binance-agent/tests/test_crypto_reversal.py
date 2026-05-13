@@ -8,14 +8,31 @@ class DummyClient:
         self,
         btc_klines: List[list],
         symbol_klines: dict[str, List[list]] | None = None,
+        exchange_symbols: list[dict] | None = None,
     ) -> None:
         self.btc_klines = btc_klines
         self.symbol_klines = symbol_klines or {}
+        self.exchange_symbols = exchange_symbols
 
     def get_klines(self, symbol: str, interval: str, limit: int) -> List[list]:
         if symbol in self.symbol_klines:
             return self.symbol_klines[symbol][-limit:]
         return self.btc_klines[-limit:]
+
+    def get_exchange_info(self) -> dict:
+        if self.exchange_symbols is not None:
+            return {"symbols": self.exchange_symbols}
+        return {
+            "symbols": [
+                {
+                    "symbol": symbol,
+                    "status": "TRADING",
+                    "contractType": "PERPETUAL",
+                    "quoteAsset": "USDT",
+                }
+                for symbol in self.symbol_klines
+            ]
+        }
 
 
 class TargetChaseClient(DummyClient):
@@ -186,6 +203,44 @@ def test_market_regime_ignores_low_volume_breadth_symbols() -> None:
 
     assert result["status"] == "enabled"
     assert result["breadth_sample_size"] == 50
+    assert result["breadth_pct_4h"] == 100.0
+
+
+def test_market_regime_ignores_non_tradable_breadth_symbols() -> None:
+    closes = [100.0 + i * 0.1 for i in range(80)]
+    tickers, klines_by_symbol = _make_breadth_fixture(50, 0)
+    invalid_tickers, invalid_klines = _make_breadth_fixture(0, 50)
+    tickers.extend(invalid_tickers)
+    klines_by_symbol.update(invalid_klines)
+    exchange_symbols = []
+    for ticker in tickers:
+        symbol = ticker["symbol"]
+        if symbol.startswith("UP"):
+            exchange_symbols.append({
+                "symbol": symbol,
+                "status": "TRADING",
+                "contractType": "PERPETUAL",
+                "quoteAsset": "USDT",
+            })
+        else:
+            exchange_symbols.append({
+                "symbol": symbol,
+                "status": "BREAK",
+                "contractType": "CURRENT_QUARTER",
+                "quoteAsset": "USDT",
+            })
+    skill = ShortTermReversalSkill(
+        None,
+        {},
+        {},
+        DummyClient(_make_klines(closes), klines_by_symbol, exchange_symbols),
+    )
+
+    result = skill._get_market_regime({}, tickers=tickers)
+
+    assert result["status"] == "enabled"
+    assert result["breadth_sample_size"] == 50
+    assert result["breadth_pct_24h"] == 100.0
     assert result["breadth_pct_4h"] == 100.0
 
 

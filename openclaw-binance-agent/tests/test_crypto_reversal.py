@@ -451,3 +451,107 @@ def test_4h_confirmation_accepts_kdj_breakout() -> None:
 
     assert result["passed"] is True
     assert result["breakout"] is True
+
+
+def test_4h_vol_1h_confirm_constants():
+    from src.skills.crypto_reversal import (
+        VOL_1H_CONFIRM_BONUS,
+        VOL_1H_CONFIRM_STRONG,
+        VOL_1H_CONFIRM_STRONG_BONUS,
+        VOL_1H_CONFIRM_THRESHOLD,
+    )
+
+    assert VOL_1H_CONFIRM_THRESHOLD == 1.5
+    assert VOL_1H_CONFIRM_STRONG == 2.0
+    assert VOL_1H_CONFIRM_BONUS == 3
+    assert VOL_1H_CONFIRM_STRONG_BONUS == 5
+
+
+class VolConfirmClient(DummyClient):
+    """4h klines 低成交量，1h klines 高成交量 → vol_intraday_strength > 2.0。"""
+
+    def __init__(self, btc_klines, symbol_klines=None, exchange_symbols=None):
+        super().__init__(btc_klines, symbol_klines, exchange_symbols)
+        self._1h_klines = None
+
+    def set_1h_klines(self, klines):
+        self._1h_klines = klines
+
+    def get_klines(self, symbol, interval, limit):
+        if interval == "1h" and self._1h_klines is not None:
+            return self._1h_klines[-limit:]
+        return super().get_klines(symbol, interval, limit)
+
+    def get_tickers_24hr(self):
+        return [{
+            "symbol": "TESTUSDT",
+            "priceChangePercent": "2.0",
+            "quoteVolume": "25000000",
+            "lastPrice": "110.0",
+        }]
+
+    def get_exchange_info(self):
+        return {
+            "symbols": [{
+                "symbol": "TESTUSDT",
+                "status": "TRADING",
+                "contractType": "PERPETUAL",
+                "quoteAsset": "USDT",
+            }]
+        }
+
+    def get_funding_rates_all(self):
+        return []
+
+
+def test_4h_vol_1h_confirm_adds_bonus(monkeypatch) -> None:
+    """vol_intraday_strength >= 2.0 时，评分增加 VOL_1H_CONFIRM_STRONG_BONUS。"""
+    closes = [100.0 + i * 0.1 for i in range(80)]
+    klines_4h = _make_klines(closes)
+    # 4h klines 的 volume=1000，1h klines 的 volume=3000
+    # vol_1h_recent = avg(3000*4) = 3000, vol_4h_hist = avg(1000*7) ≈ 1000
+    # vol_intraday_strength = 3000 / 1000 = 3.0 > 2.0 → +5 分
+    klines_1h = _make_klines([100.0] * 20)
+    for k in klines_1h:
+        k[5] = 3000.0  # 3x of 4h volume
+
+    client = VolConfirmClient(klines_4h, {"TESTUSDT": klines_4h})
+    client.set_1h_klines(klines_1h)
+    skill = ShortTermReversalSkill(None, {}, {}, client)
+
+    captured_score: dict = {}
+
+    def fake_calc(*args, **kwargs):
+        result = {
+            "reversal_score": 60,
+            "volume_surge_score": 0,
+            "volume_surge_ratio": 1.0,
+            "price_stable_score": 0,
+            "ma_turn_score": 0,
+            "ma_turn_detail": "",
+            "funding_reversal_score": 0,
+            "funding_rate": None,
+            "macd_reversal_score": 0,
+            "macd_detail": "",
+            "dist_bottom_pct": 5.0,
+            "dist_bottom_score": 35,
+            "prior_drop_pct": -10.0,
+            "prior_drop_score": 18,
+            "kdj_score": 25,
+            "shadow_score": 0,
+            "signal_details": "test",
+        }
+        captured_score.update(result)
+        return result
+
+    monkeypatch.setattr("src.skills.crypto_reversal.calc_reversal_score", fake_calc)
+
+    result = skill.run({
+        "ignore_market_regime": True,
+        "min_reversal_score": 55,
+    })
+
+    # 60 + 5 (strong vol confirm) = 65, should pass min_score=55
+    assert len(result["candidates"]) >= 1
+    c = result["candidates"][0]
+    assert c["vol_1h_confirm_bonus"] == 5

@@ -185,6 +185,9 @@ DEFAULT_MAX_CANDIDATES = 10
 SQUEEZE_RISK_QV_THRESHOLD = 20_000_000
 SQUEEZE_RISK_OI_RATIO = 0.6  # OI 价值 / 24h 成交额 > 60% = 极度拥挤（从 80% 收紧）
 
+# BTC 日线 MA200 牛市过滤：BTC 在牛市结构中做空统计上负EV
+BTC_DAILY_MA200_SCORE_ADJUSTMENT = 15  # BTC日线close > MA200时，做空门槛提高15分
+
 
 # ══════════════════════════════════════════════════════════
 # 共享基类
@@ -317,7 +320,7 @@ class _CryptoOverboughtBase(BaseSkill):
         symbol = "BTCUSDT"
         try:
             klines_4h = self._fetch_klines(symbol, "4h", 80)
-            klines_1d = self._fetch_klines(symbol, "1d", 20)
+            klines_1d = self._fetch_klines(symbol, "1d", 250)
         except Exception as exc:
             log.warning("[%s] 市场状态获取失败: %s", self.name, exc)
             return {"status": "unknown", "reason": f"fetch_failed:{exc}"}
@@ -364,11 +367,25 @@ class _CryptoOverboughtBase(BaseSkill):
                 "recent_return_pct": round(recent_return_4h_pct, 4),
             }
 
-        # P2-7: 1d 级别趋势检查（克制做空）
+        # 1d 级别趋势检查
+        score_adjustment = 0
+        btc_above_ma200 = False
+        ma200_val = None
+
         if klines_1d and len(klines_1d) >= 5:
             closes_1d = [float(k[4]) for k in klines_1d]
             last_close_1d = closes_1d[-1]
-            lookback_1d = 5  # 5 日趋势
+
+            # BTC 日线 MA200 牛市过滤
+            # BTC 在 MA200 以上 = 牛市结构，做空统计上负EV，提高信号质量门槛
+            if len(closes_1d) >= 200:
+                ma200_val = sum(closes_1d[-200:]) / 200.0
+                if ma200_val > 0 and last_close_1d > ma200_val:
+                    btc_above_ma200 = True
+                    score_adjustment += BTC_DAILY_MA200_SCORE_ADJUSTMENT
+
+            # P2-7: 5日涨幅检查（克制做空）
+            lookback_1d = 5
             if len(closes_1d) >= lookback_1d:
                 daily_return_5d_pct = (
                     (last_close_1d - closes_1d[-lookback_1d])
@@ -378,12 +395,18 @@ class _CryptoOverboughtBase(BaseSkill):
                     else 0.0
                 )
                 if daily_return_5d_pct > 8.0:
+                    score_adjustment += 10
                     return {
                         "status": "cautious",
-                        "reason": f"BTC 日线强势上涨 {daily_return_5d_pct:.2f}%，做空需谨慎",
+                        "reason": (
+                            f"BTC 日线强势上涨 {daily_return_5d_pct:.2f}%，做空需谨慎"
+                        ),
                         "symbol": symbol,
                         "recent_return_pct": round(recent_return_4h_pct, 4),
                         "daily_return_5d_pct": round(daily_return_5d_pct, 4),
+                        "btc_above_ma200": btc_above_ma200,
+                        "ma200": round(ma200_val, 2) if ma200_val else None,
+                        "score_adjustment": score_adjustment,
                     }
 
         return {
@@ -391,6 +414,9 @@ class _CryptoOverboughtBase(BaseSkill):
             "reason": "market_regime_ok",
             "symbol": symbol,
             "recent_return_pct": round(recent_return_4h_pct, 4),
+            "btc_above_ma200": btc_above_ma200,
+            "ma200": round(ma200_val, 2) if ma200_val else None,
+            "score_adjustment": score_adjustment,
         }
 
     @staticmethod
@@ -529,12 +555,16 @@ class _CryptoOverboughtBase(BaseSkill):
                 "market_regime": market_regime,
             }
 
-        # P2-7: 市场环境克制时提高评分门槛
+        # 市场环境阈值调整
+        score_adjustment = market_regime.get("score_adjustment", 0)
         market_cautious = market_regime.get("status") == "cautious"
-        if market_cautious:
+        if score_adjustment > 0:
             log.warning(
-                "[%s] 市场环境谨慎（BTC日线强势），做空门槛提高: %s",
+                "[%s] 做空门槛提高 %d 分（cautious=%s, btc_above_ma200=%s）: %s",
                 self.name,
+                score_adjustment,
+                market_cautious,
+                market_regime.get("btc_above_ma200", False),
                 market_regime.get("reason", ""),
             )
 
@@ -855,8 +885,7 @@ class _CryptoOverboughtBase(BaseSkill):
                     )
                     continue
 
-                # P2-7: 市场谨慎时提高 10 分门槛
-                effective_min_score = min_score + (10 if market_cautious else 0)
+                effective_min_score = min_score + score_adjustment
                 if result["overbought_score"] < effective_min_score:
                     continue
 

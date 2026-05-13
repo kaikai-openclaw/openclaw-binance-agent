@@ -124,6 +124,12 @@ ST_W_PRIOR_DROP = 18
 ST_W_KDJ_CROSS = 25
 ST_W_SHADOW = 2
 
+# 4h 策略 1h 成交量确认参数
+VOL_1H_CONFIRM_THRESHOLD = 1.5  # 1h均量 >= 4h均量 * 1.5 视为有资金介入确认
+VOL_1H_CONFIRM_STRONG = 2.0  # 强确认阈值
+VOL_1H_CONFIRM_BONUS = 3  # 确认加分
+VOL_1H_CONFIRM_STRONG_BONUS = 5  # 强确认加分
+
 # ══════════════════════════════════════════════════════════
 # 超短期反转参数（1h K 线）
 # ══════════════════════════════════════════════════════════
@@ -749,11 +755,12 @@ class _CryptoReversalBase(BaseSkill):
                         )
                         rsi_1h = rsi_1h_raw
                         # 1h 成交量强度：当前 4h 周期内均量 vs 历史 4h 均量
+                        # 归一化：1h均量*4 换算为 4h 等价量，使基准值≈1.0
                         vol_1h_recent = [float(k[5]) for k in klines_1h[-4:]]
                         avg_vol_1h = sum(vol_1h_recent) / len(vol_1h_recent)
                         vol_4h_hist = sum(volumes[-8:-1]) / 7
                         vol_intraday_strength = (
-                            avg_vol_1h / vol_4h_hist if vol_4h_hist > 0 else 1.0
+                            avg_vol_1h * 4 / vol_4h_hist if vol_4h_hist > 0 else 1.0
                         )
                     else:
                         hour_candles_in_4h = int(elapsed_ratio * 4)
@@ -851,6 +858,19 @@ class _CryptoReversalBase(BaseSkill):
                     elif rsi_1h >= 70:
                         result["reversal_score"] -= 3
                         result["rsi_1h_bonus"] = -3
+
+                # ── 1h 成交量确认加分（4h 策略专属）──────────────────────
+                # 当前 4h 周期内 1h 均量显著高于历史 4h 均量
+                # 说明反转有真实资金推动，不是虚假形态
+                if interval == "4h":
+                    if vol_intraday_strength >= VOL_1H_CONFIRM_STRONG:
+                        result["reversal_score"] += VOL_1H_CONFIRM_STRONG_BONUS
+                        result["vol_1h_confirm_bonus"] = VOL_1H_CONFIRM_STRONG_BONUS
+                    elif vol_intraday_strength >= VOL_1H_CONFIRM_THRESHOLD:
+                        result["reversal_score"] += VOL_1H_CONFIRM_BONUS
+                        result["vol_1h_confirm_bonus"] = VOL_1H_CONFIRM_BONUS
+                    else:
+                        result["vol_1h_confirm_bonus"] = 0
 
                 if result["reversal_score"] < effective_min_score:
                     continue
@@ -977,6 +997,7 @@ class _CryptoReversalBase(BaseSkill):
                         # ── 1h 增强字段 ──────────────────────────────────────
                         "rsi_1h": round(rsi_1h, 1) if rsi_1h is not None else None,
                         "vol_intraday_strength": round(vol_intraday_strength, 2),
+                        "vol_1h_confirm_bonus": result.get("vol_1h_confirm_bonus"),
                         "hour_candles_in_4h": hour_candles_in_4h,
                         "elapsed_ratio_precise": round(elapsed_ratio_precise, 2),
                         "rsi_1h_bonus": result.get("rsi_1h_bonus"),

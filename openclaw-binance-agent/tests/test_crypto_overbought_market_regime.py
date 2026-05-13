@@ -30,6 +30,57 @@ class StrongTrendClient:
         return klines
 
 
+class BullMarketClient(StrongTrendClient):
+    """BTC 在 MA200 以上（牛市结构），4h EMA 非强趋势（不触发 blocked）。"""
+
+    def get_klines(self, symbol, interval, limit):
+        if symbol != "BTCUSDT":
+            return []
+        klines = []
+        price = 100.0
+        if interval == "4h":
+            # 震荡上涨，EMA5 ≈ EMA20，不触发 4h 强趋势 blocked
+            for i in range(80):
+                step = 0.5 if i % 3 == 0 else -0.3
+                close_price = price + step
+                klines.append([0, price, close_price + 0.5, price - 0.5, close_price])
+                price = close_price
+        else:
+            # 250 根日线，缓慢上涨确保 close > MA200
+            for i in range(250):
+                step = 0.05
+                close_price = price + step
+                klines.append([0, price, close_price + 0.5, price - 0.5, close_price])
+                price = close_price
+        return klines
+
+
+class BearMarketClient(StrongTrendClient):
+    """BTC 在 MA200 以下（熊市结构），4h EMA 非强趋势。"""
+
+    def get_klines(self, symbol, interval, limit):
+        if symbol != "BTCUSDT":
+            return []
+        klines = []
+        if interval == "4h":
+            # 震荡，EMA5 ≈ EMA20，不触发 blocked
+            price = 100.0
+            for i in range(80):
+                step = 0.3 if i % 2 == 0 else -0.3
+                close_price = price + step
+                klines.append([0, price, close_price + 0.5, price - 0.5, close_price])
+                price = close_price
+        else:
+            # 250 根日线从高点下跌，MA200 在高位，close < MA200
+            price = 200.0
+            for i in range(250):
+                step = -0.3
+                close_price = price + step
+                klines.append([0, price, close_price + 0.5, price - 0.5, close_price])
+                price = close_price
+        return klines
+
+
 class UnknownMarketClient(StrongTrendClient):
     def get_klines(self, symbol, interval, limit):
         return []
@@ -177,3 +228,102 @@ def test_missing_last_price_fails_closed():
 
     assert result["candidates"] == []
     assert result["filter_summary"]["after_overbought_filter"] == 0
+
+
+def test_market_regime_raises_threshold_when_btc_above_ma200():
+    """BTC 日线 close > MA200 时，score_adjustment = 15，门槛提高但不阻断。"""
+    skill = ShortTermOverboughtSkill(
+        state_store=FakeStateStore(),
+        input_schema={},
+        output_schema={},
+        client=BullMarketClient(),
+    )
+
+    regime = skill._get_market_regime({})
+
+    assert regime["status"] == "enabled"
+    assert regime["btc_above_ma200"] is True
+    assert regime["score_adjustment"] == 15
+    assert regime["ma200"] is not None
+    assert regime["ma200"] > 0
+
+
+def test_market_regime_no_adjustment_when_btc_below_ma200():
+    """BTC 日线 close < MA200 时，score_adjustment = 0。"""
+    skill = ShortTermOverboughtSkill(
+        state_store=FakeStateStore(),
+        input_schema={},
+        output_schema={},
+        client=BearMarketClient(),
+    )
+
+    regime = skill._get_market_regime({})
+
+    assert regime["status"] == "enabled"
+    assert regime["btc_above_ma200"] is False
+    assert regime["score_adjustment"] == 0
+
+
+def test_market_regime_ma200_stacks_with_5d_rally():
+    """BTC > MA200 + 5 日涨幅 > 8% 时，score_adjustment = 25（15 + 10），且为 cautious。"""
+
+    class BullRallyClient(BullMarketClient):
+        """BTC 在 MA200 以上，且最近 5 天暴涨。"""
+
+        def get_klines(self, symbol, interval, limit):
+            if symbol != "BTCUSDT":
+                return []
+            if interval == "4h":
+                klines = []
+                price = 100.0
+                for i in range(80):
+                    step = 0.5 if i % 3 == 0 else -0.3
+                    close_price = price + step
+                    klines.append([0, price, close_price + 0.5, price - 0.5, close_price])
+                    price = close_price
+                return klines
+            # 1d: 前 245 天缓涨，最后 5 天暴涨
+            klines = []
+            price = 100.0
+            for i in range(245):
+                step = 0.05
+                close_price = price + step
+                klines.append([0, price, close_price + 0.5, price - 0.5, close_price])
+                price = close_price
+            # 最后 5 天暴涨 30%（远超 8% 阈值）
+            for i in range(5):
+                step = price * 0.06
+                close_price = price + step
+                klines.append([0, price, close_price + 0.5, price - 0.5, close_price])
+                price = close_price
+            return klines
+
+    skill = ShortTermOverboughtSkill(
+        state_store=FakeStateStore(),
+        input_schema={},
+        output_schema={},
+        client=BullRallyClient(),
+    )
+
+    regime = skill._get_market_regime({})
+
+    assert regime["status"] == "cautious"
+    assert regime["btc_above_ma200"] is True
+    assert regime["score_adjustment"] == 25  # 15 (MA200) + 10 (5d rally)
+    assert "强势上涨" in regime["reason"]
+
+
+def test_market_regime_ma200_insufficient_data_skips():
+    """日线数据不足 200 根时跳过 MA200 检查，score_adjustment = 0。"""
+    skill = ShortTermOverboughtSkill(
+        state_store=FakeStateStore(),
+        input_schema={},
+        output_schema={},
+        client=StrongTrendClient(),  # 只返回 20 根日线
+    )
+
+    regime = skill._get_market_regime({})
+
+    assert regime["status"] in ("enabled", "blocked", "cautious", "unknown")
+    # StrongTrendClient 日线只有 20 根，不够 200 根，MA200 跳过
+    assert regime.get("btc_above_ma200", False) is False

@@ -137,8 +137,10 @@ def test_market_regime_blocks_weak_btc_4h_trend() -> None:
     assert "BTC 4h 短期趋势偏弱" in result["reason"]
 
 
-def test_market_regime_blocks_low_market_breadth() -> None:
-    closes = [100.0 + i * 0.1 for i in range(80)]
+def test_market_regime_blocks_low_market_breadth_when_btc_drops() -> None:
+    # BTC 最近一根 4h 收阴但 EMA 未弱到阻断，广度 < 35% → blocked
+    # 用缓慢上涨序列让 EMA 通过，但最后两根做成收阴
+    closes = [100.0 + i * 0.5 for i in range(78)] + [138.0, 136.0]
     tickers, klines_by_symbol = _make_breadth_fixture(30, 70)
     skill = ShortTermReversalSkill(
         None,
@@ -153,6 +155,25 @@ def test_market_regime_blocks_low_market_breadth() -> None:
     assert "4h上涨广度" in result["reason"]
     assert result["breadth_pct_4h"] == 30.0
     assert result["breadth_pct"] == 30.0
+
+
+def test_market_regime_cautious_low_breadth_when_btc_reversal_up() -> None:
+    # BTC 最近一根 4h 收阳（closes 递增），广度 < 35% → cautious（反转初期豁免）
+    closes = [100.0 + i * 0.1 for i in range(80)]
+    tickers, klines_by_symbol = _make_breadth_fixture(30, 70)
+    skill = ShortTermReversalSkill(
+        None,
+        {},
+        {},
+        DummyClient(_make_klines(closes), klines_by_symbol),
+    )
+
+    result = skill._get_market_regime({}, tickers=tickers)
+
+    assert result["status"] == "cautious"
+    assert "反转初期" in result["reason"]
+    assert result["breadth_pct_4h"] == 30.0
+    assert result["score_adjustment"] == 15
 
 
 def test_market_regime_cautious_for_borderline_4h_breadth() -> None:

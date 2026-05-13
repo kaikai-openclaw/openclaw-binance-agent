@@ -472,7 +472,30 @@ class _CryptoReversalBase(BaseSkill):
                 "score_adjustment": 0,
                 **breadth,
             }
+        # BTC 最近一根已闭合 4h K 线是否收阳（反转初现信号）
+        btc_last_4h_up = (
+            len(closes) >= 2 and closes[-1] > closes[-2] and closes[-2] > 0
+        )
+
         if breadth_pct_4h is not None and breadth_pct_4h < 35.0:
+            # 反转初期广度必然偏低（大部分币还在跌），BTC 已收阳时降级为 cautious
+            if btc_last_4h_up:
+                return {
+                    "status": "cautious",
+                    "breadth_status": "cautious",
+                    "reason": (
+                        f"全市场4h上涨广度 {breadth_pct_4h:.1f}% 偏低，"
+                        f"但 BTC 最近一根 4h 收阳（{closes[-2]:.0f}→{closes[-1]:.0f}），"
+                        f"反转初期广度偏低属正常，降级为谨慎"
+                    ),
+                    "symbol": symbol,
+                    "recent_return_pct": round(recent_return_pct, 4),
+                    "btc_ema5": round(ema5, 4) if not math.isnan(ema5) else None,
+                    "btc_ema20": round(ema20, 4) if not math.isnan(ema20) else None,
+                    "breadth_pct": breadth_pct_4h,
+                    "score_adjustment": 15,
+                    **breadth,
+                }
             return {
                 "status": "blocked",
                 "breadth_status": "blocked",

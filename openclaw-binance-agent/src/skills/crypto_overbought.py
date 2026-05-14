@@ -1153,6 +1153,7 @@ class _CryptoOverboughtBase(BaseSkill):
                         "resistance_bonus": result.get("resistance_bonus", 0),
                         "overbought_confirmation": confirmation,
                         "volatility_action": volatility_action,
+                        "effective_min_overbought_score": effective_min_score,
                         # ── 原有字段 ───────────────────────────────────
                         "rsi": result["rsi"],
                         "bias_20": result["bias_20"],

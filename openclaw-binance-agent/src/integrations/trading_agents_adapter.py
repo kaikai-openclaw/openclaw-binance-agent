@@ -35,6 +35,7 @@ load_dotenv(os.path.join(_project_root, ".env"))
 # 24h ticker 缓存配置
 TICKER_CACHE_TTL_SECONDS = 180  # 3 分钟缓存
 TICKER_CACHE_DB = os.path.join(_project_root, "data", "binance_kline_cache.db")
+FAST_HOLD_RATING_SCORE = 4
 
 log = logging.getLogger(__name__)
 
@@ -418,6 +419,49 @@ def _clean_llm_text(text: str) -> str:
     return text.strip()
 
 
+def _fmt_prompt_value(value: Any, suffix: str = "") -> str:
+    """格式化 prompt 字段，缺失值统一展示为 N/A。"""
+    if value is None or value == "":
+        return "N/A"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return f"{value}{suffix}"
+
+
+def _build_fast_market_context(market_data: Dict[str, Any]) -> str:
+    """构造 fast 模式使用的市场环境上下文。"""
+    regime = market_data.get("market_regime") or {}
+    score_adjustment = regime.get("score_adjustment")
+    if score_adjustment is None:
+        score_adjustment = market_data.get("market_score_adjustment")
+    lines = [
+        f"- 市场状态: {_fmt_prompt_value(regime.get('status') or market_data.get('market_regime_status'))}",
+        f"- 市场原因: {_fmt_prompt_value(regime.get('reason'))}",
+        f"- 4h广度: {_fmt_prompt_value(regime.get('breadth_pct_4h'), '%')} / "
+        f"24h广度: {_fmt_prompt_value(regime.get('breadth_pct_24h'), '%')} / "
+        f"主流4h广度: {_fmt_prompt_value(regime.get('major_breadth_pct_4h'), '%')}",
+        f"- 广度样本: {_fmt_prompt_value(regime.get('breadth_sample_size'))} / "
+        f"主流样本: {_fmt_prompt_value(regime.get('major_breadth_sample_size'))}",
+        f"- BTC 4h: close={_fmt_prompt_value(regime.get('btc_last_close'))}, "
+        f"EMA5={_fmt_prompt_value(regime.get('btc_ema5'))}, "
+        f"EMA20={_fmt_prompt_value(regime.get('btc_ema20'))}",
+        f"- BTC 实时: price={_fmt_prompt_value(regime.get('btc_realtime_price'))}, "
+        f"距EMA20={_fmt_prompt_value(regime.get('btc_realtime_vs_ema20_pct'), '%')}, "
+        f"实时修复={_fmt_prompt_value(regime.get('btc_realtime_recovery'))}",
+        f"- BTC 1h: EMA5={_fmt_prompt_value(regime.get('btc_1h_ema5'))}, "
+        f"EMA20={_fmt_prompt_value(regime.get('btc_1h_ema20'))}, "
+        f"1h修复={_fmt_prompt_value(regime.get('btc_1h_recovery'))}, "
+        f"无新低={_fmt_prompt_value(regime.get('btc_1h_no_new_low'))}",
+        f"- 市场门槛调整: {_fmt_prompt_value(score_adjustment)}",
+        f"- 有效扫描门槛: oversold={_fmt_prompt_value(market_data.get('effective_min_oversold_score'))}, "
+        f"reversal={_fmt_prompt_value(market_data.get('effective_min_reversal_score'))}, "
+        f"overbought={_fmt_prompt_value(market_data.get('effective_min_overbought_score'))}",
+        f"- 波动率动作: {_fmt_prompt_value(market_data.get('volatility_action'))}, "
+        f"ATR过滤={_fmt_prompt_value(market_data.get('atr_filter_pct'), '%')}",
+    ]
+    return "\n".join(lines)
+
+
 def create_fast_analyzer() -> callable:
     """
     创建快速分析器（单次 LLM 调用，约 10-30 秒）。
@@ -460,7 +504,7 @@ def create_fast_analyzer() -> callable:
                 }
                 if not ticker["last_price"]:
                     return {
-                        "rating_score": 5,
+                        "rating_score": FAST_HOLD_RATING_SCORE,
                         "signal": "hold",
                         "confidence": 30.0,
                         "comment": f"[快速模式] Binance 行情获取失败且无兜底数据: {e}",
@@ -559,6 +603,8 @@ def create_fast_analyzer() -> callable:
 
         # 扫描层综合评分和信号摘要
         scan_summary = ""
+        if market_data.get("signal_score") is not None:
+            scan_summary += f"- 通用信号评分: {market_data['signal_score']}/100\n"
         for score_key in ["oversold_score", "overbought_score", "reversal_score"]:
             if market_data.get(score_key) is not None:
                 scan_summary += f"- 量化筛选评分: {market_data[score_key]}/100\n"
@@ -567,11 +613,18 @@ def create_fast_analyzer() -> callable:
 
         # 根据策略类型生成专属评估指引
         strategy_guide = _build_strategy_guide(market_data)
+        market_context = _build_fast_market_context(market_data)
 
-        prompt = f"""你是一名专业的加密货币合约交易员。请根据以下 {symbol} 的数据评估交易机会。
+        prompt = f"""你是一名专业的加密货币合约风控分析师。量化系统已经筛出候选信号，你的任务不是重新寻找交易方向，而是复核该信号能否放行。
+
+请只基于输入数据判断，不要假设外部新闻或未提供信息。数据不足、市场环境冲突、BTC趋势不支持、波动率异常、信号质量临界时，必须倾向 hold。
 
 【策略背景】
 {strategy_guide}
+
+【量化预期方向】
+- expected_direction: {expected_dir or "N/A"}
+- 方向含义: {direction_text}
 
 【实时行情】
 - 当前价格: {ticker["last_price"]} USDT
@@ -582,16 +635,34 @@ def create_fast_analyzer() -> callable:
 【技术指标】
 {deep_indicators if deep_indicators else "暂无"}
 
+【市场环境】
+{market_context}
+
 【量化筛选结果】
 {scan_summary if scan_summary else "暂无"}
 
 {f"【反转子维度详情】{chr(10)}{reversal_details}" if reversal_details else ""}
-请严格基于以上数据评估。
-量化筛选系统已经完成了多维度信号确认，你的任务是判断是否存在明显的反向风险。
-如果没有明显风险因素，返回策略方向（long 或 short）。
-只有在发现明确的风险信号（如大盘崩盘、基本面恶化证据）时才返回 hold。
+
+硬性规则：
+1. 只能返回 expected_direction 或 hold。不要输出与 expected_direction 相反的方向。
+2. 只有当数据同时支持 expected_direction、市场环境不冲突、风险可控时，才返回 expected_direction。
+3. 如果 expected_direction=long，但你认为更适合 short，返回 hold。
+4. 如果 expected_direction=short，但你认为更适合 long，返回 hold。
+5. 判断 BTC 与市场广度时必须区分方向：做多需要 BTC 1h/实时修复和广度支持；做空时 BTC 1h/实时修复、主流4h广度偏强属于追空风险。
+6. 如果扫描分只略高于有效门槛，且存在任一中高风险，返回 hold。
+7. 如果 ATR/波动率动作提示高风险，必须在 key_risks 中说明；风险不可控时返回 hold。
+8. 如果数据缺失影响判断，返回 hold。
+
 直接返回 JSON（不要解释）：
-{{"signal": "<long|short|hold>"}}
+{{
+  "signal": "<{expected_dir or 'long|short'}|hold>",
+  "confidence": <0-100>,
+  "risk_level": "<low|medium|high>",
+  "veto": <true|false>,
+  "veto_reason": "<如果 veto=true，说明阻断原因；否则为空字符串>",
+  "key_risks": ["<主要风险，最多3条>"],
+  "confirmation": "<放行或观望的核心依据>"
+}}
 """
 
         # 从扫描层评分映射 rating_score（0-100 → 1-10）
@@ -601,7 +672,7 @@ def create_fast_analyzer() -> callable:
         #   旧映射：45→6（扫描层 40-44 分的有效信号被 Skill-2 过滤掉）
         #   新映射：40→6, 50→7, 60→8, 70→9
         scan_score = None
-        for key in ["oversold_score", "overbought_score", "reversal_score"]:
+        for key in ["oversold_score", "overbought_score", "reversal_score", "signal_score"]:
             val = market_data.get(key)
             if val is not None:
                 scan_score = val
@@ -631,15 +702,38 @@ def create_fast_analyzer() -> callable:
             cleaned = _clean_llm_text(raw)
             result = _extract_json(cleaned)
             llm_signal = result.get("signal", "hold")
-            # LLM 确认方向 → 加 1 分（优先交易）
-            # LLM 返回 hold → 保持原分（仍可交易，排在后面）
-            # LLM 返回反方向 → 由 Skill2 降级处理
-            bonus = 1 if llm_signal == expected_dir else 0
-            result["rating_score"] = min(10, mapped_rating + bonus)
+            if llm_signal not in {"long", "short", "hold"}:
+                llm_signal = "hold"
+            veto = result.get("veto")
+            if veto is True:
+                llm_signal = "hold"
+            if expected_dir in {"long", "short"} and llm_signal not in {
+                expected_dir,
+                "hold",
+            }:
+                result["veto_reason"] = (
+                    f"LLM输出方向 {llm_signal} 与预期方向 {expected_dir} 相反"
+                )
+                llm_signal = "hold"
+            # LLM 明确确认扫描方向才允许通过；hold/无效输出一律降级。
+            bonus = 1 if expected_dir and llm_signal == expected_dir else 0
+            rating_score = (
+                FAST_HOLD_RATING_SCORE
+                if llm_signal == "hold"
+                else min(10, mapped_rating + bonus)
+            )
+            confidence = result.get("confidence")
+            if not isinstance(confidence, (int, float)):
+                confidence = float(scan_score)
             result["signal"] = llm_signal
-            result["confidence"] = float(scan_score)
-            result["comment"] = f"[快速模式] 扫描分={scan_score} LLM={llm_signal}" + (
-                f" +1确认" if bonus else ""
+            result["rating_score"] = rating_score
+            result["confidence"] = max(0.0, min(100.0, float(confidence)))
+            risk_level = result.get("risk_level", "unknown")
+            veto_reason = result.get("veto_reason", "")
+            result["comment"] = (
+                f"[快速模式] 扫描分={scan_score} LLM={llm_signal} risk={risk_level}"
+                + (f" +1确认" if bonus else "")
+                + (f" veto={veto_reason}" if veto_reason else "")
             )
             log.info(
                 f"[FastAnalyzer] {symbol} 完成 {time.time() - t0:.1f}s: "
@@ -650,10 +744,10 @@ def create_fast_analyzer() -> callable:
         except Exception as e:
             log.warning(f"[FastAnalyzer] {symbol} LLM 调用失败: {e}")
             return {
-                "rating_score": mapped_rating,
+                "rating_score": FAST_HOLD_RATING_SCORE,
                 "signal": "hold",
-                "confidence": float(scan_score),
-                "comment": f"[快速模式] LLM失败，保留扫描分={scan_score}: {e}",
+                "confidence": min(50.0, float(scan_score)),
+                "comment": f"[快速模式] LLM失败，降级为hold: 扫描分={scan_score}: {e}",
             }
 
     log.info("[FastAnalyzer] 快速分析器已初始化（单次 LLM 调用）")

@@ -191,16 +191,31 @@ class Skill2Analyze(BaseSkill):
                 "heat_score": candidate.get("heat_score", 0),
                 "source_url": candidate.get("source_url", ""),
                 "collected_at": candidate.get("collected_at", ""),
+                "market_regime": upstream_data.get("market_regime", {}),
+                "market_regime_status": candidate.get("market_regime_status"),
+                "market_score_adjustment": candidate.get("market_score_adjustment"),
                 "atr_pct": candidate.get("atr_pct"),
+                "atr_filter_pct": candidate.get("atr_filter_pct"),
                 "adx": candidate.get("adx"),
                 "signal_direction": candidate.get("signal_direction"),
                 "rsi": candidate.get("rsi"),
                 "bias_pct": candidate.get("bias_20") or candidate.get("bias_pct"),
                 "price_change_pct": candidate.get("price_change_pct"),
+                "volatility_action": candidate.get("volatility_action"),
                 # 扫描层完整信号数据
+                "signal_score": candidate.get("signal_score"),
                 "oversold_score": candidate.get("oversold_score"),
                 "overbought_score": candidate.get("overbought_score"),
                 "reversal_score": candidate.get("reversal_score"),
+                "effective_min_oversold_score": candidate.get(
+                    "effective_min_oversold_score"
+                ),
+                "effective_min_reversal_score": candidate.get(
+                    "effective_min_reversal_score"
+                ),
+                "effective_min_overbought_score": candidate.get(
+                    "effective_min_overbought_score"
+                ),
                 "signal_details": candidate.get("signal_details"),
                 "funding_rate": candidate.get("funding_rate"),
                 "consecutive_down": candidate.get("consecutive_down"),
@@ -236,6 +251,9 @@ class Skill2Analyze(BaseSkill):
                     atr_pct = candidate.get("atr_pct")
                     if atr_pct is not None:
                         rating["atr_pct"] = atr_pct
+                    atr_filter_pct = candidate.get("atr_filter_pct")
+                    if atr_filter_pct is not None:
+                        rating["atr_filter_pct"] = atr_filter_pct
                     strategy_tag = (
                         candidate.get("strategy_tag") or upstream_strategy_tag
                     )

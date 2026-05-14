@@ -139,12 +139,30 @@ def _make_breadth_fixture(up_count, down_count):
 
 
 class BreadthClient:
-    def __init__(self, btc_closes, up_count=60, down_count=40):
+    def __init__(
+        self,
+        btc_closes,
+        up_count=60,
+        down_count=40,
+        btc_last_price=None,
+        btc_1h_closes=None,
+    ):
         self.tickers, self.klines_by_symbol, self.symbols_info = (
             _make_breadth_fixture(up_count, down_count)
         )
+        if btc_last_price is not None:
+            self.tickers.append({
+                "symbol": "BTCUSDT",
+                "quoteVolume": "1000000000",
+                "priceChangePercent": "0.5",
+                "lastPrice": str(btc_last_price),
+            })
         self.btc_klines = [
             [0, close, close + 1.0, close - 1.0, close] for close in btc_closes
+        ]
+        self.btc_1h_klines = [
+            [0, close, close + 1.0, close - 1.0, close]
+            for close in (btc_1h_closes or [])
         ]
 
     def get_tickers_24hr(self):
@@ -167,9 +185,19 @@ class BreadthClient:
         return []
 
     def get_klines(self, symbol, interval, limit):
+        if symbol == "BTCUSDT" and interval == "1h" and self.btc_1h_klines:
+            return self.btc_1h_klines[-limit:]
         if symbol == "BTCUSDT":
             return self.btc_klines
         return self.klines_by_symbol.get(symbol, [])
+
+
+class TrimmedBreadthClient(BreadthClient):
+    def get_klines(self, symbol, interval, limit):
+        if symbol == "BTCUSDT" and interval == "1h" and self.btc_1h_klines:
+            rows = self.btc_1h_klines[-limit:]
+            return rows[:-1] if len(rows) > 1 else rows
+        return super().get_klines(symbol, interval, limit)
 
 
 def test_oversold_scan_blocks_waterfall_market():
@@ -200,6 +228,115 @@ def test_oversold_scan_blocks_weak_btc_trend():
     assert result["candidates"] == []
     assert result["market_regime"]["status"] == "blocked"
     assert "weak trend" in result["market_regime"]["reason"]
+
+
+def test_market_regime_downgrades_hard_weak_btc_when_realtime_and_1h_recover():
+    btc_closes = [120.0 - i * 0.2 for i in range(80)]
+    client = BreadthClient(
+        btc_closes,
+        up_count=60,
+        down_count=40,
+        btc_last_price=106.0,
+        btc_1h_closes=[100.0 + i * 0.2 for i in range(20)],
+    )
+    skill = ShortTermOversoldSkill(
+        state_store=FakeStateStore(),
+        input_schema={},
+        output_schema={},
+        client=client,
+    )
+
+    result = skill._get_market_regime(
+        {},
+        tickers=client.get_tickers_24hr(),
+        tradable=skill._get_tradable_symbols(),
+    )
+
+    assert result["status"] == "cautious"
+    assert result["score_adjustment"] == 15
+    assert result["btc_regime_downgraded_from_blocked"] is True
+    assert result["btc_1h_recovery"] is True
+
+
+def test_market_regime_keeps_hard_weak_btc_blocked_without_1h_recovery():
+    btc_closes = [120.0 - i * 0.2 for i in range(80)]
+    client = BreadthClient(
+        btc_closes,
+        up_count=60,
+        down_count=40,
+        btc_last_price=106.0,
+        btc_1h_closes=[110.0 - i * 0.2 for i in range(20)],
+    )
+    skill = ShortTermOversoldSkill(
+        state_store=FakeStateStore(),
+        input_schema={},
+        output_schema={},
+        client=client,
+    )
+
+    result = skill._get_market_regime(
+        {},
+        tickers=client.get_tickers_24hr(),
+        tradable=skill._get_tradable_symbols(),
+    )
+
+    assert result["status"] == "blocked"
+    assert result["btc_realtime_recovery"] is True
+    assert result["btc_1h_recovery"] is False
+
+
+def test_market_regime_low_breadth_blocks_even_when_btc_realtime_recovers():
+    btc_closes = [120.0 - i * 0.2 for i in range(80)]
+    client = BreadthClient(
+        btc_closes,
+        up_count=30,
+        down_count=70,
+        btc_last_price=106.0,
+        btc_1h_closes=[100.0 + i * 0.2 for i in range(20)],
+    )
+    skill = ShortTermOversoldSkill(
+        state_store=FakeStateStore(),
+        input_schema={},
+        output_schema={},
+        client=client,
+    )
+
+    result = skill._get_market_regime(
+        {},
+        tickers=client.get_tickers_24hr(),
+        tradable=skill._get_tradable_symbols(),
+    )
+
+    assert result["status"] == "blocked"
+    assert result["breadth_pct_4h"] < 35.0
+    assert result["btc_1h_recovery"] is True
+    assert result["btc_regime_downgraded_from_blocked"] is False
+
+
+def test_market_regime_uses_20_closed_1h_klines_after_current_trim():
+    btc_closes = [120.0 - i * 0.2 for i in range(80)]
+    client = TrimmedBreadthClient(
+        btc_closes,
+        up_count=60,
+        down_count=40,
+        btc_last_price=106.0,
+        btc_1h_closes=[100.0 + i * 0.2 for i in range(21)],
+    )
+    skill = ShortTermOversoldSkill(
+        state_store=FakeStateStore(),
+        input_schema={},
+        output_schema={},
+        client=client,
+    )
+
+    result = skill._get_market_regime(
+        {},
+        tickers=client.get_tickers_24hr(),
+        tradable=skill._get_tradable_symbols(),
+    )
+
+    assert result["status"] == "cautious"
+    assert result["btc_1h_ema20"] is not None
 
 
 def test_market_regime_cautious_for_soft_btc_weak_trend():

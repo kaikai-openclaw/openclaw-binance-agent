@@ -174,6 +174,17 @@ def render_markdown(report: dict) -> str:
         f"- 反转分数门槛: 基础 {regime.get('base_min_reversal_score', 'N/A')}, "
         f"实际 {regime.get('effective_min_reversal_score', 'N/A')}"
     )
+    btc_line = (
+        f"- BTC状态: close {_fmt_optional(regime.get('btc_last_close'))}, "
+        f"EMA5 {_fmt_optional(regime.get('btc_ema5'))}, "
+        f"EMA20 {_fmt_optional(regime.get('btc_ema20'))}, "
+        f"实时 {_fmt_optional(regime.get('btc_realtime_price'))}, "
+        f"距EMA20 {_fmt_optional(regime.get('btc_realtime_vs_ema20_pct'), suffix='%')}, "
+        f"1hEMA5/20 {_fmt_optional(regime.get('btc_1h_ema5'))}/"
+        f"{_fmt_optional(regime.get('btc_1h_ema20'))}, "
+        f"1h修复 {str(regime.get('btc_1h_recovery', False)).lower()}, "
+        f"降级 {str(regime.get('btc_regime_downgraded_from_blocked', False)).lower()}"
+    )
     lines = [
         f"🔄 *趋势反转报告* ({report['mode']})",
         "",
@@ -187,6 +198,7 @@ def render_markdown(report: dict) -> str:
         f"({regime.get('reason', '')})",
         breadth_line,
         score_line,
+        btc_line,
         f"- 全部交易对: {scan['filter_summary'].get('total_tickers', 0)}",
         f"- 基础过滤后: {scan['filter_summary'].get('after_base_filter', 0)}",
         f"- 趋势反转候选: {scan['filter_summary'].get('after_reversal_filter', 0)}",

@@ -66,6 +66,32 @@ class TrimmedCurrentCandleClient(DummyClient):
         return rows
 
 
+class BTCRealtimeRecoveryClient(DummyClient):
+    def __init__(
+        self,
+        btc_4h_klines: List[list],
+        btc_1h_klines: List[list],
+        symbol_klines: dict[str, List[list]],
+        btc_last_price: float,
+    ) -> None:
+        super().__init__(btc_4h_klines, symbol_klines)
+        self.btc_1h_klines = btc_1h_klines
+        self.btc_last_price = btc_last_price
+
+    def get_klines(self, symbol: str, interval: str, limit: int) -> List[list]:
+        if symbol == "BTCUSDT" and interval == "1h":
+            return self.btc_1h_klines[-limit:]
+        return super().get_klines(symbol, interval, limit)
+
+
+class BTCTrimmedRealtimeRecoveryClient(BTCRealtimeRecoveryClient):
+    def get_klines(self, symbol: str, interval: str, limit: int) -> List[list]:
+        if symbol == "BTCUSDT" and interval == "1h":
+            rows = self.btc_1h_klines[-limit:]
+            return rows[:-1] if len(rows) > 1 else rows
+        return super().get_klines(symbol, interval, limit)
+
+
 def _make_klines(closes: List[float]) -> List[list]:
     rows = []
     for idx, close in enumerate(closes):
@@ -135,6 +161,119 @@ def test_market_regime_blocks_weak_btc_4h_trend() -> None:
 
     assert result["status"] == "blocked"
     assert "BTC 4h 短期趋势偏弱" in result["reason"]
+
+
+def test_market_regime_downgrades_weak_btc_when_realtime_and_1h_recover() -> None:
+    closes = [120.0 - i * 0.2 for i in range(80)]
+    tickers, klines_by_symbol = _make_breadth_fixture(60, 40)
+    tickers.append({
+        "symbol": "BTCUSDT",
+        "priceChangePercent": "0.5",
+        "quoteVolume": "1000000000",
+        "lastPrice": "106.0",
+    })
+    skill = ShortTermReversalSkill(
+        None,
+        {},
+        {},
+        BTCRealtimeRecoveryClient(
+            _make_klines(closes),
+            _make_klines([100.0 + i * 0.2 for i in range(20)]),
+            klines_by_symbol,
+            btc_last_price=106.0,
+        ),
+    )
+
+    result = skill._get_market_regime({}, tickers=tickers)
+
+    assert result["status"] == "cautious"
+    assert result["score_adjustment"] == 15
+    assert result["btc_regime_downgraded_from_blocked"] is True
+    assert result["btc_1h_recovery"] is True
+
+
+def test_market_regime_keeps_weak_btc_blocked_when_1h_not_recovered() -> None:
+    closes = [120.0 - i * 0.2 for i in range(80)]
+    tickers, klines_by_symbol = _make_breadth_fixture(60, 40)
+    tickers.append({
+        "symbol": "BTCUSDT",
+        "priceChangePercent": "0.5",
+        "quoteVolume": "1000000000",
+        "lastPrice": "106.0",
+    })
+    skill = ShortTermReversalSkill(
+        None,
+        {},
+        {},
+        BTCRealtimeRecoveryClient(
+            _make_klines(closes),
+            _make_klines([110.0 - i * 0.2 for i in range(20)]),
+            klines_by_symbol,
+            btc_last_price=106.0,
+        ),
+    )
+
+    result = skill._get_market_regime({}, tickers=tickers)
+
+    assert result["status"] == "blocked"
+    assert result["btc_realtime_recovery"] is True
+    assert result["btc_1h_recovery"] is False
+
+
+def test_market_regime_low_breadth_blocks_even_when_btc_realtime_recovers() -> None:
+    closes = [120.0 - i * 0.2 for i in range(80)]
+    tickers, klines_by_symbol = _make_breadth_fixture(30, 70)
+    tickers.append({
+        "symbol": "BTCUSDT",
+        "priceChangePercent": "0.5",
+        "quoteVolume": "1000000000",
+        "lastPrice": "106.0",
+    })
+    skill = ShortTermReversalSkill(
+        None,
+        {},
+        {},
+        BTCRealtimeRecoveryClient(
+            _make_klines(closes),
+            _make_klines([100.0 + i * 0.2 for i in range(20)]),
+            klines_by_symbol,
+            btc_last_price=106.0,
+        ),
+    )
+
+    result = skill._get_market_regime({}, tickers=tickers)
+
+    assert result["status"] == "blocked"
+    assert result["breadth_pct_4h"] < 35.0
+    assert result["btc_1h_recovery"] is True
+    assert result["btc_regime_downgraded_from_blocked"] is False
+
+
+def test_market_regime_uses_20_closed_1h_klines_after_current_trim() -> None:
+    closes = [120.0 - i * 0.2 for i in range(80)]
+    tickers, klines_by_symbol = _make_breadth_fixture(60, 40)
+    tickers.append({
+        "symbol": "BTCUSDT",
+        "priceChangePercent": "0.5",
+        "quoteVolume": "1000000000",
+        "lastPrice": "106.0",
+    })
+    skill = ShortTermReversalSkill(
+        None,
+        {},
+        {},
+        BTCTrimmedRealtimeRecoveryClient(
+            _make_klines(closes),
+            _make_klines([100.0 + i * 0.2 for i in range(21)]),
+            klines_by_symbol,
+            btc_last_price=106.0,
+        ),
+    )
+
+    result = skill._get_market_regime({}, tickers=tickers)
+
+    assert result["status"] == "cautious"
+    assert result["btc_1h_ema20"] is not None
 
 
 def test_market_regime_blocks_low_market_breadth_when_btc_drops() -> None:

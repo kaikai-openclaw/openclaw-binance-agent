@@ -162,6 +162,9 @@ MARKET_REGIME_KLINE_LIMIT = 80
 MARKET_REGIME_PANIC_DROP_PCT = -8.0
 MARKET_REGIME_DOWNTREND_LOOKBACK = 12
 MARKET_REGIME_WEAK_TREND_SCORE_ADJUSTMENT = 10
+BTC_REALTIME_EMA20_RECOVERY_RATIO = 0.997
+BTC_REALTIME_LAST_CLOSE_RECOVERY_RATIO = 1.003
+BTC_REALTIME_RECOVERY_SCORE_ADJUSTMENT = 15
 SYMBOL_TREND_INTERVAL = "6h"
 SYMBOL_TREND_KLINE_LIMIT = 80
 SYMBOL_TREND_RECENT_DROP_PCT = -10.0
@@ -365,6 +368,97 @@ class _CryptoOversoldBase(BaseSkill):
             return f"funding_rate_too_extreme:{funding_rate:.6f}"
         return None
 
+    def _get_btc_realtime_recovery(
+        self,
+        tickers: Optional[list],
+        last_close: float,
+        ema20: Optional[float],
+    ) -> dict:
+        """判断 BTC 实时价格和 1h 趋势是否足以将 4h 弱趋势降级为谨慎。"""
+        result = {
+            "btc_realtime_price": None,
+            "btc_realtime_vs_ema20_pct": None,
+            "btc_realtime_recovery": False,
+            "btc_1h_recovery": False,
+            "btc_1h_ema5": None,
+            "btc_1h_ema20": None,
+            "btc_1h_no_new_low": False,
+            "btc_regime_downgraded_from_blocked": False,
+            "btc_realtime_recovery_reason": "",
+        }
+        if ema20 is None or ema20 <= 0 or last_close <= 0:
+            result["btc_realtime_recovery_reason"] = "btc_ema_invalid"
+            return result
+
+        realtime_price = None
+        for ticker in tickers or []:
+            if ticker.get("symbol") != MARKET_REGIME_SYMBOL:
+                continue
+            try:
+                realtime_price = float(ticker.get("lastPrice") or 0)
+            except (TypeError, ValueError):
+                realtime_price = None
+            break
+        if not realtime_price or realtime_price <= 0:
+            result["btc_realtime_recovery_reason"] = "btc_realtime_price_missing"
+            return result
+
+        result["btc_realtime_price"] = round(realtime_price, 4)
+        result["btc_realtime_vs_ema20_pct"] = round(
+            (realtime_price - ema20) / ema20 * 100,
+            4,
+        )
+        price_recovered = (
+            realtime_price >= ema20 * BTC_REALTIME_EMA20_RECOVERY_RATIO
+            or realtime_price >= last_close * BTC_REALTIME_LAST_CLOSE_RECOVERY_RATIO
+        )
+        result["btc_realtime_recovery"] = price_recovered
+
+        try:
+            # 缓存层会剔除当前未闭合 1h K 线；取 21 根确保剔除后
+            # 仍有 20 根已封闭 K 线用于 EMA20 判断。
+            klines_1h = self._fetch_klines(MARKET_REGIME_SYMBOL, "1h", 21)
+        except Exception as exc:
+            result["btc_realtime_recovery_reason"] = f"btc_1h_fetch_failed:{exc}"
+            return result
+        if not klines_1h or len(klines_1h) < 20:
+            result["btc_realtime_recovery_reason"] = "btc_1h_insufficient_klines"
+            return result
+        klines_1h = klines_1h[-20:]
+
+        try:
+            closes_1h = [float(k[4]) for k in klines_1h]
+            lows_1h = [float(k[3]) for k in klines_1h]
+        except (TypeError, ValueError, IndexError):
+            result["btc_realtime_recovery_reason"] = "btc_1h_invalid_klines"
+            return result
+
+        ema5_1h = calc_ema(closes_1h, 5)[-1]
+        ema20_1h = calc_ema(closes_1h, 20)[-1]
+        no_new_low = len(lows_1h) >= 4 and min(lows_1h[-2:]) >= min(lows_1h[-4:-2])
+        ema_recovered = (
+            ema5_1h is not None
+            and ema20_1h is not None
+            and ema5_1h >= ema20_1h
+        )
+        one_hour_recovered = ema_recovered or no_new_low
+        result["btc_1h_ema5"] = round(ema5_1h, 4) if ema5_1h is not None else None
+        result["btc_1h_ema20"] = (
+            round(ema20_1h, 4) if ema20_1h is not None else None
+        )
+        result["btc_1h_no_new_low"] = no_new_low
+        result["btc_1h_recovery"] = one_hour_recovered
+        result["btc_regime_downgraded_from_blocked"] = (
+            price_recovered and one_hour_recovered
+        )
+        if result["btc_regime_downgraded_from_blocked"]:
+            result["btc_realtime_recovery_reason"] = "BTC实时价修复且1h趋势止跌"
+        elif not price_recovered:
+            result["btc_realtime_recovery_reason"] = "BTC实时价未接近4h EMA20"
+        else:
+            result["btc_realtime_recovery_reason"] = "BTC 1h趋势未修复"
+        return result
+
     def _symbol_trend_filter_reason(
         self, symbol: str, input_data: dict
     ) -> Optional[str]:
@@ -474,11 +568,43 @@ class _CryptoOversoldBase(BaseSkill):
                 "breadth_status": "blocked",
                 "reason": "; ".join(reasons),
                 "symbol": symbol,
+                "btc_last_close": round(last_close, 4),
                 "recent_return_pct": round(recent_return_pct, 4),
                 "btc_ema5": round(ema5, 4) if ema5 is not None else None,
                 "btc_ema20": round(ema20, 4) if ema20 is not None else None,
                 "score_adjustment": 0,
             }
+
+        breadth = {
+            "breadth_pct_24h": None,
+            "breadth_pct_4h": None,
+            "major_breadth_pct_4h": None,
+            "breadth_sample_size": 0,
+            "major_breadth_sample_size": 0,
+        }
+        breadth_pct_4h = None
+        major_breadth_pct_4h = None
+        if use_market_breadth:
+            if tickers is None:
+                try:
+                    tickers = self._client.get_tickers_24hr()
+                except Exception as exc:
+                    log.warning("[%s] 市场广度行情获取失败: %s", self.name, exc)
+                    return {
+                        "status": "unknown",
+                        "breadth_status": "unknown",
+                        "reason": f"breadth_fetch_failed:{exc}",
+                        "symbol": symbol,
+                        "btc_last_close": round(last_close, 4),
+                        "recent_return_pct": round(recent_return_pct, 4),
+                        "btc_ema5": round(ema5, 4) if ema5 is not None else None,
+                        "btc_ema20": round(ema20, 4) if ema20 is not None else None,
+                        "score_adjustment": 0,
+                    }
+            breadth = self._calculate_market_breadth(tickers, tradable=tradable)
+            breadth_pct_4h = breadth["breadth_pct_4h"]
+            major_breadth_pct_4h = breadth["major_breadth_pct_4h"]
+
         hard_weak_trend = (
             ema5 is not None
             and ema20 is not None
@@ -486,15 +612,89 @@ class _CryptoOversoldBase(BaseSkill):
             and ema5 < ema20 * 0.995
         )
         if hard_weak_trend:
+            realtime_recovery = self._get_btc_realtime_recovery(
+                tickers,
+                last_close,
+                ema20,
+            )
+            if (
+                use_market_breadth
+                and realtime_recovery["btc_regime_downgraded_from_blocked"]
+                and breadth["breadth_sample_size"] >= MARKET_BREADTH_MIN_SAMPLE_SIZE
+                and (breadth_pct_4h is None or breadth_pct_4h >= 35.0)
+            ):
+                return {
+                    "status": "cautious",
+                    "breadth_status": "cautious",
+                    "reason": "BTC 4h strong weak trend，但实时价和1h趋势已修复，降级为谨慎模式",
+                    "symbol": symbol,
+                    "btc_last_close": round(last_close, 4),
+                    "recent_return_pct": round(recent_return_pct, 4),
+                    "btc_ema5": round(ema5, 4),
+                    "btc_ema20": round(ema20, 4),
+                    "breadth_pct": breadth_pct_4h,
+                    "score_adjustment": BTC_REALTIME_RECOVERY_SCORE_ADJUSTMENT,
+                    **breadth,
+                    **realtime_recovery,
+                }
+            if (
+                use_market_breadth
+                and realtime_recovery["btc_regime_downgraded_from_blocked"]
+                and breadth["breadth_sample_size"] < MARKET_BREADTH_MIN_SAMPLE_SIZE
+            ):
+                return {
+                    "status": "blocked",
+                    "breadth_status": "blocked",
+                    "reason": (
+                        f"4h 广度样本不足 {breadth['breadth_sample_size']}，"
+                        "BTC实时修复不能解除广度硬阻断"
+                    ),
+                    "symbol": symbol,
+                    "btc_last_close": round(last_close, 4),
+                    "recent_return_pct": round(recent_return_pct, 4),
+                    "btc_ema5": round(ema5, 4),
+                    "btc_ema20": round(ema20, 4),
+                    "breadth_pct": breadth_pct_4h,
+                    "score_adjustment": 0,
+                    **breadth,
+                    **{**realtime_recovery, "btc_regime_downgraded_from_blocked": False},
+                }
+            if (
+                use_market_breadth
+                and realtime_recovery["btc_regime_downgraded_from_blocked"]
+                and breadth_pct_4h is not None
+                and breadth_pct_4h < 35.0
+            ):
+                return {
+                    "status": "blocked",
+                    "breadth_status": "blocked",
+                    "reason": (
+                        f"全市场4h上涨广度 {breadth_pct_4h:.1f}% 过低，"
+                        "BTC实时修复不能解除广度硬阻断"
+                    ),
+                    "symbol": symbol,
+                    "btc_last_close": round(last_close, 4),
+                    "recent_return_pct": round(recent_return_pct, 4),
+                    "btc_ema5": round(ema5, 4),
+                    "btc_ema20": round(ema20, 4),
+                    "breadth_pct": breadth_pct_4h,
+                    "score_adjustment": 0,
+                    **breadth,
+                    **{**realtime_recovery, "btc_regime_downgraded_from_blocked": False},
+                }
             return {
                 "status": "blocked",
                 "breadth_status": "blocked",
                 "reason": "BTC 4h strong weak trend",
                 "symbol": symbol,
+                "btc_last_close": round(last_close, 4),
                 "recent_return_pct": round(recent_return_pct, 4),
                 "btc_ema5": round(ema5, 4),
                 "btc_ema20": round(ema20, 4),
+                "breadth_pct": breadth_pct_4h,
                 "score_adjustment": 0,
+                **breadth,
+                **realtime_recovery,
             }
 
         soft_weak_trend = (
@@ -510,6 +710,7 @@ class _CryptoOversoldBase(BaseSkill):
                     "breadth_status": "not_applicable",
                     "reason": "BTC 4h weak trend",
                     "symbol": symbol,
+                    "btc_last_close": round(last_close, 4),
                     "recent_return_pct": round(recent_return_pct, 4),
                     "btc_ema5": round(ema5, 4) if ema5 is not None else None,
                     "btc_ema20": round(ema20, 4) if ema20 is not None else None,
@@ -520,36 +721,20 @@ class _CryptoOversoldBase(BaseSkill):
                 "breadth_status": "not_applicable",
                 "reason": "market_regime_ok",
                 "symbol": symbol,
+                "btc_last_close": round(last_close, 4),
                 "recent_return_pct": round(recent_return_pct, 4),
                 "btc_ema5": round(ema5, 4) if ema5 is not None else None,
                 "btc_ema20": round(ema20, 4) if ema20 is not None else None,
                 "score_adjustment": 0,
             }
 
-        if tickers is None:
-            try:
-                tickers = self._client.get_tickers_24hr()
-            except Exception as exc:
-                log.warning("[%s] 市场广度行情获取失败: %s", self.name, exc)
-                return {
-                    "status": "unknown",
-                    "breadth_status": "unknown",
-                    "reason": f"breadth_fetch_failed:{exc}",
-                    "symbol": symbol,
-                    "recent_return_pct": round(recent_return_pct, 4),
-                    "btc_ema5": round(ema5, 4) if ema5 is not None else None,
-                    "btc_ema20": round(ema20, 4) if ema20 is not None else None,
-                    "score_adjustment": 0,
-                }
-        breadth = self._calculate_market_breadth(tickers, tradable=tradable)
-        breadth_pct_4h = breadth["breadth_pct_4h"]
-        major_breadth_pct_4h = breadth["major_breadth_pct_4h"]
         if breadth["breadth_sample_size"] < MARKET_BREADTH_MIN_SAMPLE_SIZE:
             return {
                 "status": "blocked",
                 "breadth_status": "blocked",
                 "reason": f"4h 广度样本不足 {breadth['breadth_sample_size']}，暂停超跌做多",
                 "symbol": symbol,
+                "btc_last_close": round(last_close, 4),
                 "recent_return_pct": round(recent_return_pct, 4),
                 "btc_ema5": round(ema5, 4) if ema5 is not None else None,
                 "btc_ema20": round(ema20, 4) if ema20 is not None else None,
@@ -563,6 +748,7 @@ class _CryptoOversoldBase(BaseSkill):
                 "breadth_status": "blocked",
                 "reason": f"全市场4h上涨广度 {breadth_pct_4h:.1f}% 过低，暂停超跌做多",
                 "symbol": symbol,
+                "btc_last_close": round(last_close, 4),
                 "recent_return_pct": round(recent_return_pct, 4),
                 "btc_ema5": round(ema5, 4) if ema5 is not None else None,
                 "btc_ema20": round(ema20, 4) if ema20 is not None else None,
@@ -597,6 +783,7 @@ class _CryptoOversoldBase(BaseSkill):
                 "breadth_status": breadth_status,
                 "reason": "；".join(cautious_reasons),
                 "symbol": symbol,
+                "btc_last_close": round(last_close, 4),
                 "recent_return_pct": round(recent_return_pct, 4),
                 "btc_ema5": round(ema5, 4) if ema5 is not None else None,
                 "btc_ema20": round(ema20, 4) if ema20 is not None else None,
@@ -610,6 +797,7 @@ class _CryptoOversoldBase(BaseSkill):
             "breadth_status": "enabled",
             "reason": "market_regime_ok",
             "symbol": symbol,
+            "btc_last_close": round(last_close, 4),
             "recent_return_pct": round(recent_return_pct, 4),
             "btc_ema5": round(ema5, 4) if ema5 is not None else None,
             "btc_ema20": round(ema20, 4) if ema20 is not None else None,

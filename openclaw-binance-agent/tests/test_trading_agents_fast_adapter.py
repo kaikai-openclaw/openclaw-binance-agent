@@ -183,3 +183,44 @@ def test_fast_analyzer_veto_true_is_not_tradeable(
     assert result["signal"] == "hold"
     assert result["rating_score"] == adapter.FAST_HOLD_RATING_SCORE
     assert "veto=主流广度冲突" in result["comment"]
+
+
+def test_fast_analyzer_string_veto_is_not_tradeable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(adapter, "_get_cached_ticker", lambda symbol: _ticker())
+    monkeypatch.setattr(
+        adapter,
+        "_call_fast_llm",
+        lambda prompt: (
+            '{"signal":"long","confidence":82,"risk_level":"medium",'
+            '"veto":"true","veto_reason":"字符串否决",'
+            '"key_risks":["格式不标准"],"confirmation":"方向一致"}'
+        ),
+    )
+
+    result = adapter.create_fast_analyzer()("BTCUSDT", _market_data())
+
+    assert result["signal"] == "hold"
+    assert result["rating_score"] == adapter.FAST_HOLD_RATING_SCORE
+    assert "veto=字符串否决" in result["comment"]
+
+
+def test_fast_analyzer_high_risk_is_not_tradeable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(adapter, "_get_cached_ticker", lambda symbol: _ticker())
+    monkeypatch.setattr(
+        adapter,
+        "_call_fast_llm",
+        lambda prompt: (
+            '{"signal":"long","confidence":82,"risk_level":"high",'
+            '"veto":false,"veto_reason":"",'
+            '"key_risks":["高风险"],"confirmation":"方向一致"}'
+        ),
+    )
+
+    result = adapter.create_fast_analyzer()("BTCUSDT", _market_data())
+
+    assert result["signal"] == "hold"
+    assert result["rating_score"] == adapter.FAST_HOLD_RATING_SCORE

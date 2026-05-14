@@ -462,6 +462,17 @@ def _build_fast_market_context(market_data: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _is_fast_veto(value: Any) -> bool:
+    """判断 fast LLM 是否给出否决信号，兼容字符串布尔值。"""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "yes", "y", "1", "是"}
+    if isinstance(value, (int, float)):
+        return value != 0
+    return False
+
+
 def create_fast_analyzer() -> callable:
     """
     创建快速分析器（单次 LLM 调用，约 10-30 秒）。
@@ -704,8 +715,10 @@ def create_fast_analyzer() -> callable:
             llm_signal = result.get("signal", "hold")
             if llm_signal not in {"long", "short", "hold"}:
                 llm_signal = "hold"
-            veto = result.get("veto")
-            if veto is True:
+            veto = _is_fast_veto(result.get("veto"))
+            risk_level_raw = result.get("risk_level", "unknown")
+            risk_level = str(risk_level_raw).strip().lower()
+            if veto or risk_level == "high":
                 llm_signal = "hold"
             if expected_dir in {"long", "short"} and llm_signal not in {
                 expected_dir,
@@ -728,7 +741,6 @@ def create_fast_analyzer() -> callable:
             result["signal"] = llm_signal
             result["rating_score"] = rating_score
             result["confidence"] = max(0.0, min(100.0, float(confidence)))
-            risk_level = result.get("risk_level", "unknown")
             veto_reason = result.get("veto_reason", "")
             result["comment"] = (
                 f"[快速模式] 扫描分={scan_score} LLM={llm_signal} risk={risk_level}"

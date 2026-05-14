@@ -136,11 +136,32 @@ DEFAULT_MAX_SPREAD_PCT = 0.25
 DEFAULT_MAX_ABS_FUNDING_RATE = 0.01
 LIQUIDITY_VOLUME_RATIO_MIN = 0.50  # 最近 4h 成交量须 >= 24h 小时均值的 50%
 
+MARKET_BREADTH_MIN_QUOTE_VOLUME = 20_000_000
+MARKET_BREADTH_MIN_SAMPLE_SIZE = 30
+MAJOR_BREADTH_MIN_SAMPLE_SIZE = 5
+MAJOR_BREADTH_BASES = {
+    "BTC",
+    "ETH",
+    "BNB",
+    "SOL",
+    "XRP",
+    "DOGE",
+    "ADA",
+    "AVAX",
+    "LINK",
+    "LTC",
+    "BCH",
+    "DOT",
+    "NEAR",
+    "AAVE",
+    "UNI",
+}
 MARKET_REGIME_SYMBOL = "BTCUSDT"
 MARKET_REGIME_INTERVAL = "4h"
 MARKET_REGIME_KLINE_LIMIT = 80
 MARKET_REGIME_PANIC_DROP_PCT = -8.0
 MARKET_REGIME_DOWNTREND_LOOKBACK = 12
+MARKET_REGIME_WEAK_TREND_SCORE_ADJUSTMENT = 10
 SYMBOL_TREND_INTERVAL = "6h"
 SYMBOL_TREND_KLINE_LIMIT = 80
 SYMBOL_TREND_RECENT_DROP_PCT = -10.0
@@ -247,6 +268,84 @@ class _CryptoOversoldBase(BaseSkill):
             return self._client.get_klines_cached(symbol, interval, limit)
         return self._client.get_klines(symbol, interval, limit)
 
+    def _calculate_market_breadth(
+        self,
+        tickers: Optional[list],
+        tradable: Optional[set] = None,
+    ) -> dict:
+        """计算 24h/4h 全市场和主流币上涨广度。"""
+        breadth = {
+            "breadth_pct_24h": None,
+            "breadth_pct_4h": None,
+            "major_breadth_pct_4h": None,
+            "breadth_sample_size": 0,
+            "major_breadth_sample_size": 0,
+        }
+        if not tickers:
+            return breadth
+        if tradable is None:
+            tradable = self._get_tradable_symbols()
+
+        universe = []
+        for ticker in tickers:
+            symbol = ticker.get("symbol", "")
+            if symbol not in tradable:
+                continue
+            try:
+                quote_volume = float(ticker.get("quoteVolume", 0))
+                change_24h = float(ticker.get("priceChangePercent", 0))
+            except (TypeError, ValueError):
+                continue
+            if quote_volume < MARKET_BREADTH_MIN_QUOTE_VOLUME:
+                continue
+            universe.append((symbol, change_24h))
+
+        if universe:
+            up_24h = sum(1 for _, change in universe if change > 0)
+            breadth["breadth_pct_24h"] = round(up_24h / len(universe) * 100, 2)
+
+        up_4h = 0
+        sample_4h = 0
+        major_up_4h = 0
+        major_sample_4h = 0
+        for symbol, _ in universe:
+            try:
+                # 缓存层会剔除当前未闭合 K 线；取 3 根可确保仍保留
+                # 最近两根已闭合 4h K 线用于广度比较。
+                klines_4h = self._fetch_klines(symbol, "4h", 3)
+            except Exception:
+                continue
+            if not klines_4h or len(klines_4h) < 2:
+                continue
+            try:
+                prev_close = float(klines_4h[-2][4])
+                last_close = float(klines_4h[-1][4])
+            except (TypeError, ValueError, IndexError):
+                continue
+            if prev_close <= 0:
+                continue
+
+            sample_4h += 1
+            is_up = last_close > prev_close
+            if is_up:
+                up_4h += 1
+
+            base = symbol[:-4]
+            if base in MAJOR_BREADTH_BASES:
+                major_sample_4h += 1
+                if is_up:
+                    major_up_4h += 1
+
+        breadth["breadth_sample_size"] = sample_4h
+        breadth["major_breadth_sample_size"] = major_sample_4h
+        if sample_4h:
+            breadth["breadth_pct_4h"] = round(up_4h / sample_4h * 100, 2)
+        if major_sample_4h:
+            breadth["major_breadth_pct_4h"] = round(
+                major_up_4h / major_sample_4h * 100, 2
+            )
+        return breadth
+
     @staticmethod
     def _quality_filter_reason(
         ticker: dict,
@@ -313,7 +412,13 @@ class _CryptoOversoldBase(BaseSkill):
             return f"symbol_6h_waterfall:{recent_return_pct:.2f}%"
         return None
 
-    def _get_market_regime(self, input_data: dict) -> dict:
+    def _get_market_regime(
+        self,
+        input_data: dict,
+        tickers: Optional[list] = None,
+        tradable: Optional[set] = None,
+        use_market_breadth: bool = True,
+    ) -> dict:
         """
         判断当前市场是否适合做超跌反弹。
 
@@ -321,7 +426,12 @@ class _CryptoOversoldBase(BaseSkill):
         明确下跌趋势或短期暴跌，本轮直接阻断，避免系统性接刀。
         """
         if input_data.get("ignore_market_regime"):
-            return {"status": "enabled", "reason": "ignore_market_regime=true"}
+            return {
+                "status": "enabled",
+                "breadth_status": "enabled",
+                "reason": "ignore_market_regime=true",
+                "score_adjustment": 0,
+            }
 
         symbol = input_data.get("market_regime_symbol", MARKET_REGIME_SYMBOL)
         try:
@@ -361,29 +471,151 @@ class _CryptoOversoldBase(BaseSkill):
             reasons = [f"BTC recent_return={recent_return_pct:.2f}%"]
             return {
                 "status": "blocked",
+                "breadth_status": "blocked",
                 "reason": "; ".join(reasons),
                 "symbol": symbol,
                 "recent_return_pct": round(recent_return_pct, 4),
+                "btc_ema5": round(ema5, 4) if ema5 is not None else None,
+                "btc_ema20": round(ema20, 4) if ema20 is not None else None,
+                "score_adjustment": 0,
             }
-        weak_trend = (
+        hard_weak_trend = (
+            ema5 is not None
+            and ema20 is not None
+            and last_close < ema20
+            and ema5 < ema20 * 0.995
+        )
+        if hard_weak_trend:
+            return {
+                "status": "blocked",
+                "breadth_status": "blocked",
+                "reason": "BTC 4h strong weak trend",
+                "symbol": symbol,
+                "recent_return_pct": round(recent_return_pct, 4),
+                "btc_ema5": round(ema5, 4),
+                "btc_ema20": round(ema20, 4),
+                "score_adjustment": 0,
+            }
+
+        soft_weak_trend = (
             ema5 is not None
             and ema20 is not None
             and last_close < ema20
             and ema5 < ema20
         )
-        if weak_trend:
+        if not use_market_breadth:
+            if soft_weak_trend:
+                return {
+                    "status": "blocked",
+                    "breadth_status": "not_applicable",
+                    "reason": "BTC 4h weak trend",
+                    "symbol": symbol,
+                    "recent_return_pct": round(recent_return_pct, 4),
+                    "btc_ema5": round(ema5, 4) if ema5 is not None else None,
+                    "btc_ema20": round(ema20, 4) if ema20 is not None else None,
+                    "score_adjustment": 0,
+                }
             return {
-                "status": "blocked",
-                "reason": "BTC 4h weak trend",
+                "status": "enabled",
+                "breadth_status": "not_applicable",
+                "reason": "market_regime_ok",
                 "symbol": symbol,
                 "recent_return_pct": round(recent_return_pct, 4),
+                "btc_ema5": round(ema5, 4) if ema5 is not None else None,
+                "btc_ema20": round(ema20, 4) if ema20 is not None else None,
+                "score_adjustment": 0,
+            }
+
+        if tickers is None:
+            try:
+                tickers = self._client.get_tickers_24hr()
+            except Exception as exc:
+                log.warning("[%s] 市场广度行情获取失败: %s", self.name, exc)
+                return {
+                    "status": "unknown",
+                    "breadth_status": "unknown",
+                    "reason": f"breadth_fetch_failed:{exc}",
+                    "symbol": symbol,
+                    "recent_return_pct": round(recent_return_pct, 4),
+                    "btc_ema5": round(ema5, 4) if ema5 is not None else None,
+                    "btc_ema20": round(ema20, 4) if ema20 is not None else None,
+                    "score_adjustment": 0,
+                }
+        breadth = self._calculate_market_breadth(tickers, tradable=tradable)
+        breadth_pct_4h = breadth["breadth_pct_4h"]
+        major_breadth_pct_4h = breadth["major_breadth_pct_4h"]
+        if breadth["breadth_sample_size"] < MARKET_BREADTH_MIN_SAMPLE_SIZE:
+            return {
+                "status": "blocked",
+                "breadth_status": "blocked",
+                "reason": f"4h 广度样本不足 {breadth['breadth_sample_size']}，暂停超跌做多",
+                "symbol": symbol,
+                "recent_return_pct": round(recent_return_pct, 4),
+                "btc_ema5": round(ema5, 4) if ema5 is not None else None,
+                "btc_ema20": round(ema20, 4) if ema20 is not None else None,
+                "breadth_pct": breadth_pct_4h,
+                "score_adjustment": 0,
+                **breadth,
+            }
+        if breadth_pct_4h is not None and breadth_pct_4h < 35.0:
+            return {
+                "status": "blocked",
+                "breadth_status": "blocked",
+                "reason": f"全市场4h上涨广度 {breadth_pct_4h:.1f}% 过低，暂停超跌做多",
+                "symbol": symbol,
+                "recent_return_pct": round(recent_return_pct, 4),
+                "btc_ema5": round(ema5, 4) if ema5 is not None else None,
+                "btc_ema20": round(ema20, 4) if ema20 is not None else None,
+                "breadth_pct": breadth_pct_4h,
+                "score_adjustment": 0,
+                **breadth,
+            }
+
+        score_adjustment = 0
+        breadth_status = "enabled"
+        cautious_reasons = []
+        weak_4h_breadth = breadth_pct_4h is not None and breadth_pct_4h < 45.0
+        weak_major_breadth = (
+            major_breadth_pct_4h is not None
+            and breadth["major_breadth_sample_size"] >= MAJOR_BREADTH_MIN_SAMPLE_SIZE
+            and major_breadth_pct_4h < 40.0
+        )
+        if soft_weak_trend:
+            cautious_reasons.append("BTC 4h weak trend")
+            score_adjustment += MARKET_REGIME_WEAK_TREND_SCORE_ADJUSTMENT
+        if weak_4h_breadth:
+            breadth_status = "cautious"
+            cautious_reasons.append(f"全市场4h上涨广度 {breadth_pct_4h:.1f}% 偏低")
+            score_adjustment += 10
+        if weak_major_breadth:
+            breadth_status = "cautious"
+            cautious_reasons.append(f"主流币4h上涨广度 {major_breadth_pct_4h:.1f}% 偏低")
+            score_adjustment += 5
+        if cautious_reasons:
+            return {
+                "status": "cautious",
+                "breadth_status": breadth_status,
+                "reason": "；".join(cautious_reasons),
+                "symbol": symbol,
+                "recent_return_pct": round(recent_return_pct, 4),
+                "btc_ema5": round(ema5, 4) if ema5 is not None else None,
+                "btc_ema20": round(ema20, 4) if ema20 is not None else None,
+                "breadth_pct": breadth_pct_4h,
+                "score_adjustment": min(score_adjustment, 20),
+                **breadth,
             }
 
         return {
             "status": "enabled",
+            "breadth_status": "enabled",
             "reason": "market_regime_ok",
             "symbol": symbol,
             "recent_return_pct": round(recent_return_pct, 4),
+            "btc_ema5": round(ema5, 4) if ema5 is not None else None,
+            "btc_ema20": round(ema20, 4) if ema20 is not None else None,
+            "breadth_pct": breadth_pct_4h,
+            "score_adjustment": 0,
+            **breadth,
         }
 
     @staticmethod
@@ -477,9 +709,14 @@ class _CryptoOversoldBase(BaseSkill):
         total_count = len(tickers)
         funding_map = self._build_funding_map()
         tradable = self._get_tradable_symbols()
-        market_regime = self._get_market_regime(input_data)
+        market_regime = self._get_market_regime(
+            input_data,
+            tickers=tickers,
+            tradable=tradable,
+            use_market_breadth=interval == "4h",
+        )
         if market_regime.get("status") == "blocked" or (
-            interval == "4h" and market_regime.get("status") != "enabled"
+            interval == "4h" and market_regime.get("status") not in {"enabled", "cautious"}
         ):
             log.warning(
                 "[%s] 市场状态阻断超跌交易: %s",
@@ -495,9 +732,22 @@ class _CryptoOversoldBase(BaseSkill):
                     "after_base_filter": 0,
                     "after_oversold_filter": 0,
                     "output_count": 0,
+                    "min_oversold_score": min_score,
+                    "effective_min_oversold_score": min_score,
                 },
                 "market_regime": market_regime,
             }
+        score_adjustment = int(market_regime.get("score_adjustment", 0) or 0)
+        effective_min_score = min_score + score_adjustment
+        cautious_mode = interval == "4h" and market_regime.get("status") == "cautious"
+        if cautious_mode:
+            log.warning(
+                "[%s] 谨慎模式: %s，超跌评分门槛 %s -> %s，要求强右侧确认",
+                self.name,
+                market_regime.get("reason", ""),
+                min_score,
+                effective_min_score,
+            )
 
         if target_symbols:
             pool = self._build_target_pool(tickers, target_symbols)
@@ -830,10 +1080,18 @@ class _CryptoOversoldBase(BaseSkill):
                             confirmation["reason"],
                         )
                         continue
+                    if cautious_mode and not confirmation.get("strong"):
+                        log.info(
+                            "[%s] %s 谨慎模式要求强右侧确认: %s",
+                            self.name,
+                            symbol,
+                            confirmation["reason"],
+                        )
+                        continue
 
                 result["oversold_score"] = min(100, round(result["oversold_score"]))
 
-                if result["oversold_score"] < min_score:
+                if result["oversold_score"] < effective_min_score:
                     continue
 
                 returns_map[symbol] = calc_returns(closes)
@@ -906,6 +1164,9 @@ class _CryptoOversoldBase(BaseSkill):
                         "panic_penalty": result.get("panic_penalty", 0),
                         "oversold_confirmation": confirmation,
                         "volatility_action": volatility_action,
+                        "market_regime_status": market_regime.get("status"),
+                        "market_score_adjustment": score_adjustment,
+                        "effective_min_oversold_score": effective_min_score,
                         # ── 原有字段 ───────────────────────────────────
                         "rsi": result["rsi"],
                         "bias_20": result["bias_20"],
@@ -952,6 +1213,8 @@ class _CryptoOversoldBase(BaseSkill):
                 "after_base_filter": len(pool),
                 "after_oversold_filter": len(scored),
                 "output_count": len(candidates),
+                "min_oversold_score": min_score,
+                "effective_min_oversold_score": effective_min_score,
             },
         }
 

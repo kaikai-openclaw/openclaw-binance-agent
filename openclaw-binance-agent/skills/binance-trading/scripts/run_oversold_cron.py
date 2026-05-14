@@ -165,6 +165,12 @@ def render_markdown(report: dict) -> str:
         "扫描结果:",
         f"- 市场状态: {scan.get('market_regime', {}).get('status', 'unknown')} "
         f"({scan.get('market_regime', {}).get('reason', '')})",
+        f"- 4h广度: {_fmt_optional(scan.get('market_regime', {}).get('breadth_pct_4h'), suffix='%')} / "
+        f"24h广度: {_fmt_optional(scan.get('market_regime', {}).get('breadth_pct_24h'), suffix='%')} / "
+        f"主流4h: {_fmt_optional(scan.get('market_regime', {}).get('major_breadth_pct_4h'), suffix='%')}",
+        f"- 评分门槛: {scan['filter_summary'].get('effective_min_oversold_score', scan['filter_summary'].get('min_oversold_score', 0))} "
+        f"(基础 {scan['filter_summary'].get('min_oversold_score', 0)}, "
+        f"调整 +{scan.get('market_regime', {}).get('score_adjustment', 0)})",
         f"- 全部交易对: {scan['filter_summary'].get('total_tickers', 0)}",
         f"- 基础过滤后: {scan['filter_summary'].get('after_base_filter', 0)}",
         f"- 超跌候选: {scan['filter_summary'].get('after_oversold_filter', 0)}",

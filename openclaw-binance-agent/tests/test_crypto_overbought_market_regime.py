@@ -123,7 +123,8 @@ class MissingLastPriceClient(LowScoreTargetClient):
         }]
 
 
-def test_overbought_scan_blocks_btc_strong_uptrend():
+def test_overbought_scan_cautious_btc_strong_uptrend():
+    """BTC 4h EMA 强趋势上涨时返回 cautious +15 而非 blocked。"""
     skill = ShortTermOverboughtSkill(
         state_store=FakeStateStore(),
         input_schema={},
@@ -133,8 +134,8 @@ def test_overbought_scan_blocks_btc_strong_uptrend():
 
     result = skill.run({})
 
-    assert result["candidates"] == []
-    assert result["market_regime"]["status"] == "blocked"
+    assert result["market_regime"]["status"] == "cautious"
+    assert result["market_regime"]["score_adjustment"] == 15
     assert "强趋势上涨" in result["market_regime"]["reason"]
 
 
@@ -243,7 +244,7 @@ def test_market_regime_raises_threshold_when_btc_above_ma200():
 
     assert regime["status"] == "enabled"
     assert regime["btc_above_ma200"] is True
-    assert regime["score_adjustment"] == 15
+    assert regime["score_adjustment"] == 8
     assert regime["ma200"] is not None
     assert regime["ma200"] > 0
 
@@ -309,7 +310,7 @@ def test_market_regime_ma200_stacks_with_5d_rally():
 
     assert regime["status"] == "cautious"
     assert regime["btc_above_ma200"] is True
-    assert regime["score_adjustment"] == 25  # 15 (MA200) + 10 (5d rally)
+    assert regime["score_adjustment"] == 18  # 8 (MA200) + 10 (5d rally)
     assert "强势上涨" in regime["reason"]
 
 
@@ -327,3 +328,107 @@ def test_market_regime_ma200_insufficient_data_skips():
     assert regime["status"] in ("enabled", "blocked", "cautious", "unknown")
     # StrongTrendClient 日线只有 20 根，不够 200 根，MA200 跳过
     assert regime.get("btc_above_ma200", False) is False
+
+
+def test_ma200_score_adjustment_is_8():
+    """MA200 score_adjustment 应为 8（从 15 降低）。"""
+    from src.skills.crypto_overbought import BTC_DAILY_MA200_SCORE_ADJUSTMENT
+
+    assert BTC_DAILY_MA200_SCORE_ADJUSTMENT == 8
+
+
+def test_funding_rate_hard_cap_is_03pct():
+    """资金费率硬顶应为 0.3%（从 0.15% 提高）。"""
+    from src.skills.crypto_overbought import FUNDING_RATE_MAX_FOR_SHORT
+
+    assert FUNDING_RATE_MAX_FOR_SHORT == 0.003
+
+
+def test_4h_momentum_risk_normal_below_soft_threshold():
+    risk = ShortTermOverboughtSkill._calculate_4h_momentum_risk(
+        price_change_since_close_pct=1.4,
+        atr_filter_pct=None,
+    )
+
+    assert risk["risk_level"] == "normal"
+    assert risk["hard_block"] is False
+    assert risk["penalty"] == 0.0
+    assert risk["soft_threshold"] == 1.5
+    assert risk["hard_threshold"] == 3.0
+
+
+def test_4h_momentum_risk_elevated_between_soft_and_hard():
+    risk = ShortTermOverboughtSkill._calculate_4h_momentum_risk(
+        price_change_since_close_pct=2.0,
+        atr_filter_pct=None,
+    )
+
+    assert risk["risk_level"] == "elevated"
+    assert risk["hard_block"] is False
+    assert risk["penalty"] == 2.0
+
+
+def test_4h_momentum_risk_hard_blocks_above_hard_threshold():
+    risk = ShortTermOverboughtSkill._calculate_4h_momentum_risk(
+        price_change_since_close_pct=4.0,
+        atr_filter_pct=None,
+    )
+
+    assert risk["risk_level"] == "hard_block"
+    assert risk["hard_block"] is True
+
+
+def test_4h_momentum_risk_uses_atr_adaptive_thresholds():
+    risk = ShortTermOverboughtSkill._calculate_4h_momentum_risk(
+        price_change_since_close_pct=4.0,
+        atr_filter_pct=10.0,
+    )
+
+    assert risk["soft_threshold"] == 2.5
+    assert risk["hard_threshold"] == 5.0
+    assert risk["risk_level"] == "elevated"
+    assert risk["hard_block"] is False
+
+
+def test_4h_confirmation_structural_exemption():
+    """structural_count >= 3 时豁免 momentum_count 要求。"""
+    result = ShortTermOverboughtSkill._build_4h_confirmation(
+        closes=[100.0] * 20,
+        highs=[101.0] * 20,
+        lows=[99.0] * 20,
+        klines_1h=[],
+        current_price=100.0,
+        rsi_1h=None,
+        rsi_1h_trend=None,
+        macd_divergence=True,
+        rsi_divergence=True,
+        volume_divergence=True,
+        kdj_dead_cross=True,
+        drawdown_from_high=None,
+    )
+    assert result["signal_count"] == 4
+    assert result["structural_count"] == 4
+    assert result["momentum_count"] == 0
+    assert result["passed"] is True  # structural >= 3 豁免 momentum
+
+
+def test_4h_confirmation_still_requires_momentum_when_structural_low():
+    """structural_count < 3 时仍需 momentum_count >= 1。"""
+    result = ShortTermOverboughtSkill._build_4h_confirmation(
+        closes=[100.0] * 20,
+        highs=[101.0] * 20,
+        lows=[99.0] * 20,
+        klines_1h=[],
+        current_price=100.0,
+        rsi_1h=None,
+        rsi_1h_trend=None,
+        macd_divergence=True,
+        rsi_divergence=True,
+        volume_divergence=False,
+        kdj_dead_cross=False,
+        drawdown_from_high=None,
+    )
+    assert result["signal_count"] == 2
+    assert result["structural_count"] == 2
+    assert result["momentum_count"] == 0
+    assert result["passed"] is False  # structural < 3, 需 momentum

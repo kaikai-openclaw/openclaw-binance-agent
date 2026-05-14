@@ -96,7 +96,7 @@ FUNDING_RATE_HIGH = 0.001  # +0.1%，偏高
 FUNDING_RATE_EXTREME = 0.003  # +0.3%，极端（多头付费维持仓位）
 FUNDING_RATE_VERY_EXTREME = 0.005  # +0.5%，罕见极端
 FUNDING_RATE_MAX_FOR_SHORT = (
-    0.0015  # +0.15%，做空资金费率上限（超过则借币成本过高，直接排除）
+    0.003  # +0.3%，做空资金费率上限（超过则借币成本过高，直接排除）
 )
 FUNDING_RATE_MIN_FOR_SCORE = 0.0005  # +0.05%，做空资金费率下限（低于此值不加分）
 
@@ -185,8 +185,16 @@ DEFAULT_MAX_CANDIDATES = 10
 SQUEEZE_RISK_QV_THRESHOLD = 20_000_000
 SQUEEZE_RISK_OI_RATIO = 0.6  # OI 价值 / 24h 成交额 > 60% = 极度拥挤（从 80% 收紧）
 
+# 4h 收盘后盘中继续上涨的追空风险阈值。
+# 软阈值：扣分并要求更强顶部确认；硬阈值：直接跳过，避免强动能中开空。
+MOMENTUM_SOFT_CHASE_PCT_4H = 1.5
+MOMENTUM_HARD_CHASE_PCT_4H = 3.0
+MOMENTUM_EXTREME_CHASE_PCT_4H = 5.0
+MOMENTUM_SOFT_ATR_MULT_4H = 0.25
+MOMENTUM_HARD_ATR_MULT_4H = 0.50
+
 # BTC 日线 MA200 牛市过滤：BTC 在牛市结构中做空统计上负EV
-BTC_DAILY_MA200_SCORE_ADJUSTMENT = 15  # BTC日线close > MA200时，做空门槛提高15分
+BTC_DAILY_MA200_SCORE_ADJUSTMENT = 8  # BTC日线close > MA200时，做空门槛提高8分
 
 
 # ══════════════════════════════════════════════════════════
@@ -358,13 +366,16 @@ class _CryptoOverboughtBase(BaseSkill):
             and ema5_4h > ema20_4h
         ):
             return {
-                "status": "blocked",
+                "status": "cautious",
                 "reason": (
                     f"BTC 4h 强趋势上涨 last={last_close_4h:.2f}>EMA20={ema20_4h:.2f}, "
-                    f"EMA5={ema5_4h:.2f}>EMA20，不做逆势短空"
+                    f"EMA5={ema5_4h:.2f}>EMA20，做空需谨慎"
                 ),
                 "symbol": symbol,
                 "recent_return_pct": round(recent_return_4h_pct, 4),
+                "btc_above_ma200": False,
+                "ma200": None,
+                "score_adjustment": 15,
             }
 
         # 1d 级别趋势检查
@@ -489,7 +500,11 @@ class _CryptoOverboughtBase(BaseSkill):
             structural_count += 1
             reasons.append("已从高点回落")
 
-        passed = signal_count >= 2 and momentum_count >= 1
+        passed = (
+            signal_count >= 2 and momentum_count >= 1
+        ) or (
+            signal_count >= 4 and structural_count >= 3
+        )
         strong = signal_count >= 3 and momentum_count >= 1 and structural_count >= 1
         very_strong = (
             signal_count >= 4 and momentum_count >= 2 and structural_count >= 1
@@ -503,6 +518,46 @@ class _CryptoOverboughtBase(BaseSkill):
             "structural_count": structural_count,
             "reasons": reasons,
             "reason": " | ".join(reasons) if reasons else "顶部确认不足",
+        }
+
+    @staticmethod
+    def _calculate_4h_momentum_risk(
+        price_change_since_close_pct: float,
+        atr_filter_pct: Optional[float],
+    ) -> dict:
+        """计算 4h 做空的盘中动能延续风险。"""
+        soft_threshold = MOMENTUM_SOFT_CHASE_PCT_4H
+        hard_threshold = MOMENTUM_HARD_CHASE_PCT_4H
+        if atr_filter_pct is not None and atr_filter_pct > 0:
+            soft_threshold = max(
+                soft_threshold,
+                atr_filter_pct * MOMENTUM_SOFT_ATR_MULT_4H,
+            )
+            hard_threshold = max(
+                hard_threshold,
+                atr_filter_pct * MOMENTUM_HARD_ATR_MULT_4H,
+            )
+
+        risk_level = "normal"
+        hard_block = False
+        penalty = 0.0
+        if (
+            price_change_since_close_pct > hard_threshold
+            or price_change_since_close_pct > MOMENTUM_EXTREME_CHASE_PCT_4H
+        ):
+            risk_level = "hard_block"
+            hard_block = True
+        elif price_change_since_close_pct > soft_threshold:
+            risk_level = "elevated"
+            excess = price_change_since_close_pct - soft_threshold
+            penalty = min(15.0, excess * 4.0)
+
+        return {
+            "risk_level": risk_level,
+            "hard_block": hard_block,
+            "penalty": penalty,
+            "soft_threshold": round(soft_threshold, 4),
+            "hard_threshold": round(hard_threshold, 4),
         }
 
     def _run_scan(
@@ -534,9 +589,7 @@ class _CryptoOverboughtBase(BaseSkill):
         funding_map = self._build_funding_map()
         tradable = self._get_tradable_symbols()
         market_regime = self._get_market_regime(input_data)
-        if market_regime.get("status") == "blocked" or (
-            interval == "4h" and market_regime.get("status") != "enabled"
-        ):
+        if market_regime.get("status") == "blocked":
             log.warning(
                 "[%s] 市场状态阻断做空交易: %s",
                 self.name,
@@ -598,6 +651,13 @@ class _CryptoOverboughtBase(BaseSkill):
                 fr = funding_map.get(symbol)
                 oi_raw = oi_map.get(symbol)
                 qv = item.get("quoteVolume", 0)
+                last_close_for_atr = closes[-1]
+                atr_filter_val = calc_atr(highs, lows, closes, ATR_PERIOD_FILTER)
+                atr_filter_pct = (
+                    round(atr_filter_val / last_close_for_atr * 100, 2)
+                    if (atr_filter_val and last_close_for_atr > 0)
+                    else None
+                )
 
                 # 计算 OI 的 USDT 价值
                 oi_value = oi_raw * closes[-1] if oi_raw and closes[-1] > 0 else None
@@ -688,8 +748,8 @@ class _CryptoOverboughtBase(BaseSkill):
                             short_squeeze_detected = True
 
                 # ── 实时价格组合分析 ──────────────────────────────────────
-                # 在已关闭 K 线形态判断基础上，叠加当前实时价格变动
-                # 判断：4h收盘后价格是否仍在继续上涨（追空风险高）
+                # 在已关闭 K 线形态判断基础上，叠加当前实时价格变动。
+                # 判断：4h 收盘后价格是否仍在继续上涨（盘中动能延续/追空风险）。
                 current_price_raw = item.get("lastPrice")
                 current_price = float(current_price_raw) if current_price_raw else 0.0
                 if current_price <= 0:
@@ -705,32 +765,58 @@ class _CryptoOverboughtBase(BaseSkill):
                     if current_price > 0 and last_closed_close > 0
                     else 0.0
                 )
-                # 动能惩罚：4h收盘后价格继续大涨 → 做空风险极高
-                # 做空方向：价格继续上涨意味着空头被轧，追空可能被止损
+                # 动能惩罚：4h 收盘后价格继续上涨 → 做空风险升高。
+                # 软阈值扣分，硬阈值直接跳过，阈值随 ATR 自适应。
                 momentum_penalty = 0.0
-                _momentum_chase_thresh = 2.0 if interval == "1h" else 1.5
-                if price_change_since_close_pct > _momentum_chase_thresh:
-                    excess = price_change_since_close_pct - _momentum_chase_thresh
-                    momentum_penalty = min(15.0, excess * 3.0)
-                    log.info(
-                        "[%s] %s 4h收盘后继续涨 %.2f%%，轧空风险扣分 %.1f",
-                        self.name,
-                        symbol,
+                momentum_risk_level = "normal"
+                momentum_threshold_soft = 2.0
+                momentum_threshold_hard = None
+                klines_1h: List[list] = []
+                if interval == "4h":
+                    momentum_risk = self._calculate_4h_momentum_risk(
                         price_change_since_close_pct,
-                        momentum_penalty,
+                        atr_filter_pct,
                     )
-                if interval == "4h" and price_change_since_close_pct > 1.5:
-                    log.info(
-                        "[%s] %s 4h收盘后继续上涨 %.2f%%，追空风险过高，跳过",
-                        self.name,
-                        symbol,
-                        price_change_since_close_pct,
-                    )
-                    continue
+                    momentum_penalty = momentum_risk["penalty"]
+                    momentum_risk_level = momentum_risk["risk_level"]
+                    momentum_threshold_soft = momentum_risk["soft_threshold"]
+                    momentum_threshold_hard = momentum_risk["hard_threshold"]
+                    if momentum_risk["hard_block"]:
+                        log.info(
+                            "[%s] %s 4h收盘后继续上涨 %.2f%%，超过追空硬阈值 %.2f%%，跳过",
+                            self.name,
+                            symbol,
+                            price_change_since_close_pct,
+                            momentum_threshold_hard,
+                        )
+                        continue
+                    if momentum_risk_level == "elevated":
+                        log.info(
+                            "[%s] %s 4h收盘后继续涨 %.2f%%，盘中动能延续扣分 %.1f",
+                            self.name,
+                            symbol,
+                            price_change_since_close_pct,
+                            momentum_penalty,
+                        )
+                else:
+                    if price_change_since_close_pct > momentum_threshold_soft:
+                        excess = price_change_since_close_pct - momentum_threshold_soft
+                        momentum_penalty = min(15.0, excess * 3.0)
+                        momentum_risk_level = "elevated"
+                        log.info(
+                            "[%s] %s 1h收盘后继续涨 %.2f%%，盘中动能延续扣分 %.1f",
+                            self.name,
+                            symbol,
+                            price_change_since_close_pct,
+                            momentum_penalty,
+                        )
                 result["overbought_score"] = max(
                     1, result["overbought_score"] - momentum_penalty
                 )
                 result["momentum_penalty"] = momentum_penalty
+                result["momentum_risk_level"] = momentum_risk_level
+                result["momentum_threshold_soft"] = momentum_threshold_soft
+                result["momentum_threshold_hard"] = momentum_threshold_hard
 
                 # ── 1h RSI 先行信号（增强版：加入趋势方向）───────────────
                 # 做空方向：RSI趋势比绝对值更重要
@@ -807,9 +893,26 @@ class _CryptoOverboughtBase(BaseSkill):
                         result["rsi_1h_trend"] = None
                         result["rsi_1h_bonus"] = 0
                 except Exception:
+                    klines_1h = []
                     result["rsi_1h"] = None
                     result["rsi_1h_trend"] = None
                     result["rsi_1h_bonus"] = 0
+
+                if (
+                    interval == "4h"
+                    and result.get("rsi_1h") is not None
+                    and result.get("rsi_1h_trend") is not None
+                    and result["rsi_1h"] >= 90
+                    and result["rsi_1h_trend"] > 0
+                ):
+                    log.info(
+                        "[%s] %s 1h RSI %.1f 且继续上升 %.2f，极端追空风险，跳过",
+                        self.name,
+                        symbol,
+                        result["rsi_1h"],
+                        result["rsi_1h_trend"],
+                    )
+                    continue
 
                 # ── 周期进度检测 ──────────────────────────────────────────
                 # 计算当前4h周期内已完成多少根1h K线，判断是否接近收盘
@@ -921,7 +1024,7 @@ class _CryptoOverboughtBase(BaseSkill):
                         closes=closes,
                         highs=highs,
                         lows=lows,
-                        klines_1h=klines_1h if "klines_1h" in locals() else [],
+                        klines_1h=klines_1h,
                         current_price=current_price,
                         rsi_1h=result.get("rsi_1h"),
                         rsi_1h_trend=result.get("rsi_1h_trend"),
@@ -953,6 +1056,15 @@ class _CryptoOverboughtBase(BaseSkill):
                         confirmation.get("reason", ""),
                     )
                     continue
+                if interval == "4h" and momentum_risk_level == "elevated":
+                    if not confirmation.get("strong"):
+                        log.info(
+                            "[%s] %s 盘中动能延续风险偏高，需要强顶部确认，跳过: reason=%s",
+                            self.name,
+                            symbol,
+                            confirmation.get("reason", ""),
+                        )
+                        continue
                 if interval == "4h":
                     result["overbought_score"] += (
                         8 if confirmation.get("very_strong")
@@ -960,37 +1072,31 @@ class _CryptoOverboughtBase(BaseSkill):
                     )
 
                 # P2-6: 4h 高波动做空改为硬过滤 + 分级处理
-                atr_check_val = calc_atr(highs, lows, closes, ATR_PERIOD_FILTER)
-                last_close_for_atr = closes[-1]
-                atr_check_pct = (
-                    round(atr_check_val / last_close_for_atr * 100, 2)
-                    if (atr_check_val and last_close_for_atr > 0)
-                    else None
-                )
+                atr_check_pct = atr_filter_pct
                 volatility_action = "allow"
                 if interval == "4h" and atr_check_pct is not None:
-                    if atr_check_pct > 6.0:
+                    if atr_check_pct > 8.0:
                         log.info(
-                            "[%s] %s ATR%.2f%%>6%%，4h 做空直接跳过",
+                            "[%s] %s ATR%.2f%%>8%%，4h 做空直接跳过",
                             self.name,
                             symbol,
                             atr_check_pct,
                         )
                         continue
-                    if 5.0 < atr_check_pct <= 6.0:
+                    if 6.0 < atr_check_pct <= 8.0:
                         if not confirmation.get("very_strong"):
                             log.info(
-                                "[%s] %s ATR%.2f%% 位于 5-6%%，需要极强顶部确认，跳过",
+                                "[%s] %s ATR%.2f%% 位于 6-8%%，需要极强顶部确认，跳过",
                                 self.name,
                                 symbol,
                                 atr_check_pct,
                             )
                             continue
                         volatility_action = "reduce_size_strict"
-                    elif 4.0 < atr_check_pct <= 5.0:
+                    elif 5.0 < atr_check_pct <= 6.0:
                         if not confirmation.get("strong"):
                             log.info(
-                                "[%s] %s ATR%.2f%% 位于 4-5%%，需要强顶部确认，跳过",
+                                "[%s] %s ATR%.2f%% 位于 5-6%%，需要强顶部确认，跳过",
                                 self.name,
                                 symbol,
                                 atr_check_pct,
@@ -1005,11 +1111,6 @@ class _CryptoOverboughtBase(BaseSkill):
                 atr_pct = (
                     round(atr_val / last_close * 100, 2)
                     if (atr_val and last_close > 0)
-                    else None
-                )
-                atr_filter_pct = (
-                    round(atr_filter_val / last_close * 100, 2)
-                    if (atr_filter_val and last_close > 0)
                     else None
                 )
 
@@ -1029,6 +1130,9 @@ class _CryptoOverboughtBase(BaseSkill):
                             price_change_since_close_pct, 2
                         ),
                         "momentum_penalty": result.get("momentum_penalty", 0),
+                        "momentum_risk_level": result.get("momentum_risk_level", "normal"),
+                        "momentum_threshold_soft": result.get("momentum_threshold_soft"),
+                        "momentum_threshold_hard": result.get("momentum_threshold_hard"),
                         "rsi_1h": result.get("rsi_1h"),
                         "rsi_1h_trend": result.get("rsi_1h_trend"),
                         "rsi_1h_bonus": result.get("rsi_1h_bonus", 0),

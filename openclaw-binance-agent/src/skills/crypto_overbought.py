@@ -250,13 +250,18 @@ class _CryptoOverboughtBase(BaseSkill):
     def _get_tradable_symbols(self) -> set:
         try:
             info = self._client.get_exchange_info()
-            return {
-                s["symbol"]
-                for s in info.get("symbols", [])
-                if s.get("status") == "TRADING"
-                and s.get("contractType") == "PERPETUAL"
-                and s.get("quoteAsset") == "USDT"
-            }
+            now_ms = int(time.time() * 1000)
+            warn_threshold = now_ms + 14 * 24 * 3600 * 1000
+            result = set()
+            for s in info.get("symbols", []):
+                if (s.get("status") == "TRADING"
+                        and s.get("contractType") == "PERPETUAL"
+                        and s.get("quoteAsset") == "USDT"):
+                    dd = s.get("deliveryDate", 0)
+                    if dd and 0 < dd < warn_threshold:
+                        continue
+                    result.add(s["symbol"])
+            return result
         except Exception as exc:
             log.warning("[%s] 获取交易对信息失败: %s", self.name, exc)
             return set()

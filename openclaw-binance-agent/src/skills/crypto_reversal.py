@@ -807,7 +807,7 @@ class _CryptoReversalBase(BaseSkill):
                 and lows[-1] >= support * 0.985
             )
 
-        passed = cond_dist and (cond_kdj or cond_rsi_1h) and (breakout or pullback_hold)
+        passed = cond_dist and sum([cond_kdj, cond_rsi_1h, breakout, pullback_hold]) >= 2
         reasons = []
         if cond_dist:
             reasons.append("距底理想")

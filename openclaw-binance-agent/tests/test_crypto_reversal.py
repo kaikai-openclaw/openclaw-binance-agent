@@ -658,6 +658,75 @@ def test_4h_confirmation_accepts_kdj_breakout() -> None:
     assert result["breakout"] is True
 
 
+def test_4h_confirmation_passes_with_kdj_rsi_without_breakout() -> None:
+    """KDJ + RSI 双动量确认，无需 breakout/pullback 即可通过"""
+    closes = [100.0 + i * 0.2 for i in range(30)]
+    highs = [x * 1.01 for x in closes]
+    lows = [x * 0.99 for x in closes]
+
+    result = ShortTermReversalSkill._build_4h_confirmation(
+        closes=closes,
+        highs=highs,
+        lows=lows,
+        current_price=closes[-1],
+        dist_bottom_pct=6.0,
+        kdj_score=25,
+        rsi_1h=55.0,
+    )
+
+    assert result["passed"] is True
+    assert result["cond_dist"] is True
+    assert result["cond_kdj"] is True
+    assert result["cond_rsi_1h"] is True
+
+
+def test_4h_confirmation_fails_with_only_kdj() -> None:
+    """仅 KDJ 一项（无 RSI/breakout/pullback），不满足四选二"""
+    # 用平缓序列避免 pullback_hold 自动满足
+    closes = [100.0] * 20 + [106.0] * 10
+    highs = [x * 1.01 for x in closes]
+    lows = [x * 0.99 for x in closes]
+
+    result = ShortTermReversalSkill._build_4h_confirmation(
+        closes=closes,
+        highs=highs,
+        lows=lows,
+        current_price=closes[-1] * 0.95,
+        dist_bottom_pct=6.0,
+        kdj_score=25,
+        rsi_1h=None,
+    )
+
+    assert result["passed"] is False
+    assert result["cond_kdj"] is True
+
+
+def test_4h_confirmation_passes_with_rsi_pullback() -> None:
+    """RSI + pullback_hold 组合通过"""
+    closes = [100.0 + i * 0.2 for i in range(30)]
+    ema5 = sum(closes[-5:]) / 5
+    ema10 = sum(closes[-10:]) / 10
+    support = min(ema5, ema10)
+    current_price = support * 1.0
+    lows = [x * 0.99 for x in closes]
+    # 让 last low 略高于 support * 0.985 以满足 pullback_hold
+    lows[-1] = support * 0.99
+
+    result = ShortTermReversalSkill._build_4h_confirmation(
+        closes=closes,
+        highs=[x * 1.01 for x in closes],
+        lows=lows,
+        current_price=current_price,
+        dist_bottom_pct=6.0,
+        kdj_score=0,
+        rsi_1h=55.0,
+    )
+
+    assert result["passed"] is True
+    assert result["cond_rsi_1h"] is True
+    assert result["pullback_hold"] is True
+
+
 def test_4h_vol_1h_confirm_constants():
     from src.skills.crypto_reversal import (
         VOL_1H_CONFIRM_BONUS,

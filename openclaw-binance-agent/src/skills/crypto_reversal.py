@@ -219,6 +219,8 @@ MAJOR_BREADTH_BASES = {
 BTC_REALTIME_EMA20_RECOVERY_RATIO = 0.997
 BTC_REALTIME_LAST_CLOSE_RECOVERY_RATIO = 1.003
 BTC_REALTIME_RECOVERY_SCORE_ADJUSTMENT = 15
+LOW_BREADTH_HARD_BLOCK_THRESHOLD = 20.0  # 广度 < 20%: 自由落体，硬阻断
+LOW_BREADTH_CAUTIOUS_SCORE_ADJUSTMENT = 20  # 广度 20-35%: 严格谨慎模式
 
 
 # ══════════════════════════════════════════════════════════
@@ -603,12 +605,30 @@ class _CryptoReversalBase(BaseSkill):
                 and breadth_pct_4h is not None
                 and breadth_pct_4h < 35.0
             ):
+                if breadth_pct_4h < LOW_BREADTH_HARD_BLOCK_THRESHOLD:
+                    return {
+                        "status": "blocked",
+                        "breadth_status": "blocked",
+                        "reason": (
+                            f"全市场4h上涨广度 {breadth_pct_4h:.1f}% 极低（自由落体），"
+                            "BTC实时修复不能解除广度硬阻断"
+                        ),
+                        "symbol": symbol,
+                        "btc_last_close": round(last_close, 4),
+                        "recent_return_pct": round(recent_return_pct, 4),
+                        "btc_ema5": round(ema5, 4),
+                        "btc_ema20": round(ema20, 4),
+                        "breadth_pct": breadth_pct_4h,
+                        "score_adjustment": 0,
+                        **breadth,
+                        **{**realtime_recovery, "btc_regime_downgraded_from_blocked": False},
+                    }
                 return {
-                    "status": "blocked",
-                    "breadth_status": "blocked",
+                    "status": "cautious",
+                    "breadth_status": "cautious",
                     "reason": (
-                        f"全市场4h上涨广度 {breadth_pct_4h:.1f}% 过低，"
-                        "BTC实时修复不能解除广度硬阻断"
+                        f"全市场4h上涨广度 {breadth_pct_4h:.1f}% 偏低，"
+                        "BTC实时和1h趋势已修复，降级为谨慎（低广度严格模式）"
                     ),
                     "symbol": symbol,
                     "btc_last_close": round(last_close, 4),
@@ -616,9 +636,9 @@ class _CryptoReversalBase(BaseSkill):
                     "btc_ema5": round(ema5, 4),
                     "btc_ema20": round(ema20, 4),
                     "breadth_pct": breadth_pct_4h,
-                    "score_adjustment": 0,
+                    "score_adjustment": LOW_BREADTH_CAUTIOUS_SCORE_ADJUSTMENT,
                     **breadth,
-                    **{**realtime_recovery, "btc_regime_downgraded_from_blocked": False},
+                    **realtime_recovery,
                 }
             return {
                 "status": "blocked",
@@ -656,15 +676,13 @@ class _CryptoReversalBase(BaseSkill):
         )
 
         if breadth_pct_4h is not None and breadth_pct_4h < 35.0:
-            # 反转初期广度必然偏低（大部分币还在跌），BTC 已收阳时降级为 cautious
-            if btc_last_4h_up:
+            if breadth_pct_4h < LOW_BREADTH_HARD_BLOCK_THRESHOLD:
                 return {
-                    "status": "cautious",
-                    "breadth_status": "cautious",
+                    "status": "blocked",
+                    "breadth_status": "blocked",
                     "reason": (
-                        f"全市场4h上涨广度 {breadth_pct_4h:.1f}% 偏低，"
-                        f"但 BTC 最近一根 4h 收阳（{closes[-2]:.0f}→{closes[-1]:.0f}），"
-                        f"反转初期广度偏低属正常，降级为谨慎"
+                        f"全市场4h上涨广度 {breadth_pct_4h:.1f}% 极低（自由落体），"
+                        "暂停右侧反转做多"
                     ),
                     "symbol": symbol,
                     "btc_last_close": round(last_close, 4),
@@ -672,20 +690,41 @@ class _CryptoReversalBase(BaseSkill):
                     "btc_ema5": round(ema5, 4) if not math.isnan(ema5) else None,
                     "btc_ema20": round(ema20, 4) if not math.isnan(ema20) else None,
                     "breadth_pct": breadth_pct_4h,
-                    "score_adjustment": 15,
+                    "score_adjustment": 0,
+                    **breadth,
+                }
+            if btc_last_4h_up:
+                return {
+                    "status": "cautious",
+                    "breadth_status": "cautious",
+                    "reason": (
+                        f"全市场4h上涨广度 {breadth_pct_4h:.1f}% 偏低，"
+                        f"但 BTC 最近一根 4h 收阳（{closes[-2]:.0f}→{closes[-1]:.0f}），"
+                        f"反转初期广度偏低属正常，低广度严格模式"
+                    ),
+                    "symbol": symbol,
+                    "btc_last_close": round(last_close, 4),
+                    "recent_return_pct": round(recent_return_pct, 4),
+                    "btc_ema5": round(ema5, 4) if not math.isnan(ema5) else None,
+                    "btc_ema20": round(ema20, 4) if not math.isnan(ema20) else None,
+                    "breadth_pct": breadth_pct_4h,
+                    "score_adjustment": LOW_BREADTH_CAUTIOUS_SCORE_ADJUSTMENT,
                     **breadth,
                 }
             return {
-                "status": "blocked",
-                "breadth_status": "blocked",
-                "reason": f"全市场4h上涨广度 {breadth_pct_4h:.1f}% 过低，暂停右侧反转做多",
+                "status": "cautious",
+                "breadth_status": "cautious",
+                "reason": (
+                    f"全市场4h上涨广度 {breadth_pct_4h:.1f}% 偏低，BTC 未收阳，"
+                    "低广度严格模式（仅允许最高质量信号）"
+                ),
                 "symbol": symbol,
                 "btc_last_close": round(last_close, 4),
                 "recent_return_pct": round(recent_return_pct, 4),
                 "btc_ema5": round(ema5, 4) if not math.isnan(ema5) else None,
                 "btc_ema20": round(ema20, 4) if not math.isnan(ema20) else None,
                 "breadth_pct": breadth_pct_4h,
-                "score_adjustment": 0,
+                "score_adjustment": LOW_BREADTH_CAUTIOUS_SCORE_ADJUSTMENT,
                 **breadth,
             }
         score_adjustment = 0

@@ -386,6 +386,14 @@ def run_report(args: argparse.Namespace) -> dict:
         # 单笔持仓上限 6%，2 笔最多 12% 总敞口
         if args.mode == "1h":
             risk_ratio = min(risk_ratio, 0.06)
+        # 低广度谨慎模式（广度 20-35%）：更严格的仓位控制
+        breadth_pct_4h = scan_data.get("market_regime", {}).get("breadth_pct_4h")
+        is_low_breadth_cautious = (
+            args.mode == "4h"
+            and market_status == "cautious"
+            and breadth_pct_4h is not None
+            and breadth_pct_4h < 35.0
+        )
         s1_data: dict = {"candidates": [], "filter_summary": {}}
         s2_data: dict = {"ratings": [], "filtered_count": 0, "failed_symbols": []}
         s3_data: dict = {"trade_plans": [], "pipeline_status": "no_opportunity"}
@@ -449,11 +457,11 @@ def run_report(args: argparse.Namespace) -> dict:
                     trailing_activation_mult=1.5 if args.mode == "1h" else 1.5,
                     trailing_activation_mult_hv=2.0 if args.mode == "1h" else 2.5,
                     high_vol_tp_mult=3.5 if args.mode == "1h" else 4.0,
-                    max_trades=2 if args.mode == "1h" else 4,
-                    max_position_pct=6.0 if args.mode == "1h" else 18.0,
-                    max_margin_usdt=10.0
-                    if args.mode in ("1h", "4h")
-                    else None,
+                    max_trades=2 if args.mode == "1h" else (1 if is_low_breadth_cautious else 4),
+                    max_position_pct=6.0 if args.mode == "1h" else (9.0 if is_low_breadth_cautious else 18.0),
+                    max_margin_usdt=5.0
+                    if is_low_breadth_cautious
+                    else (10.0 if args.mode in ("1h", "4h") else None),
                     max_hold_hours=12.0 if args.mode == "1h" else 24.0,
                 )
                 s3_input_id = state_store.save(
@@ -589,8 +597,14 @@ def run_report(args: argparse.Namespace) -> dict:
             "protection_orders": protection,
             "account": account_summary,
             "risk": {
-                "max_margin_usdt": 10.0 if args.mode in ("1h", "4h") else None,
-                "max_notional_usdt": 100.0 if args.mode in ("1h", "4h") else None,
+                "max_margin_usdt": (
+                    5.0 if is_low_breadth_cautious
+                    else (10.0 if args.mode in ("1h", "4h") else None)
+                ),
+                "max_notional_usdt": (
+                    50.0 if is_low_breadth_cautious
+                    else (100.0 if args.mode in ("1h", "4h") else None)
+                ),
                 "single_symbol_position_limit_pct": 40,
                 "daily_loss_stop_pct": 5,
                 "risk_status": "paper_mode" if paper_mode else "normal",

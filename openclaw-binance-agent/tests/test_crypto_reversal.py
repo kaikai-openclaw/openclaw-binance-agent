@@ -243,10 +243,10 @@ def test_market_regime_low_breadth_blocks_even_when_btc_realtime_recovers() -> N
 
     result = skill._get_market_regime({}, tickers=tickers)
 
-    assert result["status"] == "blocked"
+    assert result["status"] == "cautious"
     assert result["breadth_pct_4h"] < 35.0
     assert result["btc_1h_recovery"] is True
-    assert result["btc_regime_downgraded_from_blocked"] is False
+    assert result["score_adjustment"] == 20
 
 
 def test_market_regime_uses_20_closed_1h_klines_after_current_trim() -> None:
@@ -290,10 +290,11 @@ def test_market_regime_blocks_low_market_breadth_when_btc_drops() -> None:
 
     result = skill._get_market_regime({}, tickers=tickers)
 
-    assert result["status"] == "blocked"
+    assert result["status"] == "cautious"
     assert "4h上涨广度" in result["reason"]
     assert result["breadth_pct_4h"] == 30.0
     assert result["breadth_pct"] == 30.0
+    assert result["score_adjustment"] == 20
 
 
 def test_market_regime_cautious_low_breadth_when_btc_reversal_up() -> None:
@@ -312,7 +313,72 @@ def test_market_regime_cautious_low_breadth_when_btc_reversal_up() -> None:
     assert result["status"] == "cautious"
     assert "反转初期" in result["reason"]
     assert result["breadth_pct_4h"] == 30.0
-    assert result["score_adjustment"] == 15
+    assert result["score_adjustment"] == 20
+
+
+def test_market_regime_hard_blocks_below_20_pct_breadth_standalone() -> None:
+    """广度 < 20% 自由落体硬阻断"""
+    closes = [100.0 + i * 0.1 for i in range(80)]
+    tickers, klines_by_symbol = _make_breadth_fixture(15, 85)
+    skill = ShortTermReversalSkill(
+        None,
+        {},
+        {},
+        DummyClient(_make_klines(closes), klines_by_symbol),
+    )
+
+    result = skill._get_market_regime({}, tickers=tickers)
+
+    assert result["status"] == "blocked"
+    assert result["breadth_pct_4h"] == 15.0
+    assert "自由落体" in result["reason"]
+
+
+def test_market_regime_hard_blocks_below_20_pct_breadth_btc_weak_recovery() -> None:
+    """广度 < 20% 即使 BTC 实时+1h 恢复仍硬阻断"""
+    closes = [120.0 - i * 0.2 for i in range(80)]
+    tickers, klines_by_symbol = _make_breadth_fixture(15, 85)
+    tickers.append({
+        "symbol": "BTCUSDT",
+        "priceChangePercent": "0.5",
+        "quoteVolume": "1000000000",
+        "lastPrice": "106.0",
+    })
+    skill = ShortTermReversalSkill(
+        None,
+        {},
+        {},
+        BTCRealtimeRecoveryClient(
+            _make_klines(closes),
+            _make_klines([100.0 + i * 0.2 for i in range(20)]),
+            klines_by_symbol,
+            btc_last_price=106.0,
+        ),
+    )
+
+    result = skill._get_market_regime({}, tickers=tickers)
+
+    assert result["status"] == "blocked"
+    assert result["breadth_pct_4h"] < 20.0
+    assert result["btc_regime_downgraded_from_blocked"] is False
+
+
+def test_market_regime_cautious_at_20_pct_breadth_boundary() -> None:
+    """广度正好 20% 属于 20-35% 层级，cautious"""
+    closes = [100.0 + i * 0.1 for i in range(80)]
+    tickers, klines_by_symbol = _make_breadth_fixture(20, 80)
+    skill = ShortTermReversalSkill(
+        None,
+        {},
+        {},
+        DummyClient(_make_klines(closes), klines_by_symbol),
+    )
+
+    result = skill._get_market_regime({}, tickers=tickers)
+
+    assert result["status"] == "cautious"
+    assert result["breadth_pct_4h"] == 20.0
+    assert result["score_adjustment"] == 20
 
 
 def test_market_regime_cautious_for_borderline_4h_breadth() -> None:

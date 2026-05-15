@@ -229,7 +229,11 @@ class _CryptoOversoldBase(BaseSkill):
             if not s.endswith("USDT"):
                 s += "USDT"
             normalized.add(s)
-        return [t for t in tickers if t.get("symbol", "") in normalized]
+        result = [t for t in tickers if t.get("symbol", "") in normalized]
+        for t in result:
+            t["quoteVolume"] = float(t.get("quoteVolume", 0))
+            t["priceChangePercent"] = float(t.get("priceChangePercent", 0))
+        return result
 
     def _base_filter(self, tickers, tradable, min_qv):
         exclude_bases = {"USDC", "BUSD", "DAI", "TUSD", "FDUSD", "USDP"}
@@ -1016,26 +1020,20 @@ class _CryptoOversoldBase(BaseSkill):
                         continue
 
                 # ── 支撑位检测 ──────────────────────────────────────────────
-                # 查找近60根K线的局部低点作为支撑位参考
-                recent_lows = []
-                lookback_support = 60
-                for i in range(lookback_support, len(lows)):
-                    window = lows[i - lookback_support : i]
-                    if window:
-                        min_val = min(window)
-                        min_idx = window.index(min_val)
-                        recent_lows.append((min_val, i - lookback_support + min_idx))
-                # 找到最近的低点
+                # 最近 lookback 根 K 线（含当前）的最低价作为支撑位
                 support_level = None
                 support_distance_pct = None
-                if recent_lows:
-                    support_level, _ = recent_lows[-1]
-                    if support_level > 0:
-                        support_distance_pct = (
-                            (current_price - support_level) / support_level * 100
-                            if current_price > 0
-                            else None
-                        )
+                lookback_support = 60
+                if len(lows) >= lookback_support:
+                    support_level = min(lows[-lookback_support:])
+                else:
+                    support_level = min(lows) if lows else None
+                if support_level is not None and support_level > 0:
+                    support_distance_pct = (
+                        (current_price - support_level) / support_level * 100
+                        if current_price > 0
+                        else None
+                    )
                 # 价格距离支撑位 < 3% 认为在支撑位附近
                 is_near_support = (
                     support_distance_pct is not None
@@ -1710,21 +1708,76 @@ def _calc_kdj_j(
 
 
 def _check_macd_divergence(closes: List[float], lookback: int = 30) -> bool:
-    macd_data = calc_macd(closes)
-    if macd_data.get("histogram") is None or len(closes) < lookback + 10:
+    """检测 MACD 底背离：价格创新低但 MACD 直方图未创新低。
+
+    在完整序列上计算一次 MACD，通过索引取直方图值。
+    同时验证两个低点处 MACD 直方图为负（标准看涨背离要求 MACD 在零轴下方）。
+    使用局部极小值（swing low）而非全局最低点。
+    """
+    # MACD 需要至少 slow(26)+signal(9)-1=34 根有效数据
+    if len(closes) < 35 or len(closes) < lookback + 10:
         return False
+
+    # 在完整序列上计算 MACD 直方图
+    ema_fast = calc_ema(closes, 12)
+    ema_slow = calc_ema(closes, 26)
+    macd_line = []
+    for f, s in zip(ema_fast, ema_slow):
+        if math.isnan(f) or math.isnan(s):
+            macd_line.append(float("nan"))
+        else:
+            macd_line.append(f - s)
+    valid_macd = [v for v in macd_line if not math.isnan(v)]
+    if len(valid_macd) < 9:
+        return False
+    signal_ema = calc_ema(valid_macd, 9)
+    # 构建与 closes 等长的直方图序列
+    nan_count = len(closes) - len(valid_macd)
+    histogram = []
+    for i in range(len(closes)):
+        if i < nan_count:
+            histogram.append(float("nan"))
+        else:
+            vi = i - nan_count
+            if vi < len(signal_ema) and not math.isnan(signal_ema[vi]):
+                histogram.append(macd_line[i] - signal_ema[vi])
+            else:
+                histogram.append(float("nan"))
+
     recent = closes[-lookback:]
     base_idx = len(closes) - lookback
-    min_idx = min(range(len(recent)), key=lambda i: recent[i])
-    prev_min_idx = None
-    for i in range(max(0, min_idx - 5) - 1, -1, -1):
-        if prev_min_idx is None or recent[i] < recent[prev_min_idx]:
-            prev_min_idx = i
-    if prev_min_idx is None or recent[min_idx] >= recent[prev_min_idx]:
+
+    # 找窗口内所有局部低点（前后各 2 根都高于它）
+    troughs = []
+    for i in range(2, len(recent) - 2):
+        if (
+            recent[i] < recent[i - 1]
+            and recent[i] < recent[i - 2]
+            and recent[i] < recent[i + 1]
+            and recent[i] < recent[i + 2]
+        ):
+            troughs.append(i)
+
+    if len(troughs) < 2:
         return False
-    h1 = calc_macd(closes[: base_idx + prev_min_idx + 1]).get("histogram")
-    h2 = calc_macd(closes[: base_idx + min_idx + 1]).get("histogram")
-    return h1 is not None and h2 is not None and h2 > h1
+
+    p1, p2 = troughs[-2], troughs[-1]
+
+    # 价格必须创新低（后者更低）
+    if recent[p2] >= recent[p1]:
+        return False
+
+    h1 = histogram[base_idx + p1]
+    h2 = histogram[base_idx + p2]
+
+    # 直方图值必须有效且为负（标准看涨背离要求 MACD 在零轴下方）
+    if math.isnan(h1) or math.isnan(h2):
+        return False
+    if h1 >= 0 or h2 >= 0:
+        return False
+
+    # 底背离：价格新低但 MACD 直方图更高（负值更小）
+    return h2 > h1
 
 
 def _calc_distance_from_high(closes: List[float], lookback: int) -> Optional[float]:

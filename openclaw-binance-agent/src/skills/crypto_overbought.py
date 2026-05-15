@@ -269,7 +269,12 @@ class _CryptoOverboughtBase(BaseSkill):
             if not s.endswith("USDT"):
                 s += "USDT"
             normalized.add(s)
-        return [t for t in tickers if t.get("symbol", "") in normalized]
+        result = [t for t in tickers if t.get("symbol", "") in normalized]
+        # 确保 quoteVolume / priceChangePercent 为 float（Binance API 返回 str）
+        for t in result:
+            t["quoteVolume"] = float(t.get("quoteVolume", 0))
+            t["priceChangePercent"] = float(t.get("priceChangePercent", 0))
+        return result
 
     def _base_filter(self, tickers, tradable, min_qv):
         exclude_bases = {"USDC", "BUSD", "DAI", "TUSD", "FDUSD", "USDP"}
@@ -681,29 +686,20 @@ class _CryptoOverboughtBase(BaseSkill):
                 )
 
                 # ── 阻力位检测 ──────────────────────────────────────────────
-                # 查找近20根K线的局部高点作为阻力位参考
-                recent_highs = []
-                lookback_resistance = 20
-                for i in range(lookback_resistance, len(highs)):
-                    window = highs[i - lookback_resistance : i]
-                    if window:
-                        max_val = max(window)
-                        max_idx = window.index(max_val)
-                        recent_highs.append(
-                            (max_val, i - lookback_resistance + max_idx)
-                        )
-                # 找到最近的高点
+                # 最近 lookback 根 K 线（含当前）的最高价作为阻力位
                 resistance_level = None
                 resistance_distance_pct = None
-                if recent_highs:
-                    resistance_level = recent_highs[-1][0]
-                    if resistance_level > 0:
-                        # 价格距离阻力位百分比（当前价在阻力位下方的比例）
-                        resistance_distance_pct = (
-                            (resistance_level - closes[-1]) / resistance_level * 100
-                            if closes[-1] > 0
-                            else None
-                        )
+                lookback_resistance = 20
+                if len(highs) >= lookback_resistance:
+                    resistance_level = max(highs[-lookback_resistance:])
+                else:
+                    resistance_level = max(highs) if highs else None
+                if resistance_level is not None and resistance_level > 0:
+                    resistance_distance_pct = (
+                        (resistance_level - closes[-1]) / resistance_level * 100
+                        if closes[-1] > 0
+                        else None
+                    )
                 # 价格距离阻力位 < 5% 认为在阻力位附近
                 is_near_resistance = (
                     resistance_distance_pct is not None
@@ -1070,6 +1066,11 @@ class _CryptoOverboughtBase(BaseSkill):
                         8 if confirmation.get("very_strong")
                         else (5 if confirmation.get("strong") else 3)
                     )
+
+                # 所有 bonus 应用后上界钳制
+                result["overbought_score"] = min(
+                    100, result["overbought_score"]
+                )
 
                 # P2-6: 4h 高波动做空改为硬过滤 + 分级处理
                 atr_check_pct = atr_filter_pct
@@ -1766,19 +1767,39 @@ def _check_kdj_dead_cross(
 
 
 def _check_macd_top_divergence(closes: List[float], lookback: int = 30) -> bool:
-    """检测 MACD 顶背离：价格创新高但 MACD 柱状图未创新高。
+    """检测 MACD 顶背离：价格创新高但 MACD 直方图未创新高。
 
-    修复原版双峰搜索逻辑：使用局部极大值检测，而非从最高点往前固定偏移 5 根，
-    避免单边急涨时因找不到"前一个高点"而永远返回 False。
-
-    逻辑：
-    1. 在 lookback 窗口内找所有局部高点（前后各 2 根都低于它）
-    2. 取最后两个高点，后者价格更高（价格创新高）
-    3. 后者对应的 MACD histogram 更低（动能衰竭）
+    在完整序列上计算一次 MACD，通过索引取直方图值。
+    同时验证两个高点处 MACD 直方图为正（标准看跌背离要求 MACD 在零轴上方）。
+    使用局部极大值检测，而非从最高点往前固定偏移。
     """
-    macd_data = calc_macd(closes)
-    if macd_data.get("histogram") is None or len(closes) < lookback + 10:
+    if len(closes) < 35 or len(closes) < lookback + 10:
         return False
+
+    # 在完整序列上计算 MACD 直方图
+    ema_fast = calc_ema(closes, 12)
+    ema_slow = calc_ema(closes, 26)
+    macd_line = []
+    for f, s in zip(ema_fast, ema_slow):
+        if math.isnan(f) or math.isnan(s):
+            macd_line.append(float("nan"))
+        else:
+            macd_line.append(f - s)
+    valid_macd = [v for v in macd_line if not math.isnan(v)]
+    if len(valid_macd) < 9:
+        return False
+    signal_ema = calc_ema(valid_macd, 9)
+    nan_count = len(closes) - len(valid_macd)
+    histogram = []
+    for i in range(len(closes)):
+        if i < nan_count:
+            histogram.append(float("nan"))
+        else:
+            vi = i - nan_count
+            if vi < len(signal_ema) and not math.isnan(signal_ema[vi]):
+                histogram.append(macd_line[i] - signal_ema[vi])
+            else:
+                histogram.append(float("nan"))
 
     recent = closes[-lookback:]
     base_idx = len(closes) - lookback
@@ -1794,7 +1815,6 @@ def _check_macd_top_divergence(closes: List[float], lookback: int = 30) -> bool:
         ):
             peaks.append(i)
 
-    # 至少需要两个高点才能判断背离
     if len(peaks) < 2:
         return False
 
@@ -1804,12 +1824,17 @@ def _check_macd_top_divergence(closes: List[float], lookback: int = 30) -> bool:
     if recent[p2] <= recent[p1]:
         return False
 
-    # 比较两个高点对应的 MACD histogram
-    h1 = calc_macd(closes[: base_idx + p1 + 1]).get("histogram")
-    h2 = calc_macd(closes[: base_idx + p2 + 1]).get("histogram")
+    h1 = histogram[base_idx + p1]
+    h2 = histogram[base_idx + p2]
 
-    # 顶背离：价格新高但 MACD histogram 更低
-    return h1 is not None and h2 is not None and h2 < h1
+    # 直方图值必须有效且为正（标准看跌背离要求 MACD 在零轴上方）
+    if math.isnan(h1) or math.isnan(h2):
+        return False
+    if h1 <= 0 or h2 <= 0:
+        return False
+
+    # 顶背离：价格新高但 MACD 直方图更低
+    return h2 < h1
 
 
 def _check_rsi_top_divergence(closes: List[float], lookback: int = 30) -> bool:

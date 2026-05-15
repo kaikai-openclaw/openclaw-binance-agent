@@ -315,7 +315,7 @@ def _call_fast_llm(prompt: str, model: Optional[str] = None) -> str:
             json={
                 "model": api_model,
                 "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 2048,
+                "max_tokens": 4096,
                 "temperature": 0.3,
             },
             timeout=90,
@@ -459,6 +459,85 @@ def _build_fast_market_context(market_data: Dict[str, Any]) -> str:
         f"- 波动率动作: {_fmt_prompt_value(market_data.get('volatility_action'))}, "
         f"ATR过滤={_fmt_prompt_value(market_data.get('atr_filter_pct'), '%')}",
     ]
+    return "\n".join(lines)
+
+
+def _build_risk_tags(market_data: Dict[str, Any]) -> str:
+    """构造风险标签和信号确认质量文本。"""
+    lines = []
+
+    # 信号确认质量
+    conf = market_data.get("confirmation")
+    if conf and isinstance(conf, dict):
+        lines.append(f"- 确认通过: {'是' if conf.get('passed') else '否'}")
+        if "strong" in conf:
+            lines.append(f"- 信号强度: {'强' if conf['strong'] else '一般'}")
+        sc = conf.get("signal_count")
+        if sc is not None:
+            lines.append(f"- 触发信号数: {sc}")
+        mc = conf.get("momentum_count")
+        if mc is not None:
+            lines.append(f"- 动量信号数: {mc}")
+        reasons = conf.get("reasons") or conf.get("reason")
+        if reasons:
+            lines.append(f"- 确认原因: {reasons}")
+
+    # 风险标签
+    tags = []
+    if market_data.get("panic_selling_detected"):
+        tags.append("恐慌抛售")
+    if market_data.get("fomo_detected"):
+        tags.append("FOMO追涨")
+    if market_data.get("squeeze_risk"):
+        sr = market_data["squeeze_risk"]
+        if isinstance(sr, bool):
+            tags.append("轧空风险")
+        else:
+            tags.append(f"轧空风险({sr})")
+    mp = market_data.get("momentum_penalty")
+    if mp is not None and mp > 0:
+        tags.append(f"动量惩罚({mp})")
+    mrl = market_data.get("momentum_risk_level")
+    if mrl and mrl != "normal":
+        tags.append(f"动量风险={mrl}")
+    if tags:
+        lines.append(f"- 风险标签: {', '.join(tags)}")
+
+    # 关键价位
+    sd = market_data.get("support_distance_pct")
+    if sd is not None:
+        near = " (接近支撑)" if market_data.get("is_near_support") else ""
+        lines.append(f"- 距支撑位: {sd}%{near}")
+    rd = market_data.get("resistance_distance_pct")
+    if rd is not None:
+        near = " (接近阻力)" if market_data.get("is_near_resistance") else ""
+        lines.append(f"- 距阻力位: {rd}%{near}")
+
+    # 短周期确认
+    r1h = market_data.get("rsi_1h")
+    if r1h is not None:
+        trend = market_data.get("rsi_1h_trend", "")
+        trend_text = f" ({trend})" if trend else ""
+        lines.append(f"- 1h RSI: {r1h}{trend_text}")
+
+    # K线成熟度
+    er = market_data.get("elapsed_ratio")
+    if er is not None:
+        pct = f"{er * 100:.0f}%"
+        mature = "（成熟）" if er >= 0.7 else "（未成熟，信号可能变化）"
+        lines.append(f"- 4h周期进度: {pct}{mature}")
+
+    # 盘中动量
+    pc = market_data.get("price_change_since_close_pct")
+    if pc is not None:
+        lines.append(f"- 收盘后实时偏移: {pc:+.2f}%")
+
+    # 背离信号
+    if market_data.get("volume_divergence"):
+        lines.append("- 量价背离: 是（价涨量缩，上涨动能衰减）")
+    if market_data.get("rsi_divergence"):
+        lines.append("- RSI背离: 是（价格新高但RSI未新高）")
+
     return "\n".join(lines)
 
 
@@ -625,6 +704,7 @@ def create_fast_analyzer() -> callable:
         # 根据策略类型生成专属评估指引
         strategy_guide = _build_strategy_guide(market_data)
         market_context = _build_fast_market_context(market_data)
+        risk_tags = _build_risk_tags(market_data)
 
         prompt = f"""你是一名专业的加密货币合约风控分析师。量化系统已经筛出候选信号，你的任务不是重新寻找交易方向，而是复核该信号能否放行。
 
@@ -651,6 +731,9 @@ def create_fast_analyzer() -> callable:
 
 【量化筛选结果】
 {scan_summary if scan_summary else "暂无"}
+
+【信号确认与风险】
+{risk_tags if risk_tags else "暂无"}
 
 {f"【反转子维度详情】{chr(10)}{reversal_details}" if reversal_details else ""}
 

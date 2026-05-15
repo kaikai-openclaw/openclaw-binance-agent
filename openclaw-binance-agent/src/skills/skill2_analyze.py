@@ -241,6 +241,42 @@ class Skill2Analyze(BaseSkill):
                 "prior_drop_pct": candidate.get("prior_drop_pct"),
                 "kdj_score": candidate.get("kdj_score"),
                 "shadow_score": candidate.get("shadow_score"),
+                # 关键价位与入场质量
+                "support_distance_pct": candidate.get("support_distance_pct"),
+                "is_near_support": candidate.get("is_near_support"),
+                "resistance_distance_pct": candidate.get(
+                    "resistance_distance_pct"
+                ),
+                "is_near_resistance": candidate.get("is_near_resistance"),
+                # 信号确认质量
+                "confirmation": (
+                    candidate.get("oversold_confirmation")
+                    or candidate.get("overbought_confirmation")
+                    or candidate.get("reversal_confirmation")
+                ),
+                # 风险标签
+                "momentum_penalty": candidate.get("momentum_penalty"),
+                "momentum_risk_level": candidate.get("momentum_risk_level"),
+                "panic_selling_detected": candidate.get("panic_selling_detected"),
+                "fomo_detected": candidate.get("fomo_detected"),
+                "squeeze_risk": candidate.get("squeeze_risk")
+                or candidate.get("short_squeeze_detected"),
+                # 短周期确认
+                "rsi_1h": candidate.get("rsi_1h"),
+                "rsi_1h_trend": candidate.get("rsi_1h_trend"),
+                # K线成熟度
+                "elapsed_ratio": (
+                    candidate.get("elapsed_ratio")
+                    if candidate.get("elapsed_ratio") is not None
+                    else candidate.get("elapsed_ratio_precise")
+                ),
+                # 盘中动量
+                "price_change_since_close_pct": candidate.get(
+                    "price_change_since_close_pct"
+                ),
+                # 背离信号（overbought 独有）
+                "volume_divergence": candidate.get("volume_divergence"),
+                "rsi_divergence": candidate.get("rsi_divergence"),
             }
 
             try:

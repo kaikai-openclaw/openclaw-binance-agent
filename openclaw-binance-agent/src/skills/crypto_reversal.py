@@ -279,7 +279,11 @@ class _CryptoReversalBase(BaseSkill):
             if not s.endswith("USDT"):
                 s += "USDT"
             normalized.add(s)
-        return [t for t in tickers if t.get("symbol", "") in normalized]
+        result = [t for t in tickers if t.get("symbol", "") in normalized]
+        for t in result:
+            t["quoteVolume"] = float(t.get("quoteVolume", 0))
+            t["priceChangePercent"] = float(t.get("priceChangePercent", 0))
+        return result
 
     def _base_filter(self, tickers, tradable, min_qv):
         exclude_bases = {"USDC", "BUSD", "DAI", "TUSD", "FDUSD", "USDP"}
